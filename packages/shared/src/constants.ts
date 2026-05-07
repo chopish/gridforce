@@ -1,4 +1,4 @@
-export const TICK_RATE_HZ = 30;
+export const TICK_RATE_HZ = 60;
 export const TICK_DT_MS = 1000 / TICK_RATE_HZ;
 export const TICK_DT_S = 1 / TICK_RATE_HZ;
 

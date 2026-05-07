@@ -21,6 +21,10 @@ interface SnapshotRecord {
 // snapshot interpolation (see RemotePlayerInterpolator below).
 export class PredictedWorld {
   readonly localPlayerId: string;
+  // Sim state from the previous tick. Together with `state`, lets the renderer
+  // do prev/current interpolation so on-screen motion is smooth and never
+  // overshoots the sim — no more direction-reversal teleports.
+  prevState: WorldState;
   state: WorldState;
   currentTick: number;
   private pendingInputs: PlayerInput[] = [];
@@ -39,6 +43,7 @@ export class PredictedWorld {
       players: initialSnapshot.players,
       rngState: 0,
     };
+    this.prevState = this.state;
     this.currentTick = initialSnapshot.tick;
   }
 
@@ -51,14 +56,31 @@ export class PredictedWorld {
 
     const m = new Map<string, PlayerInput>();
     m.set(this.localPlayerId, input);
+    this.prevState = this.state;
     this.state = simulate(this.state, m, TICK_DT_S);
 
-    // Bound pendingInputs to a sane window (10 sec at 30 Hz = 300)
+    // Bound pendingInputs (~10 sec at 60 Hz = 600)
     if (this.pendingInputs.length > 600) {
       this.pendingInputs.splice(0, this.pendingInputs.length - 600);
     }
 
     return input;
+  }
+
+  // Render-time interpolation between prevState and state for the local
+  // player. alpha in [0,1]: 0 = prev, 1 = current. Other fields (vx, dashTimer,
+  // facing) are taken from current — only x/y are tweened.
+  getInterpolatedLocalPlayer(alpha: number): Player | undefined {
+    const a = alpha < 0 ? 0 : alpha > 1 ? 1 : alpha;
+    const curr = this.state.players.find((p) => p.id === this.localPlayerId);
+    if (!curr) return undefined;
+    const prev = this.prevState.players.find((p) => p.id === this.localPlayerId);
+    if (!prev) return curr;
+    return {
+      ...curr,
+      x: prev.x + (curr.x - prev.x) * a,
+      y: prev.y + (curr.y - prev.y) * a,
+    };
   }
 
   // Apply a server snapshot. Reconciles local prediction against authoritative state.
@@ -159,14 +181,35 @@ export class RemotePlayerInterpolator {
   }
 
   push(snap: ServerSnapshot): void {
+    const now = performance.now();
     this.snapshots.push({
-      receivedAt: performance.now(),
+      receivedAt: now,
       serverTime: snap.serverTime,
       tick: snap.tick,
       players: snap.players,
     });
-    // Keep last ~2 seconds at 30 Hz = 60 snapshots
+    // Drop anything older than the interpolation window plus a small safety
+    // margin. Without this, a hidden tab accumulates a long history of
+    // snapshots that replay at normal speed when the tab returns — the
+    // dreaded "catch-up" where remote players walk through five seconds
+    // of past motion in five seconds of real time.
+    const ageCutoff = now - (this.interpolationDelayMs + 200);
+    while (this.snapshots.length > 0 && this.snapshots[0]!.receivedAt < ageCutoff) {
+      this.snapshots.shift();
+    }
+    // Hard cap to bound memory in case clocks misbehave.
     if (this.snapshots.length > 90) this.snapshots.shift();
+  }
+
+  // Drop everything except the most recent snapshot. Call this when the tab
+  // returns — the buffer may be full of recent snapshots received during the
+  // hidden period; we want to render at the current authoritative position
+  // immediately rather than walking backward through the history.
+  reset(): void {
+    if (this.snapshots.length > 1) {
+      const latest = this.snapshots[this.snapshots.length - 1]!;
+      this.snapshots = [latest];
+    }
   }
 
   // Returns interpolated positions for all NON-local players at the current

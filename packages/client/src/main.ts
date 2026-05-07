@@ -78,6 +78,7 @@ async function runGame(socket: GameSocket, welcome: ServerWelcome): Promise<void
     lastFrame = performance.now();
     accumulator = 0;
     input.clear();
+    interpolator.reset();
   };
   const onVisibility = () => {
     if (!document.hidden) resetTiming();
@@ -106,16 +107,13 @@ async function runGame(socket: GameSocket, welcome: ServerWelcome): Promise<void
       socket.sendInput(sentInput);
     }
 
-    // Render — use sub-tick velocity extrapolation so visual motion is
-    // continuous at the refresh rate instead of stair-stepping at 30 Hz.
-    const localPlayer = predicted.getLocalPlayer();
-    const renderedLocal = localPlayer
-      ? {
-          ...localPlayer,
-          x: localPlayer.x + localPlayer.vx * accumulator,
-          y: localPlayer.y + localPlayer.vy * accumulator,
-        }
-      : undefined;
+    // Render — interpolate between prev and current sim states so motion
+    // is smooth and never overshoots a sim correction. Renders up to one
+    // tick (~16 ms) behind the predicted state, which is the standard
+    // fixed-timestep tradeoff: a tiny visual lag in exchange for never
+    // teleporting backward when velocity changes sign.
+    const alpha = accumulator / TICK_DT_S;
+    const renderedLocal = predicted.getInterpolatedLocalPlayer(alpha);
     const remotes = interpolator.interpolate(welcome.playerId);
     playerRenderer.render(renderedLocal, remotes);
 
