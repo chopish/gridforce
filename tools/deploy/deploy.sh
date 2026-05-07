@@ -6,6 +6,12 @@ set -euo pipefail
 BRANCH="${DEPLOY_BRANCH:-main}"
 REPO_DIR="${REPO_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
 SERVICE="${GRIDFORCE_SERVICE:-gridforce}"
+DEPLOY_KEY="${DEPLOY_KEY:-/etc/gridforce/deploy_key}"
+DEPLOY_KNOWN_HOSTS="${DEPLOY_KNOWN_HOSTS:-/etc/gridforce/known_hosts}"
+
+if [ -z "${GIT_SSH_COMMAND:-}" ] && [ -r "$DEPLOY_KEY" ]; then
+  export GIT_SSH_COMMAND="ssh -i $DEPLOY_KEY -o UserKnownHostsFile=$DEPLOY_KNOWN_HOSTS -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
+fi
 
 cd "$REPO_DIR"
 
