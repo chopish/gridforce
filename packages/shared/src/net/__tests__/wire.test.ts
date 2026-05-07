@@ -100,11 +100,22 @@ test('Input round-trip including button clamping behavior', () => {
   assert.equal(p.dash, payload.dash);
 });
 
-test('Snapshot round-trip with multiple players, ack bitmask', () => {
+test('Snapshot round-trip with multiple players, ack bitmask, dash timers', () => {
   const players = [
     { ...newPlayerState(0, 50, 60), facing: 0, stateSeq: 1 },
-    { ...newPlayerState(1, 70, 80), facing: Math.PI, stateSeq: 2 },
-    { ...newPlayerState(2, 90, 100), facing: -Math.PI / 2, stateSeq: 3, dashRemainingS: 0.05 },
+    {
+      ...newPlayerState(1, 70, 80),
+      facing: Math.PI,
+      stateSeq: 2,
+      dashCooldownS: 0.4,
+    },
+    {
+      ...newPlayerState(2, 90, 100),
+      facing: -Math.PI / 2,
+      stateSeq: 3,
+      dashCooldownS: 0.65,
+      dashRemainingS: 0.12,
+    },
   ];
   const payload = {
     tick: 9999,
@@ -121,8 +132,15 @@ test('Snapshot round-trip with multiple players, ack bitmask', () => {
   assert.equal(s.ackInputTick, payload.ackInputTick);
   assert.equal(s.inputAckBitmask, payload.inputAckBitmask);
   assert.equal(s.players.length, players.length);
-  // dashing player should arrive with dashRemainingS > 0 (flag preserved)
-  assert.ok(s.players[2]!.dashRemainingS > 0);
+  // Idle player: both timers 0.
+  assert.equal(s.players[0]!.dashCooldownS, 0);
+  assert.equal(s.players[0]!.dashRemainingS, 0);
+  // Cooling-down player: cooldown round-trips with ~4ms quantization.
+  assert.ok(Math.abs(s.players[1]!.dashCooldownS - 0.4) < 0.005, 'cooldown precision');
+  assert.equal(s.players[1]!.dashRemainingS, 0);
+  // Mid-dash player: both timers preserved.
+  assert.ok(Math.abs(s.players[2]!.dashCooldownS - 0.65) < 0.005, 'mid-dash cooldown');
+  assert.ok(Math.abs(s.players[2]!.dashRemainingS - 0.12) < 0.005, 'mid-dash remaining');
 });
 
 test('Snapshot handles zero players', () => {

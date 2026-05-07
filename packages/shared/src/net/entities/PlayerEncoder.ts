@@ -19,18 +19,31 @@ function unquantizeFacing(q: number): number {
   return (q / 256) * TWO_PI;
 }
 
-// One player entity = 15 bytes:
-//   u8  id            (1)
-//   f32 x             (4)
-//   f32 y             (4)
-//   u8  facingQ       (1)
-//   u8  flags         (1)
-//   u32 stateSeq      (4)
+// One player entity = 17 bytes:
+//   u8  id              (1)
+//   f32 x               (4)
+//   f32 y               (4)
+//   u8  facingQ         (1)
+//   u8  flags           (1)
+//   u8  dashCooldownQ   (1)   seconds × 255, saturating at 1.0s
+//   u8  dashRemainingQ  (1)   seconds × 255, saturating at 1.0s
+//   u32 stateSeq        (4)
 //
-// Dash timer fields (cooldown/remaining) are server-private and reconstructed
-// on the client from `flags & DASHING` plus client-side prediction. They are
-// not on the wire to keep snapshots small; the visible effect (dash motion)
-// is captured by the velocity inferred from successive snapshots.
+// The two timers MUST be on the wire. Without them, every snapshot resets
+// the client's view of cooldown/remaining to zero, which lets the client
+// predict a fresh dash after every snapshot tick — the server (which still
+// has real cooldown elapsing) rejects it, and the player rubber-bands.
+const TIMER_SCALE = 255; // 1 second resolved at ~3.9 ms per step
+
+function quantizeTimer(s: number): number {
+  if (s <= 0) return 0;
+  const q = Math.round(s * TIMER_SCALE);
+  return q >= 255 ? 255 : q;
+}
+function unquantizeTimer(q: number): number {
+  return q / TIMER_SCALE;
+}
+
 export interface EntityEncoder<T> {
   type: EntityType;
   encode(w: BinaryWriter, entity: T): void;
@@ -47,6 +60,8 @@ export const PlayerEncoder: EntityEncoder<PlayerState> = {
     let flags = 0;
     if (p.dashRemainingS > 0) flags |= PLAYER_FLAG_DASHING;
     w.u8(flags);
+    w.u8(quantizeTimer(p.dashCooldownS));
+    w.u8(quantizeTimer(p.dashRemainingS));
     w.u32(p.stateSeq >>> 0);
   },
   decode(r) {
@@ -55,18 +70,13 @@ export const PlayerEncoder: EntityEncoder<PlayerState> = {
     const y = r.f32();
     const facing = unquantizeFacing(r.u8());
     const flags = r.u8();
+    const dashCooldownS = unquantizeTimer(r.u8());
+    const dashRemainingS = unquantizeTimer(r.u8());
     const stateSeq = r.u32();
-    // Wire-side reconstruction of timers: clients only know "is dashing",
-    // not how much time is left. That's fine — the prediction sim runs its
-    // own timers and reconciliation rebases on next snapshot.
-    return {
-      id,
-      x,
-      y,
-      facing,
-      dashCooldownS: 0,
-      dashRemainingS: (flags & PLAYER_FLAG_DASHING) !== 0 ? 0.001 : 0,
-      stateSeq,
-    };
+    // The DASHING flag is redundant with dashRemainingS > 0; we keep it for
+    // forward extensibility (other state bits can ride along) and so the
+    // renderer can do a one-byte check without unquantizing the timer.
+    void flags;
+    return { id, x, y, facing, dashCooldownS, dashRemainingS, stateSeq };
   },
 };

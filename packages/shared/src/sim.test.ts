@@ -42,12 +42,11 @@ test('input is normalised to unit circle', () => {
   let p: PlayerState = newPlayerState(0, 200, 200);
   // (3,4) → magnitude 5; should be normalised to (0.6, 0.8).
   const input: PlayerInput = { tick: 0, clientTimeMs: 0, mx: 3, my: 4, dash: false };
-  for (let i = 0; i < 60; i++) p = stepPlayer(p, input, CLIENT_PREDICT_DT_S, grid);
-  // 1s travel at speed S, x += 0.6*S, y += 0.8*S
-  const expected = PLAYER_MOVE_SPEED;
-  const dx = p.x - 200;
-  const dy = p.y - 200;
-  const traveled = Math.hypot(dx, dy);
+  const seconds = 1;
+  const steps = Math.round(seconds / CLIENT_PREDICT_DT_S);
+  for (let i = 0; i < steps; i++) p = stepPlayer(p, input, CLIENT_PREDICT_DT_S, grid);
+  const expected = PLAYER_MOVE_SPEED * seconds;
+  const traveled = Math.hypot(p.x - 200, p.y - 200);
   assert.ok(Math.abs(traveled - expected) < 1, `traveled=${traveled}`);
 });
 
