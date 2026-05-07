@@ -31,9 +31,8 @@ export class Room {
   private startedAt = Date.now();
   private lastActivityAt = Date.now();
   private onDisposed: () => void;
-  // Maximum sub-ticks per real-time frame when catching up from a stall.
-  // Generous so transient client bursts (browser frame stalls produce 3-6
-  // inputs in a single rAF) drain in one server tick instead of accumulating.
+  // Maximum simulation ticks to run from one timer callback after a host stall.
+  // Keeps the server from spiraling while still catching ordinary timer drift.
   private static readonly MAX_CATCHUP = 8;
 
   constructor(code: string, onDisposed: () => void) {
@@ -142,69 +141,49 @@ export class Room {
   // ---------- private ----------
 
   private startTickLoop(): void {
-    // Self-correcting setTimeout loop. Node's setInterval is bound by the OS
-    // timer quantum (15.6 ms on Windows by default), which makes a 16.67 ms
-    // target effectively run at ~50 Hz. We track an absolute "next tick at"
-    // time and adjust each setTimeout delay to compensate, so the average
-    // rate stays at exactly 60 Hz even if individual fires drift.
+    // Self-correcting fixed-step loop. If a timer fires late, run the due
+    // number of simulation ticks now (bounded by MAX_CATCHUP) instead of
+    // letting the server fall permanently behind the 60 Hz input stream.
     let nextAt = performance.now() + TICK_DT_MS;
     const loop = (): void => {
       if (this.tickStopped) return;
-      this.tick();
-      nextAt += TICK_DT_MS;
+
       const now = performance.now();
-      let delay = nextAt - now;
-      // If we've fallen catastrophically behind (e.g., long GC pause),
-      // give up trying to catch up by spinning and reset the target.
-      if (delay < -10 * TICK_DT_MS) {
-        nextAt = now + TICK_DT_MS;
-        delay = TICK_DT_MS;
-      } else if (delay < 0) {
-        delay = 0;
+      let steps = 0;
+      while (now >= nextAt && steps < Room.MAX_CATCHUP) {
+        this.runOneSubTick();
+        nextAt += TICK_DT_MS;
+        steps++;
       }
+
+      if (steps > 0) {
+        for (const conn of this.connections.values()) {
+          conn.send(this.makeSnapshot(conn));
+        }
+      }
+
+      // If the process was paused for a long time, drop the excess elapsed
+      // time instead of burning CPU on hundreds of stale ticks.
+      if (steps === Room.MAX_CATCHUP && performance.now() >= nextAt) {
+        nextAt = performance.now() + TICK_DT_MS;
+      }
+
+      const delay = Math.max(0, nextAt - performance.now());
       this.tickHandle = setTimeout(loop, delay);
     };
     this.tickHandle = setTimeout(loop, TICK_DT_MS);
   }
 
-  // One real-time tick = one snapshot broadcast. May contain multiple
-  // simulation sub-ticks if the server is catching up from a stall (a player's
-  // input buffer has grown). Catch-up is capped to MAX_CATCHUP per frame so a
-  // long pause can't lock the server into a CPU-burning replay.
-  private tick(): void {
-    let subTicks = 1;
-    for (const conn of this.connections.values()) {
-      const buffered = conn.bufferedInputCount();
-      if (buffered > subTicks) subTicks = Math.min(Room.MAX_CATCHUP, buffered);
-    }
-
-    for (let i = 0; i < subTicks; i++) {
-      this.runOneSubTick();
-    }
-
-    // One snapshot per real-time tick (not per sub-tick) to keep wire rate
-    // stable. ackInputTick reflects the latest input applied across sub-ticks.
-    for (const conn of this.connections.values()) {
-      conn.send(this.makeSnapshot(conn));
-    }
-  }
-
   private runOneSubTick(): void {
     const inputs = new Map<string, PlayerInput>();
+    const targetTick = this.state.tick + 1;
 
     for (const conn of this.connections.values()) {
-      const next = conn.consumeNextInput();
-      if (next) {
-        inputs.set(conn.playerId, next);
-      } else {
-        // No buffered input: hold position with zero input. Tick label
-        // doesn't matter for sim correctness; only the input fields do.
-        inputs.set(conn.playerId, { tick: this.state.tick, mx: 0, my: 0, dash: false });
-      }
+      inputs.set(conn.playerId, conn.consumeInputForTick(targetTick));
     }
 
     for (const bot of this.bots) {
-      inputs.set(bot.id, bot.getInput(this.state, this.state.tick));
+      inputs.set(bot.id, bot.getInput(this.state, targetTick));
     }
 
     this.state = simulate(this.state, inputs, TICK_DT_S);

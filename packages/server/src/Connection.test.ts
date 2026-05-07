@@ -19,62 +19,52 @@ function input(tick: number): PlayerInput {
   return { tick, mx: 1, my: 0, dash: false };
 }
 
-test('consumeNextInput applies inputs in order, one per call', () => {
+test('consumeInputForTick applies the newest input intended for the target tick', () => {
   const conn = new Connection('p1', 'A', new StubSocket() as unknown as never);
   conn.bufferInput(input(1));
   conn.bufferInput(input(2));
   conn.bufferInput(input(3));
 
-  const a = conn.consumeNextInput();
-  const b = conn.consumeNextInput();
-  const c = conn.consumeNextInput();
-  const d = conn.consumeNextInput();
+  const applied = conn.consumeInputForTick(3);
 
-  assert.equal(a?.tick, 1);
-  assert.equal(b?.tick, 2);
-  assert.equal(c?.tick, 3);
-  assert.equal(d, null);
+  assert.equal(applied.tick, 3);
   assert.equal(conn.lastAppliedInputTick, 3);
+  assert.equal(conn.bufferedInputCount(), 0);
 });
 
-test('consumeNextInput handles out-of-order arrivals', () => {
+test('consumeInputForTick waits for future inputs', () => {
   const conn = new Connection('p1', 'A', new StubSocket() as unknown as never);
   conn.bufferInput(input(3));
   conn.bufferInput(input(1));
   conn.bufferInput(input(2));
 
-  assert.equal(conn.consumeNextInput()?.tick, 1);
-  assert.equal(conn.consumeNextInput()?.tick, 2);
-  assert.equal(conn.consumeNextInput()?.tick, 3);
+  assert.equal(conn.consumeInputForTick(1).tick, 1);
+  assert.equal(conn.consumeInputForTick(2).tick, 2);
+  assert.equal(conn.consumeInputForTick(3).tick, 3);
 });
 
-test('consumeNextInput skips inputs older than lastApplied', () => {
+test('consumeInputForTick skips duplicate inputs older than lastApplied', () => {
   // Simulates a late-arriving duplicate input
   const conn = new Connection('p1', 'A', new StubSocket() as unknown as never);
   conn.bufferInput(input(1));
-  conn.consumeNextInput();
+  conn.consumeInputForTick(1);
   conn.bufferInput(input(1)); // late duplicate
-  assert.equal(conn.consumeNextInput(), null);
+  assert.equal(conn.bufferedInputCount(), 0);
+  assert.equal(conn.consumeInputForTick(2).tick, 2);
+  assert.equal(conn.lastAppliedInputTick, 1);
 });
 
-test('consumeNextInput returns null on empty buffer', () => {
+test('consumeInputForTick returns zero input before any input arrives', () => {
   const conn = new Connection('p1', 'A', new StubSocket() as unknown as never);
-  assert.equal(conn.consumeNextInput(), null);
+  assert.deepEqual(conn.consumeInputForTick(5), { tick: 5, mx: 0, my: 0, dash: false });
+  assert.equal(conn.lastAppliedInputTick, -1);
 });
 
-test('regression: no inputs are silently dropped between ticks', () => {
-  // Pre-fix bug: sending inputs at ticks 5, 6, 7 then calling once would
-  // apply only 7 and drop 5/6, causing client/server divergence.
+test('consumeInputForTick holds the last movement input without relatching dash', () => {
   const conn = new Connection('p1', 'A', new StubSocket() as unknown as never);
-  conn.bufferInput(input(5));
-  conn.bufferInput(input(6));
-  conn.bufferInput(input(7));
+  conn.bufferInput({ tick: 1, mx: 1, my: 0, dash: true });
 
-  const applied: number[] = [];
-  let next = conn.consumeNextInput();
-  while (next) {
-    applied.push(next.tick);
-    next = conn.consumeNextInput();
-  }
-  assert.deepEqual(applied, [5, 6, 7]);
+  assert.deepEqual(conn.consumeInputForTick(1), { tick: 1, mx: 1, my: 0, dash: true });
+  assert.deepEqual(conn.consumeInputForTick(2), { tick: 2, mx: 1, my: 0, dash: false });
+  assert.equal(conn.lastAppliedInputTick, 1);
 });

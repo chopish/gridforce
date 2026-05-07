@@ -95,7 +95,10 @@ export class PredictedWorld {
     const localFromSnap = snap.players.find((p) => p.id === this.localPlayerId);
     if (!localFromSnap) {
       // We're not in the snapshot (just-joined edge case). Trust snapshot wholesale.
-      this.state = { ...this.state, tick: snap.tick, players: snap.players };
+      this.currentTick = Math.max(this.currentTick, snap.tick);
+      const nextState = { ...this.state, tick: this.currentTick, players: snap.players };
+      this.prevState = nextState;
+      this.state = nextState;
       return;
     }
 
@@ -110,14 +113,6 @@ export class PredictedWorld {
       rngState: this.state.rngState,
     };
 
-    // Cap replay length. If pending grew beyond this (sustained network or
-    // server lag), replaying every snapshot would saturate CPU and worsen the
-    // stutter. Drop the oldest pending and accept a one-time visible snap.
-    const MAX_REPLAY = 90;
-    if (this.pendingInputs.length > MAX_REPLAY) {
-      this.pendingInputs.splice(0, this.pendingInputs.length - MAX_REPLAY);
-    }
-
     const replayInputs = this.pendingInputs;
     this.lastReconcileRewindTicks = replayInputs.length;
     for (const inp of replayInputs) {
@@ -126,48 +121,37 @@ export class PredictedWorld {
       rebased = simulate(rebased, m, TICK_DT_S);
     }
 
-    // Compare: if the rebased local player differs from current predicted local, snap to rebased
+    // Compare: if the rebased local player differs from current predicted local,
+    // use the rebased result and reset prevState so render interpolation does
+    // not tween from a stale pre-reconcile pose.
     const predictedLocal = this.state.players.find((p) => p.id === this.localPlayerId);
     const rebasedLocal = rebased.players.find((p) => p.id === this.localPlayerId);
+    const localForNext = rebasedLocal ?? predictedLocal ?? localFromSnap;
+    let correctedLocal = !predictedLocal || !rebasedLocal;
     if (predictedLocal && rebasedLocal) {
       const dx = rebasedLocal.x - predictedLocal.x;
       const dy = rebasedLocal.y - predictedLocal.y;
       this.lastPredictionErrorPx = Math.hypot(dx, dy);
-
-      if (this.lastPredictionErrorPx > PREDICTION_ERROR_THRESHOLD) {
-        // Replace local player state with rebased; keep snapshot-fresh data for others.
-        this.state = {
-          ...this.state,
-          tick: this.currentTick,
-          players: this.state.players.map((p) =>
-            p.id === this.localPlayerId ? rebasedLocal : p,
-          ),
-        };
-      }
+      const facingError = Math.abs(shortestAngleDelta(rebasedLocal.facing, predictedLocal.facing));
+      correctedLocal = this.lastPredictionErrorPx > PREDICTION_ERROR_THRESHOLD || facingError > 1e-4;
+    } else {
+      this.lastPredictionErrorPx = 0;
     }
 
-    // Always update non-local player state from the snapshot (their authoritative
-    // positions should drive interpolation; predicted state shouldn't drift).
-    const snapById = new Map(snap.players.map((p) => [p.id, p]));
-    this.state = {
-      ...this.state,
-      players: this.state.players.map((p) => {
-        if (p.id === this.localPlayerId) return p;
-        return snapById.get(p.id) ?? p;
-      }),
+    const nextLocal = correctedLocal ? localForNext : predictedLocal!;
+    this.currentTick = Math.max(this.currentTick, rebased.tick, snap.tick);
+
+    const nextState: WorldState = {
+      tick: this.currentTick,
+      grid: this.state.grid,
+      players: snap.players.map((p) => (p.id === this.localPlayerId ? nextLocal : p)),
+      rngState: this.state.rngState,
     };
 
-    // Add or remove players that joined/left
-    const knownIds = new Set(this.state.players.map((p) => p.id));
-    for (const p of snap.players) {
-      if (!knownIds.has(p.id)) {
-        this.state = { ...this.state, players: [...this.state.players, p] };
-      }
+    if (correctedLocal) {
+      this.prevState = nextState;
     }
-    const snapIds = new Set(snap.players.map((p) => p.id));
-    if (this.state.players.some((p) => !snapIds.has(p.id))) {
-      this.state = { ...this.state, players: this.state.players.filter((p) => snapIds.has(p.id)) };
-    }
+    this.state = nextState;
   }
 
   getLocalPlayer(): Player | undefined {
@@ -177,6 +161,10 @@ export class PredictedWorld {
   pendingInputCount(): number {
     return this.pendingInputs.length;
   }
+}
+
+function shortestAngleDelta(a: number, b: number): number {
+  return Math.atan2(Math.sin(a - b), Math.cos(a - b));
 }
 
 // Buffers recent snapshots and produces interpolated remote-player positions.

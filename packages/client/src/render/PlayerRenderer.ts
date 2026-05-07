@@ -35,7 +35,7 @@ export class PlayerRenderer {
       const v = this.getOrCreate(p, i);
       v.container.x = p.x;
       v.container.y = p.y;
-      v.bodyRoot.rotation = p.facing;
+      v.bodyRoot.rotation = nearestEquivalentAngle(v.bodyRoot.rotation, p.facing);
 
       // Tint dimmer if dashing for a quick visual cue
       if (p.dashTimer > 0) {
@@ -107,4 +107,8 @@ export class PlayerRenderer {
     this.visuals.set(p.id, v);
     return v;
   }
+}
+
+function nearestEquivalentAngle(current: number, target: number): number {
+  return current + Math.atan2(Math.sin(target - current), Math.cos(target - current));
 }

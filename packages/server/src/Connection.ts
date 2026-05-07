@@ -17,10 +17,11 @@ export class Connection {
   // typically a tick or two ahead of where the server currently is when the
   // packet arrives.
   private inputBuffer = new Map<number, PlayerInput>();
-  private latestInputTick = -1;
+  private heldInput: PlayerInput = { tick: -1, mx: 0, my: 0, dash: false };
 
-  // Last input tick the server actually applied; sent back on snapshots so the
-  // client can drop acknowledged inputs from its replay buffer.
+  // Last input tick the server has processed for this player. "Processed" may
+  // mean applied or superseded as stale; either way the client can stop
+  // replaying it after this value is acked in a snapshot.
   lastAppliedInputTick = -1;
 
   alive = true;
@@ -32,40 +33,46 @@ export class Connection {
   }
 
   bufferInput(input: PlayerInput): void {
+    if (input.tick <= this.lastAppliedInputTick) return;
     this.inputBuffer.set(input.tick, input);
-    if (input.tick > this.latestInputTick) this.latestInputTick = input.tick;
 
     // Cap is generous — at 60 Hz this allows ~17 s of buffered inputs before
-    // we start dropping oldest. Dropping oldest causes the server to skip
-    // applying that input, which desyncs the player from client prediction.
-    // We'd rather buffer more and let catch-up drain it.
+    // we start dropping oldest. If that ever happens, mark the dropped tick as
+    // processed so the client does not replay an input the server will never
+    // consume.
     if (this.inputBuffer.size > 1024) {
       const oldestTick = Math.min(...this.inputBuffer.keys());
       this.inputBuffer.delete(oldestTick);
+      if (oldestTick > this.lastAppliedInputTick) this.lastAppliedInputTick = oldestTick;
     }
   }
 
   // Number of inputs currently buffered (waiting to be consumed).
   bufferedInputCount(): number {
+    this.dropProcessedInputs();
     return this.inputBuffer.size;
   }
 
-  // Returns the next unapplied input in tick order, or null if none.
-  // The server calls this once per server sub-tick per player so EACH input
-  // the client sent gets applied exactly once. Without this, fast-arriving
-  // inputs would be silently discarded — visible to the user as the local
-  // player being snapped backward every snapshot (the "bouncing" bug).
-  consumeNextInput(): PlayerInput | null {
-    let next: PlayerInput | undefined;
+  // Returns the newest buffered input intended for or before targetTick. Inputs
+  // older than that are processed as stale/superseded because their world tick
+  // has already passed. If no input has arrived for this tick, keep moving with
+  // the last non-dash movement input instead of injecting a one-tick stop.
+  consumeInputForTick(targetTick: number): PlayerInput {
+    this.dropProcessedInputs();
+    let best: PlayerInput | undefined;
     for (const [tick, input] of this.inputBuffer) {
-      if (tick > this.lastAppliedInputTick) {
-        if (!next || tick < next.tick) next = input;
+      if (tick <= targetTick) {
+        if (!best || tick > best.tick) best = input;
       }
     }
-    if (!next) return null;
-    this.lastAppliedInputTick = next.tick;
-    this.inputBuffer.delete(next.tick);
-    return next;
+    if (!best) {
+      return { ...this.heldInput, tick: targetTick, dash: false };
+    }
+
+    this.lastAppliedInputTick = best.tick;
+    this.dropProcessedInputs();
+    this.heldInput = { ...best, dash: false };
+    return best;
   }
 
   send(msg: ServerMessage): void {
@@ -83,6 +90,12 @@ export class Connection {
       this.socket.close();
     } catch {
       /* noop */
+    }
+  }
+
+  private dropProcessedInputs(): void {
+    for (const tick of [...this.inputBuffer.keys()]) {
+      if (tick <= this.lastAppliedInputTick) this.inputBuffer.delete(tick);
     }
   }
 }

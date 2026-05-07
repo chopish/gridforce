@@ -42,7 +42,8 @@ export interface ServerSnapshot {
   tick: number;
   serverTime: number;
   players: Player[];
-  // The latest input tick the server has applied for THIS client.
+  // The latest input tick the server has processed for THIS client.
+  // Processed inputs may have been applied or discarded as stale/superseded.
   // Client uses it to drop acknowledged inputs from its replay buffer.
   ackInputTick: number;
 }
