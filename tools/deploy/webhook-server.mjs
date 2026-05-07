@@ -55,13 +55,16 @@ function verifySignature(rawBody, signatureHeader) {
 }
 
 const server = http.createServer((req, res) => {
-  if (req.method === 'GET' && req.url === '/health') {
+  const pathname = (req.url ?? '/').split('?')[0].replace(/\/+$/, '') || '/';
+
+  if (req.method === 'GET' && pathname === '/health') {
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ ok: true, deployRunning, deployPending }));
     return;
   }
 
-  if (req.method !== 'POST' || req.url !== '/webhook') {
+  if (req.method !== 'POST' || pathname !== '/webhook') {
+    log(`404 ${req.method} ${req.url}`);
     res.writeHead(404);
     res.end('not found');
     return;

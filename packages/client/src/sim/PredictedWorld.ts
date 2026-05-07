@@ -77,7 +77,10 @@ export class PredictedWorld {
       return;
     }
 
-    // Build a "rebased" state at snap.tick from the snapshot, then replay pendingInputs.
+    // Rebase from server snapshot, then replay every still-pending input.
+    // ackInputTick already excluded the inputs the server has applied, so every
+    // remaining pending input is unaccounted for in the snapshot and must be
+    // re-applied to bring the local prediction up to currentTick.
     let rebased: WorldState = {
       tick: snap.tick,
       grid: this.state.grid,
@@ -85,7 +88,7 @@ export class PredictedWorld {
       rngState: this.state.rngState,
     };
 
-    const replayInputs = this.pendingInputs.filter((i) => i.tick > snap.tick);
+    const replayInputs = this.pendingInputs;
     this.lastReconcileRewindTicks = replayInputs.length;
     for (const inp of replayInputs) {
       const m = new Map<string, PlayerInput>();

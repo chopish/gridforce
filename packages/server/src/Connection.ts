@@ -42,27 +42,22 @@ export class Connection {
     }
   }
 
-  // Pick the input to apply at the given server tick. Strategy:
-  //  - Prefer an exact match for `serverTick`.
-  //  - Otherwise use the most recent input with tick <= serverTick.
-  //  - Otherwise (no input yet) return a zero input.
-  // Once consumed, drop everything <= consumed tick.
-  consumeInputForTick(serverTick: number): PlayerInput {
-    let best: PlayerInput | undefined;
+  // Returns the next unapplied input in tick order, or null if none.
+  // The server calls this once per server tick per player so EACH input the
+  // client sent gets applied exactly once. Without this, fast-arriving inputs
+  // would be silently discarded — visible to the user as the local player
+  // being snapped backward every snapshot (the "bouncing" bug).
+  consumeNextInput(): PlayerInput | null {
+    let next: PlayerInput | undefined;
     for (const [tick, input] of this.inputBuffer) {
-      if (tick <= serverTick) {
-        if (!best || tick > best.tick) best = input;
+      if (tick > this.lastAppliedInputTick) {
+        if (!next || tick < next.tick) next = input;
       }
     }
-    if (best) {
-      this.lastAppliedInputTick = best.tick;
-      // Drop everything we've passed
-      for (const tick of [...this.inputBuffer.keys()]) {
-        if (tick <= best.tick) this.inputBuffer.delete(tick);
-      }
-      return best;
-    }
-    return { tick: serverTick, mx: 0, my: 0, dash: false };
+    if (!next) return null;
+    this.lastAppliedInputTick = next.tick;
+    this.inputBuffer.delete(next.tick);
+    return next;
   }
 
   send(msg: ServerMessage): void {

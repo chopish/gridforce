@@ -143,8 +143,14 @@ export class Room {
     const inputs = new Map<string, PlayerInput>();
 
     for (const conn of this.connections.values()) {
-      const input = conn.consumeInputForTick(this.state.tick);
-      inputs.set(conn.playerId, input);
+      const next = conn.consumeNextInput();
+      if (next) {
+        inputs.set(conn.playerId, next);
+      } else {
+        // No buffered input: hold position with zero input. Tick label
+        // doesn't matter for sim correctness; only the input fields do.
+        inputs.set(conn.playerId, { tick: this.state.tick, mx: 0, my: 0, dash: false });
+      }
     }
 
     for (const bot of this.bots) {

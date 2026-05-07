@@ -22,7 +22,7 @@ GitHub  ──push──▶  nginx :443 /webhook  ──▶  webhook-server.mjs 
 | `gridforce.service`           | systemd unit for the game server                              |
 | `gridforce-webhook.service`   | systemd unit for the webhook receiver                         |
 | `gridforce.sudoers`           | Lets the `gridforce` user restart its own service             |
-| `nginx-webhook.conf`          | nginx reverse-proxy snippet (TLS-terminates the webhook)      |
+| `nginx.conf`                  | Unified nginx site (TLS, /webhook, /ws, /api, static client)  |
 
 ## One-time VM bootstrap
 
@@ -60,13 +60,16 @@ sudo -u gridforce npm run build
 sudo systemctl enable --now gridforce gridforce-webhook
 sudo systemctl status gridforce gridforce-webhook --no-pager
 
-# 7. nginx + TLS for the webhook endpoint
+# 7. nginx + TLS. Get a cert first if you don't have one:
 sudo apt-get install -y nginx certbot python3-certbot-nginx
-sudo cp /opt/gridforce/tools/deploy/nginx-webhook.conf /etc/nginx/sites-available/gridforce-webhook
-sudo sed -i "s/YOUR_DOMAIN/your.domain.example/" /etc/nginx/sites-available/gridforce-webhook
-sudo ln -sf /etc/nginx/sites-available/gridforce-webhook /etc/nginx/sites-enabled/
+sudo certbot certonly --nginx -d your.domain.example   # only if no cert exists yet
+
+# Install unified site config and disable conflicting defaults.
+sudo cp /opt/gridforce/tools/deploy/nginx.conf /etc/nginx/sites-available/gridforce
+sudo sed -i "s/grid\.clab\.su/your.domain.example/g" /etc/nginx/sites-available/gridforce  # if your domain differs
+sudo ln -sf /etc/nginx/sites-available/gridforce /etc/nginx/sites-enabled/gridforce
+sudo unlink /etc/nginx/sites-enabled/default 2>/dev/null || true
 sudo nginx -t && sudo systemctl reload nginx
-sudo certbot --nginx -d your.domain.example
 ```
 
 > No domain? You can have GitHub deliver the webhook directly to `http://VM_PUBLIC_IP:9000/webhook` if you change the receiver's `listen` from `127.0.0.1` back to `0.0.0.0` and open port 9000. **Not recommended** — GitHub allows plain-HTTP webhooks but the secret is your only protection on the wire.
