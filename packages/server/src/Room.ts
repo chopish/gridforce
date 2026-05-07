@@ -27,9 +27,12 @@ export class Room {
   private connections = new Map<string, Connection>();
   private bots: Bot[] = [];
   private tickHandle: NodeJS.Timeout | null = null;
+  private tickStopped = false;
   private startedAt = Date.now();
   private lastActivityAt = Date.now();
   private onDisposed: () => void;
+  // Maximum sub-ticks per real-time frame when catching up from a stall.
+  private static readonly MAX_CATCHUP = 3;
 
   constructor(code: string, onDisposed: () => void) {
     this.code = code;
@@ -123,8 +126,9 @@ export class Room {
   }
 
   dispose(): void {
+    this.tickStopped = true;
     if (this.tickHandle) {
-      clearInterval(this.tickHandle);
+      clearTimeout(this.tickHandle);
       this.tickHandle = null;
     }
     for (const conn of this.connections.values()) conn.close();
@@ -136,10 +140,54 @@ export class Room {
   // ---------- private ----------
 
   private startTickLoop(): void {
-    this.tickHandle = setInterval(() => this.tick(), TICK_DT_MS);
+    // Self-correcting setTimeout loop. Node's setInterval is bound by the OS
+    // timer quantum (15.6 ms on Windows by default), which makes a 16.67 ms
+    // target effectively run at ~50 Hz. We track an absolute "next tick at"
+    // time and adjust each setTimeout delay to compensate, so the average
+    // rate stays at exactly 60 Hz even if individual fires drift.
+    let nextAt = performance.now() + TICK_DT_MS;
+    const loop = (): void => {
+      if (this.tickStopped) return;
+      this.tick();
+      nextAt += TICK_DT_MS;
+      const now = performance.now();
+      let delay = nextAt - now;
+      // If we've fallen catastrophically behind (e.g., long GC pause),
+      // give up trying to catch up by spinning and reset the target.
+      if (delay < -10 * TICK_DT_MS) {
+        nextAt = now + TICK_DT_MS;
+        delay = TICK_DT_MS;
+      } else if (delay < 0) {
+        delay = 0;
+      }
+      this.tickHandle = setTimeout(loop, delay);
+    };
+    this.tickHandle = setTimeout(loop, TICK_DT_MS);
   }
 
+  // One real-time tick = one snapshot broadcast. May contain multiple
+  // simulation sub-ticks if the server is catching up from a stall (a player's
+  // input buffer has grown). Catch-up is capped to MAX_CATCHUP per frame so a
+  // long pause can't lock the server into a CPU-burning replay.
   private tick(): void {
+    let subTicks = 1;
+    for (const conn of this.connections.values()) {
+      const buffered = conn.bufferedInputCount();
+      if (buffered > subTicks) subTicks = Math.min(Room.MAX_CATCHUP, buffered);
+    }
+
+    for (let i = 0; i < subTicks; i++) {
+      this.runOneSubTick();
+    }
+
+    // One snapshot per real-time tick (not per sub-tick) to keep wire rate
+    // stable. ackInputTick reflects the latest input applied across sub-ticks.
+    for (const conn of this.connections.values()) {
+      conn.send(this.makeSnapshot(conn));
+    }
+  }
+
+  private runOneSubTick(): void {
     const inputs = new Map<string, PlayerInput>();
 
     for (const conn of this.connections.values()) {
@@ -158,11 +206,6 @@ export class Room {
     }
 
     this.state = simulate(this.state, inputs, TICK_DT_S);
-
-    // Broadcast snapshot (per-connection because ackInputTick differs per player)
-    for (const conn of this.connections.values()) {
-      conn.send(this.makeSnapshot(conn));
-    }
   }
 
   private makeSnapshot(conn: Connection) {

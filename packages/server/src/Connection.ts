@@ -42,11 +42,16 @@ export class Connection {
     }
   }
 
+  // Number of inputs currently buffered (waiting to be consumed).
+  bufferedInputCount(): number {
+    return this.inputBuffer.size;
+  }
+
   // Returns the next unapplied input in tick order, or null if none.
-  // The server calls this once per server tick per player so EACH input the
-  // client sent gets applied exactly once. Without this, fast-arriving inputs
-  // would be silently discarded — visible to the user as the local player
-  // being snapped backward every snapshot (the "bouncing" bug).
+  // The server calls this once per server sub-tick per player so EACH input
+  // the client sent gets applied exactly once. Without this, fast-arriving
+  // inputs would be silently discarded — visible to the user as the local
+  // player being snapped backward every snapshot (the "bouncing" bug).
   consumeNextInput(): PlayerInput | null {
     let next: PlayerInput | undefined;
     for (const [tick, input] of this.inputBuffer) {
