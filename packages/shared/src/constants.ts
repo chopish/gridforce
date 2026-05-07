@@ -59,6 +59,16 @@ export const ROOM_CODE_LENGTH = 4;
 // tick so that inputs arrive at the server before their target tick is
 // processed. Sized for up to ~150 ms RTT (5 ticks × 33 ms = 165 ms).
 export const INPUT_LEAD_TICKS = 5;
+// Hard cap on adaptive input lead. An outlier RTT sample (e.g. from a
+// backgrounded tab where pongs arrive seconds late) must not poison the
+// lead and send all future inputs into the server's far future. 30 ticks
+// covers RTTs up to ~2s; beyond that the game is unplayable anyway and we
+// should be hard-resyncing instead of leaning further forward.
+export const MAX_INPUT_LEAD_TICKS = 30;
+// RTT samples above this are treated as pong-arrival outliers and skipped.
+// Catches the case where a ping went out before the tab was hidden and the
+// pong arrives seconds later when the tab returns.
+export const RTT_OUTLIER_MS = 3000;
 
 // Frame stall safety on client (max dt fed into accumulator per render frame)
 export const CLIENT_MAX_FRAME_DT_S = 0.05;

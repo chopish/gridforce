@@ -5,6 +5,7 @@ import {
   NetSim,
   NETSIM_PROFILES,
   PingMsg,
+  RTT_OUTLIER_MS,
   SCHEMA_VERSION,
   decodeMessage,
   type DecodedMessage,
@@ -147,6 +148,17 @@ export class Socket {
     };
   }
 
+  // Drop pending pings + reset RTT/offset estimates. Called on tab visibility
+  // restore so a ping sent before backgrounding doesn't return a multi-second
+  // pong that gets folded into the EWMA (RTT_OUTLIER_MS in dispatch handles
+  // the EWMA case; clearing pendingPings makes that drop explicit and lets
+  // the next clean ping/pong re-establish the baseline immediately).
+  resetRttForVisibilityRestore(): void {
+    this.pendingPings.clear();
+    this.rttMs = 0;
+    this.serverTimeOffsetMs = 0;
+  }
+
   close(): void {
     this.stopPings();
     if (this.ws) {
@@ -208,13 +220,18 @@ export class Socket {
       if (sent !== undefined) {
         this.pendingPings.delete(decoded.payload.nonce);
         const rtt = performance.now() - sent;
-        this.rttMs = this.rttMs === 0 ? rtt : this.rttMs * (1 - RTT_EWMA_ALPHA) + rtt * RTT_EWMA_ALPHA;
-        const owLatency = this.rttMs / 2;
-        const offset = decoded.payload.serverTimeMs - performance.now() - owLatency;
-        this.serverTimeOffsetMs =
-          this.serverTimeOffsetMs === 0
-            ? offset
-            : this.serverTimeOffsetMs * (1 - RTT_EWMA_ALPHA) + offset * RTT_EWMA_ALPHA;
+        // Skip outlier samples — typically a pong that arrives seconds late
+        // because the tab was backgrounded. Folding it into the EWMA poisons
+        // the adaptive lead and the RTT readout for many seconds.
+        if (rtt < RTT_OUTLIER_MS) {
+          this.rttMs = this.rttMs === 0 ? rtt : this.rttMs * (1 - RTT_EWMA_ALPHA) + rtt * RTT_EWMA_ALPHA;
+          const owLatency = this.rttMs / 2;
+          const offset = decoded.payload.serverTimeMs - performance.now() - owLatency;
+          this.serverTimeOffsetMs =
+            this.serverTimeOffsetMs === 0
+              ? offset
+              : this.serverTimeOffsetMs * (1 - RTT_EWMA_ALPHA) + offset * RTT_EWMA_ALPHA;
+        }
       }
     }
     for (const l of this.listeners) l(decoded);

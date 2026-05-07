@@ -1,5 +1,6 @@
 import {
   INPUT_LEAD_TICKS,
+  MAX_INPUT_LEAD_TICKS,
   MAX_REPLAY_INPUTS,
   PREDICTION_BLEND_MS,
   PREDICTION_HARD_SNAP_PX,
@@ -59,10 +60,36 @@ export class PredictedWorld {
   // main.ts updates this from the live RTT EWMA each frame.
   private targetLead = INPUT_LEAD_TICKS;
   setTargetLead(ticks: number): void {
-    this.targetLead = Math.max(INPUT_LEAD_TICKS, Math.floor(ticks));
+    const floored = Math.max(INPUT_LEAD_TICKS, Math.floor(ticks));
+    this.targetLead = Math.min(MAX_INPUT_LEAD_TICKS, floored);
   }
   get currentLead(): number {
     return this.targetLead;
+  }
+
+  // Called when the tab regains visibility. While backgrounded, rAF may have
+  // still fired (Chrome typically throttles to 1 Hz, not zero), so the loop
+  // ran with clamped dt and accumulated many predicted ticks; meanwhile the
+  // RTT measurement spiked from delayed pongs and pushed targetLead toward
+  // its cap. Result: predictedTick can be hundreds of ticks ahead of the
+  // server, with a queue of inputs labeled with future ticks. The next
+  // snapshot would treat that as a normal reconciliation and try to smooth-
+  // correct an enormous error. Better to forcibly resync: reset prediction
+  // to (latest known server tick + base lead), drop pending inputs (they're
+  // tagged with stale future ticks the server can't usefully apply), and
+  // wipe the visual correction so we don't blend through 12 seconds of
+  // movement.
+  forceResyncOnVisibilityRestore(): void {
+    this.predictedTick = this.serverTick + INPUT_LEAD_TICKS;
+    this.targetLead = INPUT_LEAD_TICKS;
+    this.pending = [];
+    this.correctionX = 0;
+    this.correctionY = 0;
+    this.diagnostics.predictedTick = this.predictedTick;
+    this.diagnostics.pendingInputs = 0;
+    this.diagnostics.correctionMagnitudePx = 0;
+    this.diagnostics.correctionEwmaPx = 0;
+    this.diagnostics.recentMaxErrorPx = 0;
   }
 
   // Last-rendered visual position + the alpha used. Lets applySnapshot

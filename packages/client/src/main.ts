@@ -104,6 +104,16 @@ async function bootstrap(): Promise<void> {
 
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) {
+      // Tab just came back. Three things may have gone wrong while hidden:
+      //   1. rAF kept firing at ~1 Hz with clamped dt, so predictedTick has
+      //      crept hundreds of ticks ahead of the server.
+      //   2. A ping that went out before backgrounding gets a delayed pong,
+      //      which (without an outlier filter) would explode rttMs and the
+      //      adaptive input lead.
+      //   3. Remote interpolator's buffer is stuffed with old snapshots.
+      // Reset all three to a clean baseline before the next frame fires.
+      socket.resetRttForVisibilityRestore();
+      world.forceResyncOnVisibilityRestore();
       world.remoteInterp.resetForVisibilityRestore();
       inputs.clear();
     }
