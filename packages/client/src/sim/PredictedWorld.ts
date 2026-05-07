@@ -1,261 +1,253 @@
 import {
-  PREDICTION_ERROR_THRESHOLD,
-  TICK_DT_S,
-  simulate,
-  type Grid,
-  type Player,
+  INPUT_LEAD_TICKS,
+  MAX_REPLAY_INPUTS,
+  PREDICTION_BLEND_MS,
+  PREDICTION_HARD_SNAP_PX,
+  PREDICTION_THRESHOLD_PX,
+  SERVER_TICK_DT_S,
+  type GridDef,
+  type PlayerId,
   type PlayerInput,
-  type ServerSnapshot,
-  type WorldState,
+  type PlayerState,
+  type SnapshotPayload,
+  type WelcomePayload,
+  newPlayerState,
+  stepPlayer,
 } from '@gridforce/shared';
 
-interface SnapshotRecord {
-  receivedAt: number; // performance.now() at receive
-  serverTime: number;
-  tick: number;
-  players: Player[];
+import { RemotePlayerInterpolator } from './RemotePlayerInterpolator.js';
+
+export interface PredictionDiagnostics {
+  predictedTick: number;
+  serverTick: number;
+  pendingInputs: number;
+  lastReplayInputs: number;
+  lastPredictionErrorPx: number;
+  lastSnapAtTick: number;
+  hardSnaps: number;
 }
 
-// Owns the local predicted world state for the local player.
-// Other players are not predicted; their rendered position comes from
-// snapshot interpolation (see RemotePlayerInterpolator below).
 export class PredictedWorld {
-  readonly localPlayerId: string;
-  // Sim state from the previous tick. Together with `state`, lets the renderer
-  // do prev/current interpolation so on-screen motion is smooth and never
-  // overshoots the sim — no more direction-reversal teleports.
-  prevState: WorldState;
-  state: WorldState;
-  currentTick: number;
-  private pendingInputs: PlayerInput[] = [];
-  private latestAckInputTick = -1;
-  private latestSnapshotTick = -1;
+  grid: GridDef = { cols: 1, rows: 1, panelSize: 1 };
+  localPlayerId: PlayerId = -1;
 
-  // Diagnostic counters
-  lastReconcileRewindTicks = 0;
-  lastPredictionErrorPx = 0;
+  // The player states we've simulated forward to predictedTick. For remote
+  // players these get overwritten each snapshot; we don't predict them here
+  // because the interpolator already does the job better.
+  players = new Map<PlayerId, PlayerState>();
+  // Snapshot of `players` from the previous predicted tick. Used by the
+  // renderer to interpolate visually between two predicted states.
+  prevPlayers = new Map<PlayerId, PlayerState>();
 
-  constructor(localPlayerId: string, grid: Grid, initialSnapshot: ServerSnapshot) {
-    this.localPlayerId = localPlayerId;
-    this.state = {
-      tick: initialSnapshot.tick,
-      grid,
-      players: initialSnapshot.players,
-      rngState: 0,
-    };
-    this.prevState = this.state;
-    this.currentTick = initialSnapshot.tick;
+  serverTick = 0;
+  predictedTick = 0;
+
+  // Inputs we've shipped that the server hasn't acknowledged yet. Strictly
+  // increasing in `tick`. Replayed on top of every snapshot to keep the local
+  // player's predicted state consistent with what we'll see next.
+  private pending: PlayerInput[] = [];
+
+  // Visual-only position offset that blends to zero over PREDICTION_BLEND_MS.
+  // The simulated position is updated immediately; only the rendered position
+  // smoothly catches up.
+  private correctionX = 0;
+  private correctionY = 0;
+
+  readonly remoteInterp = new RemotePlayerInterpolator();
+  readonly diagnostics: PredictionDiagnostics = {
+    predictedTick: 0,
+    serverTick: 0,
+    pendingInputs: 0,
+    lastReplayInputs: 0,
+    lastPredictionErrorPx: 0,
+    lastSnapAtTick: -1,
+    hardSnaps: 0,
+  };
+
+  initFromWelcome(w: WelcomePayload): void {
+    this.grid = w.grid;
+    this.localPlayerId = w.yourPlayerId;
+    // Lead the server tick from the start: by the time our first input
+    // reaches the server, the server has already advanced past startTick by
+    // ~RTT/2 ticks. Tagging from (startTick + LEAD) ensures the input lands
+    // in the future relative to wherever the server is by then.
+    this.predictedTick = w.startTick + INPUT_LEAD_TICKS;
+    this.serverTick = w.startTick;
+    this.players.clear();
+    this.prevPlayers.clear();
+    for (const p of w.players) {
+      this.players.set(p.id, { ...p });
+      this.prevPlayers.set(p.id, { ...p });
+      if (p.id !== this.localPlayerId) this.remoteInterp.seed(p, w.serverTimeMs);
+    }
   }
 
-  // Step prediction forward by one tick using the local player's input.
-  // Returns the input we just applied (caller forwards it to the server).
-  step(localInput: Omit<PlayerInput, 'tick'>): PlayerInput {
-    this.currentTick += 1;
-    const input: PlayerInput = { tick: this.currentTick, ...localInput };
-    this.pendingInputs.push(input);
-
-    const m = new Map<string, PlayerInput>();
-    m.set(this.localPlayerId, input);
-    this.prevState = this.state;
-    this.state = simulate(this.state, m, TICK_DT_S);
-
-    // Bound pendingInputs (~10 sec at 60 Hz = 600)
-    if (this.pendingInputs.length > 600) {
-      this.pendingInputs.splice(0, this.pendingInputs.length - 600);
+  ensurePlayer(state: PlayerState): void {
+    if (!this.players.has(state.id)) {
+      this.players.set(state.id, { ...state });
+      this.prevPlayers.set(state.id, { ...state });
+      if (state.id !== this.localPlayerId) {
+        this.remoteInterp.seed(state, performance.now());
+      }
     }
+  }
+
+  removePlayer(id: PlayerId): void {
+    this.players.delete(id);
+    this.prevPlayers.delete(id);
+    this.remoteInterp.remove(id);
+  }
+
+  // Advance one predicted tick using the supplied input for the local player.
+  // Returns the input tagged with its predicted tick (for sending to the server).
+  step(local: { mx: number; my: number; dash: boolean; clientTimeMs: number }): PlayerInput {
+    this.predictedTick++;
+
+    // Snapshot prev for render-time interpolation.
+    for (const [id, s] of this.players) this.prevPlayers.set(id, s);
+
+    // Step local player.
+    const localState =
+      this.players.get(this.localPlayerId) ?? newPlayerState(this.localPlayerId, 0, 0);
+    const input: PlayerInput = {
+      tick: this.predictedTick,
+      clientTimeMs: local.clientTimeMs,
+      mx: local.mx,
+      my: local.my,
+      dash: local.dash,
+    };
+    const nextLocal = stepPlayer(localState, input, SERVER_TICK_DT_S, this.grid);
+    this.players.set(this.localPlayerId, nextLocal);
+
+    this.pending.push(input);
+    // Cap pending list to bound replay cost on very bad networks.
+    if (this.pending.length > MAX_REPLAY_INPUTS) this.pending.shift();
+
+    this.diagnostics.predictedTick = this.predictedTick;
+    this.diagnostics.pendingInputs = this.pending.length;
 
     return input;
   }
 
-  // Render-time interpolation between prevState and state for the local
-  // player. alpha in [0,1]: 0 = prev, 1 = current. Other fields (vx, dashTimer,
-  // facing) are taken from current — only x/y are tweened.
-  getInterpolatedLocalPlayer(alpha: number): Player | undefined {
-    const a = alpha < 0 ? 0 : alpha > 1 ? 1 : alpha;
-    const curr = this.state.players.find((p) => p.id === this.localPlayerId);
-    if (!curr) return undefined;
-    const prev = this.prevState.players.find((p) => p.id === this.localPlayerId);
-    if (!prev) return curr;
-    return {
-      ...curr,
-      x: prev.x + (curr.x - prev.x) * a,
-      y: prev.y + (curr.y - prev.y) * a,
-    };
-  }
+  applySnapshot(snap: SnapshotPayload): void {
+    if (snap.tick < this.serverTick) return; // stale (out of order)
+    this.serverTick = snap.tick;
+    this.diagnostics.serverTick = snap.tick;
 
-  // Apply a server snapshot. Reconciles local prediction against authoritative state.
-  applySnapshot(snap: ServerSnapshot): void {
-    if (snap.tick < this.latestSnapshotTick) return; // stale
-    this.latestSnapshotTick = snap.tick;
-    this.latestAckInputTick = snap.ackInputTick;
+    // Safety: if our predicted tick has crept down close to (or below) the
+    // server's current tick, our next input will arrive labeled with a tick
+    // the server has already moved past — it'll be dropped as stale, and
+    // the local player will appear "tethered" to their last good position
+    // while smooth-correction snaps them back. Detect this and jump
+    // predictedTick forward to the ideal lead, dropping pending inputs
+    // whose tags are now stale. Only fires when we've actually fallen into
+    // the drop zone (lead < 2 ticks); in steady state we sit at LEAD ticks
+    // ahead and this branch never runs.
+    const MIN_SAFE_LEAD = 2;
+    if (this.predictedTick < snap.tick + MIN_SAFE_LEAD) {
+      this.predictedTick = snap.tick + INPUT_LEAD_TICKS;
+      this.pending = [];
+    }
 
-    // Drop acknowledged inputs
-    this.pendingInputs = this.pendingInputs.filter((i) => i.tick > snap.ackInputTick);
+    // Drop pending inputs that have been processed server-side.
+    while (this.pending.length > 0 && this.pending[0]!.tick <= snap.ackInputTick) {
+      this.pending.shift();
+    }
 
-    const localFromSnap = snap.players.find((p) => p.id === this.localPlayerId);
-    if (!localFromSnap) {
-      // We're not in the snapshot (just-joined edge case). Trust snapshot wholesale.
-      this.currentTick = Math.max(this.currentTick, snap.tick);
-      const nextState = { ...this.state, tick: this.currentTick, players: snap.players };
-      this.prevState = nextState;
-      this.state = nextState;
+    // Update remote players via the interpolator. We never run prediction for
+    // remotes; the interpolator buffers ~one snapshot interval and renders
+    // between two known good snapshots.
+    for (const p of snap.players) {
+      if (p.id === this.localPlayerId) continue;
+      this.remoteInterp.ingest(p, snap.serverTimeMs);
+      // Also keep an authoritative copy in `players` (used by anything that
+      // wants the latest known state, e.g., labels). Visual position comes
+      // from remoteInterp.sample().
+      this.players.set(p.id, { ...p });
+    }
+
+    // Reconcile local player.
+    const localSnap = snap.players.find((p) => p.id === this.localPlayerId);
+    if (!localSnap) {
+      // We don't appear in the snapshot — wait for next one.
+      this.diagnostics.pendingInputs = this.pending.length;
       return;
     }
 
-    // Rebase from server snapshot, then replay every still-pending input.
-    // ackInputTick already excluded the inputs the server has applied, so every
-    // remaining pending input is unaccounted for in the snapshot and must be
-    // re-applied to bring the local prediction up to currentTick.
-    let rebased: WorldState = {
-      tick: snap.tick,
-      grid: this.state.grid,
-      players: snap.players,
-      rngState: this.state.rngState,
-    };
+    const before = this.players.get(this.localPlayerId);
+    const beforeX = before?.x ?? localSnap.x;
+    const beforeY = before?.y ?? localSnap.y;
 
-    const replayInputs = this.pendingInputs;
-    this.lastReconcileRewindTicks = replayInputs.length;
-    for (const inp of replayInputs) {
-      const m = new Map<string, PlayerInput>();
-      m.set(this.localPlayerId, inp);
-      rebased = simulate(rebased, m, TICK_DT_S);
+    // Rebase: take server's view of us, then replay any unacked inputs.
+    let rebased: PlayerState = { ...localSnap };
+    for (const inp of this.pending) {
+      rebased = stepPlayer(rebased, inp, SERVER_TICK_DT_S, this.grid);
     }
+    this.diagnostics.lastReplayInputs = this.pending.length;
 
-    // Compare: if the rebased local player differs from current predicted local,
-    // use the rebased result and reset prevState so render interpolation does
-    // not tween from a stale pre-reconcile pose.
-    const predictedLocal = this.state.players.find((p) => p.id === this.localPlayerId);
-    const rebasedLocal = rebased.players.find((p) => p.id === this.localPlayerId);
-    const localForNext = rebasedLocal ?? predictedLocal ?? localFromSnap;
-    let correctedLocal = !predictedLocal || !rebasedLocal;
-    if (predictedLocal && rebasedLocal) {
-      const dx = rebasedLocal.x - predictedLocal.x;
-      const dy = rebasedLocal.y - predictedLocal.y;
-      this.lastPredictionErrorPx = Math.hypot(dx, dy);
-      const facingError = Math.abs(shortestAngleDelta(rebasedLocal.facing, predictedLocal.facing));
-      correctedLocal = this.lastPredictionErrorPx > PREDICTION_ERROR_THRESHOLD || facingError > 1e-4;
+    const dx = beforeX - rebased.x;
+    const dy = beforeY - rebased.y;
+    const err = Math.hypot(dx, dy);
+    this.diagnostics.lastPredictionErrorPx = err;
+
+    if (err < PREDICTION_THRESHOLD_PX) {
+      // Below the visible threshold; commit silently.
+    } else if (err < PREDICTION_HARD_SNAP_PX) {
+      // Smooth correction: visual stays where it was, simulated jumps; the
+      // visible offset (correctionX/Y) bleeds to zero over PREDICTION_BLEND_MS.
+      this.correctionX += dx;
+      this.correctionY += dy;
+      this.diagnostics.lastSnapAtTick = snap.tick;
     } else {
-      this.lastPredictionErrorPx = 0;
+      // Hard snap — likely a real bug or extreme packet loss. Log it.
+      this.correctionX = 0;
+      this.correctionY = 0;
+      this.diagnostics.hardSnaps++;
+      this.diagnostics.lastSnapAtTick = snap.tick;
+      console.warn(`[reconcile] hard snap ${err.toFixed(1)}px at tick ${snap.tick}`);
     }
 
-    const nextLocal = correctedLocal ? localForNext : predictedLocal!;
-    this.currentTick = Math.max(this.currentTick, rebased.tick, snap.tick);
+    this.players.set(this.localPlayerId, rebased);
+    // Also reset prev for local so the next render frame interpolates from
+    // the new authoritative position rather than an old predicted one. The
+    // visible smoothing is now driven entirely by correctionX/Y.
+    this.prevPlayers.set(this.localPlayerId, rebased);
 
-    const nextState: WorldState = {
-      tick: this.currentTick,
-      grid: this.state.grid,
-      players: snap.players.map((p) => (p.id === this.localPlayerId ? nextLocal : p)),
-      rngState: this.state.rngState,
-    };
+    this.diagnostics.pendingInputs = this.pending.length;
+  }
 
-    if (correctedLocal) {
-      this.prevState = nextState;
+  // Each render frame, decay the visual correction toward zero.
+  decayCorrection(dtMs: number): void {
+    if (this.correctionX === 0 && this.correctionY === 0) return;
+    const k = Math.min(1, dtMs / PREDICTION_BLEND_MS);
+    this.correctionX *= 1 - k;
+    this.correctionY *= 1 - k;
+    if (Math.abs(this.correctionX) < 0.05 && Math.abs(this.correctionY) < 0.05) {
+      this.correctionX = 0;
+      this.correctionY = 0;
     }
-    this.state = nextState;
   }
 
-  getLocalPlayer(): Player | undefined {
-    return this.state.players.find((p) => p.id === this.localPlayerId);
+  // Visual position of the local player given an interpolation alpha
+  // between prev and curr predicted states (0..1).
+  visualLocalPosition(alpha: number): { x: number; y: number; facing: number } {
+    const cur = this.players.get(this.localPlayerId);
+    if (!cur) return { x: 0, y: 0, facing: 0 };
+    const prev = this.prevPlayers.get(this.localPlayerId) ?? cur;
+    const x = prev.x + (cur.x - prev.x) * alpha + this.correctionX;
+    const y = prev.y + (cur.y - prev.y) * alpha + this.correctionY;
+    // Facing interpolation must take the short way around the circle.
+    const facing = lerpAngle(prev.facing, cur.facing, alpha);
+    return { x, y, facing };
   }
 
-  pendingInputCount(): number {
-    return this.pendingInputs.length;
+  // For diagnostics / external readers.
+  get correction(): { x: number; y: number } {
+    return { x: this.correctionX, y: this.correctionY };
   }
 }
 
-function shortestAngleDelta(a: number, b: number): number {
-  return Math.atan2(Math.sin(a - b), Math.cos(a - b));
-}
-
-// Buffers recent snapshots and produces interpolated remote-player positions.
-export class RemotePlayerInterpolator {
-  private snapshots: SnapshotRecord[] = [];
-  private interpolationDelayMs: number;
-
-  constructor(interpolationDelayMs: number) {
-    this.interpolationDelayMs = interpolationDelayMs;
-  }
-
-  push(snap: ServerSnapshot): void {
-    const now = performance.now();
-    this.snapshots.push({
-      receivedAt: now,
-      serverTime: snap.serverTime,
-      tick: snap.tick,
-      players: snap.players,
-    });
-    // Drop anything older than the interpolation window plus a small safety
-    // margin. Without this, a hidden tab accumulates a long history of
-    // snapshots that replay at normal speed when the tab returns — the
-    // dreaded "catch-up" where remote players walk through five seconds
-    // of past motion in five seconds of real time.
-    const ageCutoff = now - (this.interpolationDelayMs + 200);
-    while (this.snapshots.length > 0 && this.snapshots[0]!.receivedAt < ageCutoff) {
-      this.snapshots.shift();
-    }
-    // Hard cap to bound memory in case clocks misbehave.
-    if (this.snapshots.length > 90) this.snapshots.shift();
-  }
-
-  // Drop everything except the most recent snapshot. Call this when the tab
-  // returns — the buffer may be full of recent snapshots received during the
-  // hidden period; we want to render at the current authoritative position
-  // immediately rather than walking backward through the history.
-  reset(): void {
-    if (this.snapshots.length > 1) {
-      const latest = this.snapshots[this.snapshots.length - 1]!;
-      this.snapshots = [latest];
-    }
-  }
-
-  // Returns interpolated positions for all NON-local players at the current
-  // render time. Local player is excluded — caller should render from PredictedWorld.
-  interpolate(localPlayerId: string): Player[] {
-    if (this.snapshots.length === 0) return [];
-    const renderTime = performance.now() - this.interpolationDelayMs;
-
-    // Find the two snapshots straddling renderTime
-    let earlier: SnapshotRecord | undefined;
-    let later: SnapshotRecord | undefined;
-    for (let i = this.snapshots.length - 1; i >= 0; i--) {
-      const s = this.snapshots[i]!;
-      if (s.receivedAt <= renderTime) {
-        earlier = s;
-        later = this.snapshots[i + 1];
-        break;
-      }
-    }
-    if (!earlier) earlier = this.snapshots[0]!;
-    if (!later) later = this.snapshots[this.snapshots.length - 1]!;
-
-    if (earlier === later) {
-      return earlier.players.filter((p) => p.id !== localPlayerId);
-    }
-
-    const span = later.receivedAt - earlier.receivedAt;
-    const t = span > 0 ? Math.max(0, Math.min(1, (renderTime - earlier.receivedAt) / span)) : 0;
-
-    const earlierById = new Map(earlier.players.map((p) => [p.id, p]));
-    const laterById = new Map(later.players.map((p) => [p.id, p]));
-    const ids = new Set<string>([...earlierById.keys(), ...laterById.keys()]);
-
-    const out: Player[] = [];
-    for (const id of ids) {
-      if (id === localPlayerId) continue;
-      const a = earlierById.get(id);
-      const b = laterById.get(id);
-      const base = b ?? a;
-      if (!base) continue;
-      if (a && b) {
-        out.push({
-          ...base,
-          x: a.x + (b.x - a.x) * t,
-          y: a.y + (b.y - a.y) * t,
-        });
-      } else {
-        out.push(base);
-      }
-    }
-    return out;
-  }
+function lerpAngle(a: number, b: number, t: number): number {
+  const diff = ((b - a + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+  return a + diff * t;
 }

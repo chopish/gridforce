@@ -4,162 +4,95 @@ import {
   PLAYER_DASH_SPEED,
   PLAYER_MOVE_SPEED,
   PLAYER_RADIUS,
-  TILE_SIZE,
 } from './constants.js';
-import { gridPixelHeight, gridPixelWidth } from './grid.js';
-import type { Player, PlayerInput, WorldState } from './types.js';
+import type { GridDef, PlayerInput, PlayerState } from './types.js';
 
-const ZERO_INPUT: PlayerInput = { tick: 0, mx: 0, my: 0, dash: false };
+const FACING_EPSILON = 1e-3;
 
-// Pure sim step. Returns a NEW WorldState. Inputs are matched to players by id;
-// missing inputs default to zero-input (player keeps moving with prior velocity? No —
-// idle. Standard for FPS-style games where movement is direct, not impulse-based).
-export function simulate(
-  state: WorldState,
-  inputs: ReadonlyMap<string, PlayerInput>,
-  dt: number,
-): WorldState {
-  const worldW = gridPixelWidth(state.grid);
-  const worldH = gridPixelHeight(state.grid);
+export function clamp(v: number, lo: number, hi: number): number {
+  return v < lo ? lo : v > hi ? hi : v;
+}
 
-  const nextPlayers: Player[] = state.players.map((p) => {
-    const input = inputs.get(p.id) ?? ZERO_INPUT;
-    return stepPlayer(p, input, dt, worldW, worldH);
-  });
-
+export function newPlayerState(id: number, x: number, y: number): PlayerState {
   return {
-    tick: state.tick + 1,
-    grid: state.grid,
-    players: nextPlayers,
-    rngState: state.rngState,
+    id,
+    x,
+    y,
+    facing: 0,
+    dashCooldownS: 0,
+    dashRemainingS: 0,
+    stateSeq: 0,
   };
 }
 
-function stepPlayer(p: Player, input: PlayerInput, dt: number, worldW: number, worldH: number): Player {
-  let dashTimer = p.dashTimer;
-  let dashCooldown = Math.max(0, p.dashCooldown - dt);
+// Pure deterministic step. Server runs this authoritatively;
+// client runs it for prediction. Same inputs + same starting state → same result.
+export function stepPlayer(
+  state: PlayerState,
+  input: PlayerInput | null,
+  dt: number,
+  grid: GridDef,
+): PlayerState {
+  let { x, y, facing, dashCooldownS, dashRemainingS } = state;
+  const stateSeq = (state.stateSeq + 1) >>> 0;
 
-  // Normalize input vector
-  const magnitudeSq = input.mx * input.mx + input.my * input.my;
-  let nx = 0;
-  let ny = 0;
-  if (magnitudeSq > 1e-6) {
-    const mag = Math.min(1, Math.sqrt(magnitudeSq));
-    const inv = mag > 0 ? mag / Math.sqrt(magnitudeSq) : 0;
-    nx = input.mx * inv;
-    ny = input.my * inv;
+  // Sanitize input on the consumer side too — server clamps as well, but the
+  // shared sim must never trust raw values from the wire.
+  let mx = 0;
+  let my = 0;
+  let wantDash = false;
+  if (input) {
+    mx = clamp(input.mx, -1, 1);
+    my = clamp(input.my, -1, 1);
+    const mag = Math.hypot(mx, my);
+    if (mag > 1) {
+      mx /= mag;
+      my /= mag;
+    }
+    wantDash = !!input.dash;
+  }
+
+  if (dashCooldownS > 0) dashCooldownS = Math.max(0, dashCooldownS - dt);
+  if (dashRemainingS > 0) dashRemainingS = Math.max(0, dashRemainingS - dt);
+
+  if (wantDash && dashCooldownS === 0 && dashRemainingS === 0) {
+    dashRemainingS = PLAYER_DASH_DURATION_S;
+    dashCooldownS = PLAYER_DASH_COOLDOWN_S;
   }
 
   let vx: number;
   let vy: number;
-  let facing = p.facing;
-
-  // Update facing from input if there is any
-  if (magnitudeSq > 1e-6) {
-    facing = Math.atan2(ny, nx);
-  }
-
-  // Dash trigger: only if grounded (not already dashing) and off cooldown
-  if (input.dash && dashTimer <= 0 && dashCooldown <= 0) {
-    dashTimer = PLAYER_DASH_DURATION_S;
-    dashCooldown = PLAYER_DASH_COOLDOWN_S;
-    // Lock dash velocity at trigger time. If no input direction, use facing.
-    let dx = nx;
-    let dy = ny;
-    if (dx === 0 && dy === 0) {
-      dx = Math.cos(facing);
-      dy = Math.sin(facing);
+  if (dashRemainingS > 0) {
+    const mag = Math.hypot(mx, my);
+    if (mag > FACING_EPSILON) {
+      vx = (mx / mag) * PLAYER_DASH_SPEED;
+      vy = (my / mag) * PLAYER_DASH_SPEED;
+    } else {
+      vx = Math.cos(facing) * PLAYER_DASH_SPEED;
+      vy = Math.sin(facing) * PLAYER_DASH_SPEED;
     }
-    vx = dx * PLAYER_DASH_SPEED;
-    vy = dy * PLAYER_DASH_SPEED;
-  } else if (dashTimer > 0) {
-    // Continue dash with frozen velocity from p (we stored it in vx/vy last tick)
-    vx = p.vx;
-    vy = p.vy;
-    dashTimer = Math.max(0, dashTimer - dt);
   } else {
-    vx = nx * PLAYER_MOVE_SPEED;
-    vy = ny * PLAYER_MOVE_SPEED;
+    vx = mx * PLAYER_MOVE_SPEED;
+    vy = my * PLAYER_MOVE_SPEED;
   }
 
-  // Integrate position
-  let x = p.x + vx * dt;
-  let y = p.y + vy * dt;
+  x += vx * dt;
+  y += vy * dt;
 
-  // Clamp to grid bounds (player radius keeps them on-screen).
-  // Phase 0: all panels are LIVE so no panel-collision yet.
+  if (Math.hypot(vx, vy) > FACING_EPSILON) {
+    facing = Math.atan2(vy, vx);
+  }
+
   const minX = PLAYER_RADIUS;
   const minY = PLAYER_RADIUS;
-  const maxX = worldW - PLAYER_RADIUS;
-  const maxY = worldH - PLAYER_RADIUS;
-  if (x < minX) {
-    x = minX;
-    vx = 0;
-  } else if (x > maxX) {
-    x = maxX;
-    vx = 0;
-  }
-  if (y < minY) {
-    y = minY;
-    vy = 0;
-  } else if (y > maxY) {
-    y = maxY;
-    vy = 0;
-  }
+  const maxX = grid.cols * grid.panelSize - PLAYER_RADIUS;
+  const maxY = grid.rows * grid.panelSize - PLAYER_RADIUS;
+  x = clamp(x, minX, maxX);
+  y = clamp(y, minY, maxY);
 
-  return {
-    id: p.id,
-    name: p.name,
-    isBot: p.isBot,
-    x,
-    y,
-    vx,
-    vy,
-    dashTimer,
-    dashCooldown,
-    facing,
-  };
+  return { id: state.id, x, y, facing, dashCooldownS, dashRemainingS, stateSeq };
 }
 
-export function createPlayer(id: string, name: string, isBot: boolean, x: number, y: number): Player {
-  return {
-    id,
-    name,
-    isBot,
-    x,
-    y,
-    vx: 0,
-    vy: 0,
-    dashTimer: 0,
-    dashCooldown: 0,
-    facing: 0,
-  };
-}
-
-// Picks a sensible spawn point on a grid based on existing players.
-export function pickSpawn(worldW: number, worldH: number, existing: Player[]): { x: number; y: number } {
-  const corners = [
-    { x: TILE_SIZE * 1.5, y: TILE_SIZE * 1.5 },
-    { x: worldW - TILE_SIZE * 1.5, y: worldH - TILE_SIZE * 1.5 },
-    { x: worldW - TILE_SIZE * 1.5, y: TILE_SIZE * 1.5 },
-    { x: TILE_SIZE * 1.5, y: worldH - TILE_SIZE * 1.5 },
-  ];
-  const used = new Set<number>();
-  for (const p of existing) {
-    let bestIdx = -1;
-    let bestDist = Infinity;
-    for (let i = 0; i < corners.length; i++) {
-      const c = corners[i]!;
-      const d = Math.hypot(p.x - c.x, p.y - c.y);
-      if (d < bestDist) {
-        bestDist = d;
-        bestIdx = i;
-      }
-    }
-    if (bestIdx >= 0) used.add(bestIdx);
-  }
-  for (let i = 0; i < corners.length; i++) {
-    if (!used.has(i)) return corners[i]!;
-  }
-  return corners[0]!;
+export function isDashing(state: PlayerState): boolean {
+  return state.dashRemainingS > 0;
 }

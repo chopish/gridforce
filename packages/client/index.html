@@ -53,11 +53,24 @@
         pointer-events: none;
         z-index: 5;
       }
+      #netsim {
+        position: fixed; top: 8px; right: 8px;
+        font-family: 'SF Mono', Consolas, monospace;
+        font-size: 11px;
+        color: #ffcc6e;
+        background: rgba(0,0,0,0.4);
+        padding: 6px 8px;
+        border-radius: 4px;
+        z-index: 5;
+        cursor: pointer;
+        user-select: none;
+      }
     </style>
   </head>
   <body>
     <div id="app"></div>
     <div id="hud" hidden></div>
+    <div id="netsim" hidden></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

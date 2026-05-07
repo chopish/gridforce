@@ -1,51 +1,42 @@
-export interface HudState {
-  tick: number;
-  rttMs: number;
-  predictionErrorPx: number;
-  reconcileRewindTicks: number;
-  pendingInputs: number;
+import type { PredictionDiagnostics } from '../sim/PredictedWorld.js';
+import type { SocketStatus } from '../net/Socket.js';
+
+export interface HudFrame {
   fps: number;
+  socket: SocketStatus;
+  prediction: PredictionDiagnostics;
+  remoteDelayMs: number;
+  netSimName: string;
 }
 
 export class DebugHud {
-  private el: HTMLElement;
-  private lastFrame = performance.now();
-  private fps = 0;
+  private root: HTMLElement;
+  private netSimEl: HTMLElement | null;
 
   constructor() {
     const el = document.getElementById('hud');
-    if (!el) throw new Error('#hud element missing in index.html');
-    this.el = el;
+    if (!el) throw new Error('#hud element missing');
+    el.hidden = false;
+    this.root = el;
+    this.netSimEl = document.getElementById('netsim');
+    if (this.netSimEl) this.netSimEl.hidden = false;
   }
 
-  show(): void {
-    this.el.removeAttribute('hidden');
-  }
-
-  hide(): void {
-    this.el.setAttribute('hidden', '');
-  }
-
-  tick(): void {
-    const now = performance.now();
-    const dt = now - this.lastFrame;
-    this.lastFrame = now;
-    if (dt > 0) {
-      const inst = 1000 / dt;
-      // Low-pass smoothed FPS
-      this.fps = this.fps === 0 ? inst : this.fps * 0.9 + inst * 0.1;
-    }
-  }
-
-  update(s: Omit<HudState, 'fps'>): void {
+  update(f: HudFrame): void {
     const lines = [
-      `tick      ${s.tick}`,
-      `rtt       ${s.rttMs.toFixed(0)} ms`,
-      `predErr   ${s.predictionErrorPx.toFixed(2)} px`,
-      `rollback  ${s.reconcileRewindTicks} ticks`,
-      `pending   ${s.pendingInputs}`,
-      `fps       ${this.fps.toFixed(0)}`,
+      `fps    ${f.fps.toFixed(0)}`,
+      `state  ${f.socket.state}`,
+      `rtt    ${f.socket.rttMs.toFixed(0)} ms`,
+      `tick   pred=${f.prediction.predictedTick}  srv=${f.prediction.serverTick}`,
+      `pend   ${f.prediction.pendingInputs}`,
+      `replay ${f.prediction.lastReplayInputs}`,
+      `err    ${f.prediction.lastPredictionErrorPx.toFixed(1)} px`,
+      `snaps  hard=${f.prediction.hardSnaps}`,
+      `interp ${f.remoteDelayMs.toFixed(0)} ms`,
     ];
-    this.el.textContent = lines.join('\n');
+    this.root.textContent = lines.join('\n');
+    if (this.netSimEl) {
+      this.netSimEl.textContent = `netsim: ${f.netSimName} (press F to cycle)`;
+    }
   }
 }

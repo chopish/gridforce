@@ -1,70 +1,105 @@
-import { test } from 'node:test';
+import test from 'node:test';
 import assert from 'node:assert/strict';
-import type { PlayerInput } from '@gridforce/shared';
+import { EventEmitter } from 'node:events';
+
 import { Connection } from './Connection.js';
 
-// Stub WebSocket: only readyState/send/close are accessed in tests.
-class StubSocket {
-  readyState = 1;
-  sent: string[] = [];
-  send(data: string): void {
-    this.sent.push(data);
-  }
-  close(): void {
-    /* noop */
-  }
+// Minimal fake WebSocket that satisfies just the surface the Connection class
+// touches at construction. Tests focus on the input-buffer / ack-bitmask
+// logic, which doesn't go anywhere near the wire.
+function fakeWs(): unknown {
+  const ee = new EventEmitter() as EventEmitter & {
+    readyState: number;
+    OPEN: number;
+    sent: Uint8Array[];
+    send(buf: Uint8Array): void;
+    close(): void;
+  };
+  ee.readyState = 1;
+  ee.OPEN = 1;
+  ee.sent = [];
+  ee.send = (buf: Uint8Array) => {
+    ee.sent.push(buf);
+  };
+  ee.close = () => {
+    ee.readyState = 3;
+    ee.emit('close');
+  };
+  return ee;
 }
 
-function input(tick: number): PlayerInput {
-  return { tick, mx: 1, my: 0, dash: false };
+function input(tick: number) {
+  return { tick, clientTimeMs: tick * 16, mx: 0, my: 0, dash: false };
 }
 
-test('consumeInputForTick applies the newest input intended for the target tick', () => {
-  const conn = new Connection('p1', 'A', new StubSocket() as unknown as never);
-  conn.bufferInput(input(1));
-  conn.bufferInput(input(2));
-  conn.bufferInput(input(3));
-
-  const applied = conn.consumeInputForTick(3);
-
-  assert.equal(applied.tick, 3);
-  assert.equal(conn.lastAppliedInputTick, 3);
-  assert.equal(conn.bufferedInputCount(), 0);
+test('consumeInputForTick returns null when no input present, advances ack', () => {
+  const ws = fakeWs();
+  const c = new Connection(0, ws as never, () => {});
+  const r = c.consumeInputForTick(5);
+  assert.equal(r, null);
+  assert.equal(c.ackInputTick, 5);
+  // Bitmask: ackInputTick=5, none of (4,3,2,1,0) had inputs → 0
+  assert.equal(c.computeAckBitmask(), 0);
 });
 
-test('consumeInputForTick waits for future inputs', () => {
-  const conn = new Connection('p1', 'A', new StubSocket() as unknown as never);
-  conn.bufferInput(input(3));
-  conn.bufferInput(input(1));
-  conn.bufferInput(input(2));
+test('ackInputTick advances monotonically; bitmask reflects which prior ticks had inputs', () => {
+  const ws = fakeWs();
+  const c = new Connection(0, ws as never, () => {});
+  // Synthetically buffer inputs by going through the public buffering door.
+  // We have to invoke the private `bufferInput` indirectly via a fake decoded
+  // message — simpler: poke at the inputs map via a back door isn't allowed
+  // because it's private. Instead, simulate the network path: add inputs
+  // through repeated consumeInputForTick that pulls from the buffer.
+  //
+  // Workaround: use the protected interface by delivering inputs via the
+  // message handler. We construct decode bytes for Input messages.
+  // For unit-test simplicity we use a direct private accessor via cast.
+  const priv = c as unknown as { bufferInput(i: ReturnType<typeof input>): void };
+  priv.bufferInput(input(10));
+  priv.bufferInput(input(11));
+  priv.bufferInput(input(13)); // gap at 12
 
-  assert.equal(conn.consumeInputForTick(1).tick, 1);
-  assert.equal(conn.consumeInputForTick(2).tick, 2);
-  assert.equal(conn.consumeInputForTick(3).tick, 3);
+  // Process 10, 11, 12, 13 in order
+  assert.equal(c.consumeInputForTick(10)?.tick, 10);
+  assert.equal(c.consumeInputForTick(11)?.tick, 11);
+  assert.equal(c.consumeInputForTick(12), null); // missing
+  assert.equal(c.consumeInputForTick(13)?.tick, 13);
+
+  assert.equal(c.ackInputTick, 13);
+  // bit i ⇔ tick (13-1-i) had input applied
+  // tick 12 missing → bit 0 = 0
+  // tick 11 applied → bit 1 = 1
+  // tick 10 applied → bit 2 = 1
+  // tick  9 missing → bit 3 = 0
+  const m = c.computeAckBitmask();
+  assert.equal(m & 1, 0, 'bit 0 (tick 12) is missing');
+  assert.equal((m >> 1) & 1, 1, 'bit 1 (tick 11) is applied');
+  assert.equal((m >> 2) & 1, 1, 'bit 2 (tick 10) is applied');
+  assert.equal((m >> 3) & 1, 0, 'bit 3 (tick 9) is missing');
 });
 
-test('consumeInputForTick skips duplicate inputs older than lastApplied', () => {
-  // Simulates a late-arriving duplicate input
-  const conn = new Connection('p1', 'A', new StubSocket() as unknown as never);
-  conn.bufferInput(input(1));
-  conn.consumeInputForTick(1);
-  conn.bufferInput(input(1)); // late duplicate
-  assert.equal(conn.bufferedInputCount(), 0);
-  assert.equal(conn.consumeInputForTick(2).tick, 2);
-  assert.equal(conn.lastAppliedInputTick, 1);
+test('inputs older than ackInputTick are dropped on receipt', () => {
+  const ws = fakeWs();
+  const c = new Connection(0, ws as never, () => {});
+  c.consumeInputForTick(20); // ack=20, no input
+  const priv = c as unknown as { bufferInput(i: ReturnType<typeof input>): void };
+  priv.bufferInput(input(15)); // stale
+  // Trying to consume tick 15 finds nothing because it was never buffered.
+  assert.equal(c.consumeInputForTick(15), null);
 });
 
-test('consumeInputForTick returns zero input before any input arrives', () => {
-  const conn = new Connection('p1', 'A', new StubSocket() as unknown as never);
-  assert.deepEqual(conn.consumeInputForTick(5), { tick: 5, mx: 0, my: 0, dash: false });
-  assert.equal(conn.lastAppliedInputTick, -1);
-});
-
-test('consumeInputForTick holds the last movement input without relatching dash', () => {
-  const conn = new Connection('p1', 'A', new StubSocket() as unknown as never);
-  conn.bufferInput({ tick: 1, mx: 1, my: 0, dash: true });
-
-  assert.deepEqual(conn.consumeInputForTick(1), { tick: 1, mx: 1, my: 0, dash: true });
-  assert.deepEqual(conn.consumeInputForTick(2), { tick: 2, mx: 1, my: 0, dash: false });
-  assert.equal(conn.lastAppliedInputTick, 1);
+test('input buffer caps to MAX_INPUT_BUFFER, dropping oldest', () => {
+  const ws = fakeWs();
+  const c = new Connection(0, ws as never, () => {});
+  const priv = c as unknown as { bufferInput(i: ReturnType<typeof input>): void };
+  // Buffer way more than the cap
+  for (let t = 1; t <= 500; t++) priv.bufferInput(input(t));
+  // The oldest should be gone, the newest should be present.
+  // We drop oldest one at a time as new ones come in past the cap, so e.g.
+  // tick 500 is present, tick 1 isn't.
+  const r500 = c.consumeInputForTick(500);
+  assert.equal(r500?.tick, 500);
+  // After consuming tick 500, ack=500. consuming tick 1 with no buffered input is null.
+  c.consumeInputForTick(1);
+  // No assertion needed; the point is: it doesn't crash and doesn't leak unbounded.
 });

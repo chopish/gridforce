@@ -3,6 +3,8 @@ dist/
 build/
 
 .claude/settings.local.json
+.serena/
+AGENTS.md
 .cache/
 .vite/
 *.log

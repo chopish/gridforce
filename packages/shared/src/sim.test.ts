@@ -1,111 +1,121 @@
-import { test } from 'node:test';
+import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createGrid, gridPixelHeight, gridPixelWidth } from './grid.js';
-import { createPlayer, simulate } from './sim.js';
-import type { PlayerInput, WorldState } from './types.js';
+
 import {
+  CLIENT_PREDICT_DT_S,
+  PLAYER_DASH_COOLDOWN_S,
   PLAYER_DASH_DURATION_S,
   PLAYER_MOVE_SPEED,
-  TICK_DT_S,
+  PLAYER_RADIUS,
 } from './constants.js';
+import { createDefaultGrid } from './grid.js';
+import { mulberry32 } from './rng.js';
+import { newPlayerState, stepPlayer } from './sim.js';
+import type { PlayerInput, PlayerState } from './types.js';
 
-function freshState(): WorldState {
-  const grid = createGrid(16, 12);
-  const player = createPlayer('p1', 'Alice', false, 200, 200);
-  return { tick: 0, grid, players: [player], rngState: 12345 };
-}
-
-function input(tick: number, mx: number, my: number, dash = false): PlayerInput {
-  return { tick, mx, my, dash };
-}
-
-test('player at rest stays at rest with zero input', () => {
-  const s0 = freshState();
-  const inputs = new Map([['p1', input(0, 0, 0)]]);
-  const s1 = simulate(s0, inputs, TICK_DT_S);
-  assert.equal(s1.tick, 1);
-  assert.equal(s1.players[0]!.x, 200);
-  assert.equal(s1.players[0]!.y, 200);
+test('idle player stays put', () => {
+  const grid = createDefaultGrid();
+  let p: PlayerState = newPlayerState(0, 200, 200);
+  for (let i = 0; i < 60; i++) p = stepPlayer(p, null, CLIENT_PREDICT_DT_S, grid);
+  assert.equal(p.x, 200);
+  assert.equal(p.y, 200);
+  assert.equal(p.dashCooldownS, 0);
+  assert.equal(p.dashRemainingS, 0);
+  // stateSeq should advance every step
+  assert.equal(p.stateSeq, 60);
 });
 
-test('player moves at PLAYER_MOVE_SPEED for full input', () => {
-  const s0 = freshState();
-  const inputs = new Map([['p1', input(0, 1, 0)]]);
-  const s1 = simulate(s0, inputs, TICK_DT_S);
-  const expectedDx = PLAYER_MOVE_SPEED * TICK_DT_S;
-  assert.ok(Math.abs(s1.players[0]!.x - (200 + expectedDx)) < 1e-6);
+test('movement integrates at expected speed', () => {
+  const grid = createDefaultGrid();
+  let p: PlayerState = newPlayerState(0, 200, 200);
+  const input: PlayerInput = { tick: 0, clientTimeMs: 0, mx: 1, my: 0, dash: false };
+  const seconds = 1;
+  const steps = Math.round(seconds / CLIENT_PREDICT_DT_S);
+  for (let i = 0; i < steps; i++) p = stepPlayer(p, input, CLIENT_PREDICT_DT_S, grid);
+  // Should travel ~PLAYER_MOVE_SPEED px in 1s.
+  assert.ok(Math.abs(p.x - (200 + PLAYER_MOVE_SPEED)) < 1, `x=${p.x}`);
+  assert.equal(p.y, 200);
 });
 
-test('diagonal input does not exceed PLAYER_MOVE_SPEED', () => {
-  const s0 = freshState();
-  const inputs = new Map([['p1', input(0, 1, 1)]]);
-  const s1 = simulate(s0, inputs, TICK_DT_S);
-  const dx = s1.players[0]!.x - 200;
-  const dy = s1.players[0]!.y - 200;
-  const speed = Math.hypot(dx, dy) / TICK_DT_S;
-  assert.ok(Math.abs(speed - PLAYER_MOVE_SPEED) < 1e-3, `speed=${speed}`);
+test('input is normalised to unit circle', () => {
+  const grid = createDefaultGrid();
+  let p: PlayerState = newPlayerState(0, 200, 200);
+  // (3,4) → magnitude 5; should be normalised to (0.6, 0.8).
+  const input: PlayerInput = { tick: 0, clientTimeMs: 0, mx: 3, my: 4, dash: false };
+  for (let i = 0; i < 60; i++) p = stepPlayer(p, input, CLIENT_PREDICT_DT_S, grid);
+  // 1s travel at speed S, x += 0.6*S, y += 0.8*S
+  const expected = PLAYER_MOVE_SPEED;
+  const dx = p.x - 200;
+  const dy = p.y - 200;
+  const traveled = Math.hypot(dx, dy);
+  assert.ok(Math.abs(traveled - expected) < 1, `traveled=${traveled}`);
 });
 
-test('player clamps to grid bounds', () => {
-  const s0 = freshState();
-  let s = { ...s0, players: [{ ...s0.players[0]!, x: 10 }] };
-  const inputs = new Map([['p1', input(0, -1, 0)]]);
-  for (let i = 0; i < 30; i++) {
-    s = simulate(s, inputs, TICK_DT_S);
+test('clamps to world bounds', () => {
+  const grid = createDefaultGrid();
+  let p: PlayerState = newPlayerState(0, 50, 50);
+  const input: PlayerInput = { tick: 0, clientTimeMs: 0, mx: -1, my: -1, dash: false };
+  for (let i = 0; i < 600; i++) p = stepPlayer(p, input, CLIENT_PREDICT_DT_S, grid);
+  assert.equal(p.x, PLAYER_RADIUS);
+  assert.equal(p.y, PLAYER_RADIUS);
+});
+
+test('dash starts only when cooldown is zero, then enters cooldown', () => {
+  const grid = createDefaultGrid();
+  let p: PlayerState = newPlayerState(0, 400, 400);
+  const dashIn: PlayerInput = { tick: 0, clientTimeMs: 0, mx: 1, my: 0, dash: true };
+  p = stepPlayer(p, dashIn, CLIENT_PREDICT_DT_S, grid);
+  assert.ok(p.dashRemainingS > 0);
+  assert.ok(p.dashCooldownS > 0);
+
+  // After dash duration, dashRemaining is 0 but cooldown still nonzero.
+  const ticksToFinish = Math.ceil(PLAYER_DASH_DURATION_S / CLIENT_PREDICT_DT_S) + 2;
+  for (let i = 0; i < ticksToFinish; i++) p = stepPlayer(p, dashIn, CLIENT_PREDICT_DT_S, grid);
+  assert.equal(p.dashRemainingS, 0);
+  assert.ok(p.dashCooldownS > 0);
+
+  // Pressing dash again during cooldown does nothing.
+  const before = { ...p };
+  p = stepPlayer(p, dashIn, CLIENT_PREDICT_DT_S, grid);
+  assert.equal(p.dashRemainingS, 0);
+  assert.ok(p.dashCooldownS < before.dashCooldownS);
+
+  // Wait out cooldown, then dash should fire again.
+  const ticksRemaining = Math.ceil(PLAYER_DASH_COOLDOWN_S / CLIENT_PREDICT_DT_S) + 2;
+  for (let i = 0; i < ticksRemaining; i++) {
+    p = stepPlayer(
+      p,
+      { tick: 0, clientTimeMs: 0, mx: 1, my: 0, dash: false },
+      CLIENT_PREDICT_DT_S,
+      grid,
+    );
   }
-  assert.ok(s.players[0]!.x > 0, 'player should not pass through left wall');
+  assert.equal(p.dashCooldownS, 0);
+  p = stepPlayer(p, dashIn, CLIENT_PREDICT_DT_S, grid);
+  assert.ok(p.dashRemainingS > 0);
 });
 
-test('dash triggers high speed for one duration', () => {
-  const s0 = freshState();
-  const dashInput = new Map([['p1', input(0, 1, 0, true)]]);
-  const holdInput = new Map([['p1', input(0, 1, 0, false)]]);
-  let s = simulate(s0, dashInput, TICK_DT_S);
-  // Just after dash trigger, vx should be very high
-  assert.ok(s.players[0]!.vx > PLAYER_MOVE_SPEED * 2, 'dash should boost vx');
-  // After dash duration, dashTimer should be 0
-  const ticksToEndDash = Math.ceil(PLAYER_DASH_DURATION_S / TICK_DT_S) + 1;
-  for (let i = 0; i < ticksToEndDash; i++) {
-    s = simulate(s, holdInput, TICK_DT_S);
-  }
-  assert.equal(s.players[0]!.dashTimer, 0);
-});
-
-test('dash on cooldown does not retrigger', () => {
-  const s0 = freshState();
-  const dashInput = new Map([['p1', input(0, 1, 0, true)]]);
-  let s = simulate(s0, dashInput, TICK_DT_S);
-  const v0 = s.players[0]!.vx;
-  // Try to dash again immediately
-  s = simulate(s, dashInput, TICK_DT_S);
-  // vx should not jump higher (dash already in progress / cooldown blocking re-trigger)
-  assert.ok(s.players[0]!.vx <= v0 + 1, 'second dash should not re-boost');
-});
-
-test('determinism: same inputs from same seed produce same state', () => {
-  const inputsArr: PlayerInput[] = [];
-  for (let t = 0; t < 100; t++) {
-    inputsArr.push(input(t, Math.cos(t * 0.31), Math.sin(t * 0.27), t % 17 === 0));
+test('replay is deterministic — same input sequence yields identical state', () => {
+  const grid = createDefaultGrid();
+  const rng = mulberry32(0xc0ffee);
+  const inputs: PlayerInput[] = [];
+  for (let i = 0; i < 600; i++) {
+    inputs.push({
+      tick: i,
+      clientTimeMs: i * CLIENT_PREDICT_DT_S * 1000,
+      mx: rng() * 2 - 1,
+      my: rng() * 2 - 1,
+      dash: rng() > 0.99,
+    });
   }
 
-  function run(): WorldState {
-    let s = freshState();
-    for (const inp of inputsArr) {
-      const m = new Map([['p1', inp]]);
-      s = simulate(s, m, TICK_DT_S);
-    }
-    return s;
+  function run(): PlayerState {
+    let p: PlayerState = newPlayerState(0, 500, 400);
+    for (const inp of inputs) p = stepPlayer(p, inp, CLIENT_PREDICT_DT_S, grid);
+    return p;
   }
 
   const a = run();
   const b = run();
-  assert.equal(a.tick, b.tick);
-  assert.equal(a.players[0]!.x, b.players[0]!.x);
-  assert.equal(a.players[0]!.y, b.players[0]!.y);
-});
-
-test('grid pixel size is consistent', () => {
-  const g = createGrid(10, 8);
-  assert.equal(gridPixelWidth(g), 10 * 64);
-  assert.equal(gridPixelHeight(g), 8 * 64);
+  assert.deepEqual(a, b, 'two independent replays must match exactly');
 });

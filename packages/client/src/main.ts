@@ -1,167 +1,167 @@
 import {
-  SNAPSHOT_INTERPOLATION_DELAY_MS,
-  TICK_DT_S,
-  type ServerWelcome,
+  AddBotMsg,
+  CLIENT_MAX_FRAME_DT_S,
+  MessageType,
+  NETSIM_PROFILES,
+  SERVER_TICK_DT_MS,
+  type PlayerId,
+  type PlayerState,
 } from '@gridforce/shared';
-import { showLobby } from './ui/Lobby.js';
-import { GameSocket } from './net/Socket.js';
+
 import { InputCapture } from './input/InputCapture.js';
+import { Socket } from './net/Socket.js';
 import { Renderer } from './render/Renderer.js';
-import { GridRenderer } from './render/GridRenderer.js';
-import { PlayerRenderer } from './render/PlayerRenderer.js';
-import { PredictedWorld, RemotePlayerInterpolator } from './sim/PredictedWorld.js';
+import { PredictedWorld } from './sim/PredictedWorld.js';
 import { DebugHud } from './ui/DebugHud.js';
+import { Lobby } from './ui/Lobby.js';
 
-async function main() {
-  const lobby = await showLobby();
-  const socket = new GameSocket(lobby.roomCode, lobby.name);
-  await socket.ready();
-
-  const welcome = await new Promise<ServerWelcome>((resolve, reject) => {
-    const off = socket.onMessage((msg) => {
-      if (msg.type === 'welcome') {
-        off();
-        resolve(msg);
-      } else if (msg.type === 'error') {
-        off();
-        reject(new Error(`${msg.code}: ${msg.message}`));
-      }
-    });
-    socket.onClose(() => reject(new Error('Connection closed before welcome')));
-  });
-
-  await runGame(socket, welcome);
-}
-
-async function runGame(socket: GameSocket, welcome: ServerWelcome): Promise<void> {
-  const host = document.getElementById('app')!;
-
-  const renderer = new Renderer();
-  await renderer.init(host, welcome.grid);
-
-  const gridRenderer = new GridRenderer();
-  const playerRenderer = new PlayerRenderer(welcome.playerId);
-  renderer.worldRoot.addChild(gridRenderer.view);
-  renderer.worldRoot.addChild(playerRenderer.view);
-  gridRenderer.render(welcome.grid);
-
-  const input = new InputCapture();
-  const detachInput = input.attach(window);
-
-  const predicted = new PredictedWorld(welcome.playerId, welcome.grid, welcome.snapshot);
-  const interpolator = new RemotePlayerInterpolator(SNAPSHOT_INTERPOLATION_DELAY_MS);
-  interpolator.push(welcome.snapshot);
-
-  const hud = new DebugHud();
-  hud.show();
-
-  socket.onMessage((msg) => {
-    if (msg.type === 'snapshot') {
-      predicted.applySnapshot(msg);
-      interpolator.push(msg);
-    }
-  });
-
-  // Add bot button (Backtick key) — quality-of-life for testing
-  window.addEventListener('keydown', (e) => {
-    if (e.code === 'Backquote') socket.addBot();
-  });
-
-  let accumulator = 0;
-  let lastFrame = performance.now();
-  let stopped = false;
-
-  // Reset timing on tab return so the catchup loop doesn't simulate held
-  // inputs across the missed frames. Also clear pressed keys defensively —
-  // some keyup events get dropped while the window is unfocused.
-  const resetTiming = () => {
-    lastFrame = performance.now();
-    accumulator = 0;
-    input.clear();
-    interpolator.reset();
-  };
-  const onVisibility = () => {
-    if (!document.hidden) resetTiming();
-  };
-  document.addEventListener('visibilitychange', onVisibility);
-  window.addEventListener('focus', resetTiming);
-  window.addEventListener('blur', () => input.clear());
-
-  const tick = () => {
-    if (stopped) return;
-    const now = performance.now();
-    let dt = (now - lastFrame) / 1000;
-    lastFrame = now;
-    // Clamp pathological frame stalls. Tight enough that a stuttering frame
-    // can't dump 6+ inputs into the network at once (which then takes the
-    // server multiple ticks to drain and desyncs prediction).
-    if (dt > 0.05) dt = 0.05;
-
-    accumulator += dt;
-    while (accumulator >= TICK_DT_S) {
-      accumulator -= TICK_DT_S;
-      // Sample input is keyed by the *next* tick we're about to advance to
-      const localInput = input.sample(predicted.currentTick + 1);
-      const sentInput = predicted.step({
-        mx: localInput.mx,
-        my: localInput.my,
-        dash: localInput.dash,
-      });
-      socket.sendInput(sentInput);
-    }
-
-    // Render — interpolate between prev and current sim states so motion
-    // is smooth and never overshoots a sim correction. Renders up to one
-    // tick (~16 ms) behind the predicted state, which is the standard
-    // fixed-timestep tradeoff: a tiny visual lag in exchange for never
-    // teleporting backward when velocity changes sign.
-    const alpha = accumulator / TICK_DT_S;
-    const renderedLocal = predicted.getInterpolatedLocalPlayer(alpha);
-    const remotes = interpolator.interpolate(welcome.playerId);
-    playerRenderer.render(renderedLocal, remotes);
-
-    hud.tick();
-    hud.update({
-      tick: predicted.currentTick,
-      rttMs: socket.rttMs,
-      predictionErrorPx: predicted.lastPredictionErrorPx,
-      reconcileRewindTicks: predicted.lastReconcileRewindTicks,
-      pendingInputs: predicted.pendingInputCount(),
-    });
-
-    requestAnimationFrame(tick);
-  };
-  requestAnimationFrame(tick);
-
-  socket.onClose(() => {
-    stopped = true;
-    detachInput();
-    document.removeEventListener('visibilitychange', onVisibility);
-    window.removeEventListener('focus', resetTiming);
-    renderer.destroy();
-    hud.hide();
-    showDisconnected();
-  });
-}
-
-function showDisconnected(): void {
-  const div = document.createElement('div');
-  div.className = 'lobby';
-  div.innerHTML = `
-    <h1 style="color:#ff6e6e">DISCONNECTED</h1>
-    <button onclick="window.location.reload()">Reload</button>
-  `;
-  document.body.appendChild(div);
-}
-
-main().catch((err) => {
-  console.error(err);
-  const div = document.createElement('div');
-  div.className = 'lobby';
-  div.innerHTML = `
-    <h1 style="color:#ff6e6e">ERROR</h1>
-    <div>${(err as Error).message}</div>
-    <button onclick="window.location.reload()">Reload</button>
-  `;
-  document.body.appendChild(div);
+bootstrap().catch((err) => {
+  console.error('[gridforce] fatal:', err);
 });
+
+async function bootstrap(): Promise<void> {
+  const appHost = document.getElementById('app');
+  if (!appHost) throw new Error('#app missing');
+
+  const lobby = new Lobby(appHost);
+  const { roomCode, name } = await lobby.show();
+
+  const socket = new Socket();
+  const world = new PredictedWorld();
+  const inputs = new InputCapture();
+  const renderer = new Renderer();
+  let hud: DebugHud | null = null;
+  let codeBanner: HTMLElement | null = null;
+
+  socket.connect({ roomCode, name });
+
+  const off = socket.addListener((m) => {
+    switch (m.type) {
+      case MessageType.Welcome:
+        world.initFromWelcome(m.payload);
+        renderer
+          .init(appHost, m.payload.grid)
+          .then(() => {
+            renderer.playerRenderer.setLocalPlayer(world.localPlayerId);
+            hud = new DebugHud();
+            codeBanner = lobby.showRoomCode(roomCode || 'NEW');
+            startLoop();
+          })
+          .catch((err) => console.error('[render] init:', err));
+        break;
+      case MessageType.Snapshot:
+        world.applySnapshot(m.payload);
+        break;
+      case MessageType.PlayerJoined:
+        world.ensurePlayer(m.payload.player);
+        break;
+      case MessageType.PlayerLeft:
+        world.removePlayer(m.payload.playerId);
+        break;
+      case MessageType.Error:
+        console.warn('[server error]', m.payload);
+        socket.close();
+        if (codeBanner) codeBanner.remove();
+        lobby.reset();
+        lobby.showError(`server: ${m.payload.message}`);
+        break;
+      default:
+        break;
+    }
+  });
+
+  // Cycle the network simulator profile with F. Used during manual playtest.
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'KeyF') {
+      const next = socket.cycleNetSimProfile();
+      console.info('[netsim] →', next);
+    }
+    if (e.code === 'KeyB') {
+      // request another bot in this room
+      window.dispatchEvent(new CustomEvent('gridforce:add-bot'));
+    }
+  });
+  window.addEventListener('gridforce:add-bot', () => {
+    socket.sendRaw(AddBotMsg.encode({}));
+  });
+
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+      world.remoteInterp.resetForVisibilityRestore();
+      inputs.clear();
+    }
+  });
+
+  function startLoop(): void {
+    let last = performance.now();
+    let accumulator = 0;
+    let frameSamples = 0;
+    let frameSampleStart = last;
+
+    const onFrame = () => {
+      const now = performance.now();
+      let dt = (now - last) / 1000;
+      if (dt > CLIENT_MAX_FRAME_DT_S) dt = CLIENT_MAX_FRAME_DT_S;
+      last = now;
+
+      accumulator += dt * 1000;
+      while (accumulator >= SERVER_TICK_DT_MS) {
+        const sample = inputs.sample();
+        const inp = world.step({ ...sample, clientTimeMs: now });
+        socket.sendInput(inp);
+        accumulator -= SERVER_TICK_DT_MS;
+      }
+
+      const alpha = Math.max(0, Math.min(1, accumulator / SERVER_TICK_DT_MS));
+      world.decayCorrection(dt * 1000);
+
+      // Render players: local from prediction, remotes from interpolator.
+      const ids: PlayerId[] = [];
+      for (const id of world.players.keys()) ids.push(id);
+      renderer.playerRenderer.update(ids, (id) => {
+        if (id === world.localPlayerId) {
+          const v = world.visualLocalPosition(alpha);
+          const cur: PlayerState | undefined = world.players.get(id);
+          return { x: v.x, y: v.y, facing: v.facing, dashing: !!cur && cur.dashRemainingS > 0 };
+        }
+        const sample = world.remoteInterp.sample(id, now);
+        if (!sample) return null;
+        const cur = world.players.get(id);
+        return { ...sample, dashing: !!cur && cur.dashRemainingS > 0 };
+      });
+
+      // FPS sample
+      frameSamples++;
+      if (now - frameSampleStart >= 500) {
+        const fps = (frameSamples * 1000) / (now - frameSampleStart);
+        if (hud) {
+          hud.update({
+            fps,
+            socket: socket.status(),
+            prediction: world.diagnostics,
+            remoteDelayMs: world.remoteInterp.currentDelayMs,
+            netSimName: socket.status().lastSimProfileName,
+          });
+        }
+        frameSamples = 0;
+        frameSampleStart = now;
+      }
+
+      requestAnimationFrame(onFrame);
+    };
+
+    requestAnimationFrame(onFrame);
+  }
+
+  // Cleanup on unload — let the server see a clean disconnect.
+  window.addEventListener('beforeunload', () => {
+    off();
+    socket.close();
+    inputs.dispose();
+    renderer.destroy();
+  });
+
+  // Set initial netsim profile to "off" so HUD has something to display.
+  socket.setNetSimProfile('off', NETSIM_PROFILES.off!);
+}
+

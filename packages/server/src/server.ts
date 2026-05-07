@@ -1,59 +1,35 @@
-import express from 'express';
+import { createServer } from 'node:http';
+
 import cors from 'cors';
-import http from 'node:http';
-import { WebSocketServer } from 'ws';
+import express from 'express';
+
 import { RoomManager } from './RoomManager.js';
-import { handleWsConnection } from './wsHandler.js';
+import { attachWsHandler } from './wsHandler.js';
 
 const PORT = Number(process.env.PORT ?? 8080);
 
 const app = express();
 app.use(cors());
-app.use(express.json());
-
-const rooms = new RoomManager();
-
-app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, rooms: rooms.size, time: Date.now() });
+app.get('/healthz', (_req, res) => {
+  res.json({ ok: true, rooms: manager.roomCount });
 });
 
-app.post('/api/rooms', (_req, res) => {
-  const code = rooms.createRoom();
-  res.json({ code });
-});
-
-app.get('/api/rooms/:code', (req, res) => {
-  const room = rooms.getRoom(req.params.code.toUpperCase());
-  if (!room) {
-    res.status(404).json({ error: 'ROOM_NOT_FOUND' });
-    return;
-  }
-  res.json({
-    code: room.code,
-    players: room.getPlayerSummaries(),
-    capacity: room.capacity,
-  });
-});
-
-const httpServer = http.createServer(app);
-const wss = new WebSocketServer({
-  server: httpServer,
-  path: '/ws',
-  // Real-time small-message stream — compression hurts more than it helps
-  // and adds CPU + latency per frame.
-  perMessageDeflate: false,
-});
-
-wss.on('connection', (socket, req) => {
-  // Disable Nagle's algorithm. With ~60 small messages/sec each way, Nagle's
-  // 40 ms coalescing window holds inputs and snapshots that should ship now.
-  const underlying = (socket as unknown as { _socket?: { setNoDelay?: (v: boolean) => void } })._socket;
-  if (underlying && typeof underlying.setNoDelay === 'function') {
-    underlying.setNoDelay(true);
-  }
-  handleWsConnection(socket, req, rooms);
-});
+const httpServer = createServer(app);
+const manager = new RoomManager();
+manager.start();
+attachWsHandler(httpServer, manager);
 
 httpServer.listen(PORT, () => {
-  console.log(`[gridforce] server listening on :${PORT}`);
+  console.log(`[gridforce] http+ws on :${PORT} (ws path /ws)`);
 });
+
+function shutdown(signal: string): void {
+  console.log(`[gridforce] shutdown on ${signal}`);
+  manager.stop();
+  httpServer.close(() => process.exit(0));
+  // Hard timeout — never let dangling connections block exit forever.
+  setTimeout(() => process.exit(1), 3_000).unref();
+}
+
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));

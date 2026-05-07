@@ -1,152 +1,129 @@
-import { SERVER_HTTP } from '../config.js';
+// Lightweight DOM-based lobby. Two screens:
+//   1) "Create new room" or "Join existing" picker
+//   2) Room code display (after creating) with copy-to-clipboard
+//
+// Submitting either path produces a roomCode + name and resolves the promise
+// returned by `show()`.
 
 export interface LobbyResult {
   roomCode: string;
   name: string;
 }
 
-export function showLobby(): Promise<LobbyResult> {
-  return new Promise((resolve) => {
-    const root = document.createElement('div');
-    root.className = 'lobby';
-    document.body.appendChild(root);
+export class Lobby {
+  private root: HTMLDivElement;
+  private resolveFn: ((r: LobbyResult) => void) | null = null;
 
-    const finish = (roomCode: string, name: string) => {
-      root.remove();
-      resolve({ roomCode, name });
-    };
-
-    renderHome(root, finish);
-  });
-}
-
-// ----- Home screen: pick name, create or enter a code -----
-
-function renderHome(
-  root: HTMLElement,
-  finish: (code: string, name: string) => void,
-): void {
-  root.innerHTML = `
-    <h1>GRIDFORCE</h1>
-    <div style="opacity:0.7; margin-bottom: 0.5rem; text-align:center;">
-      Phase 0 — engine + netcode foundation<br/>
-      WASD or arrows to walk. Space or shift to dash. Backtick (\`) adds a bot.
-    </div>
-    <input id="lob-name" placeholder="Your name" maxlength="16" />
-    <button id="lob-create">Create new room</button>
-    <div class="row">
-      <input id="lob-code" placeholder="Room code" maxlength="6" style="text-transform:uppercase; width: 8rem;" />
-      <button id="lob-join">Join room</button>
-    </div>
-    <div class="err" id="lob-err"></div>
-  `;
-
-  const nameInput = root.querySelector<HTMLInputElement>('#lob-name')!;
-  const codeInput = root.querySelector<HTMLInputElement>('#lob-code')!;
-  const createBtn = root.querySelector<HTMLButtonElement>('#lob-create')!;
-  const joinBtn = root.querySelector<HTMLButtonElement>('#lob-join')!;
-  const err = root.querySelector<HTMLDivElement>('#lob-err')!;
-
-  if (!nameInput.value) {
-    nameInput.value = `Player${Math.floor(Math.random() * 9000) + 1000}`;
+  constructor(parent: HTMLElement) {
+    this.root = document.createElement('div');
+    this.root.className = 'lobby';
+    parent.appendChild(this.root);
   }
 
-  createBtn.addEventListener('click', async () => {
-    err.textContent = '';
-    createBtn.disabled = true;
-    try {
-      const resp = await fetch(`${SERVER_HTTP}/api/rooms`, { method: 'POST' });
-      if (!resp.ok) throw new Error(`Server returned ${resp.status}`);
-      const data = (await resp.json()) as { code: string };
-      const name = nameInput.value.trim() || 'Player';
-      renderRoomCreated(root, data.code, name, finish);
-    } catch (e) {
-      err.textContent = `Failed to create room: ${(e as Error).message}`;
-      createBtn.disabled = false;
-    }
-  });
+  show(): Promise<LobbyResult> {
+    this.renderPicker();
+    return new Promise<LobbyResult>((resolve) => {
+      this.resolveFn = resolve;
+    });
+  }
 
-  joinBtn.addEventListener('click', () => {
-    err.textContent = '';
-    const code = codeInput.value.trim().toUpperCase();
-    if (code.length === 0) {
-      err.textContent = 'Enter a room code';
-      return;
-    }
-    finish(code, nameInput.value.trim() || 'Player');
-  });
+  hide(): void {
+    this.root.remove();
+  }
 
-  codeInput.addEventListener('input', () => {
-    codeInput.value = codeInput.value.toUpperCase();
-  });
-}
+  private renderPicker(): void {
+    this.root.innerHTML = '';
+    const h = document.createElement('h1');
+    h.textContent = 'GRIDFORCE';
+    this.root.appendChild(h);
 
-// ----- After-create screen: show code, let user copy, then Start -----
+    const nameRow = document.createElement('div');
+    nameRow.className = 'row';
+    const nameInput = document.createElement('input');
+    nameInput.placeholder = 'name (optional)';
+    nameInput.maxLength = 24;
+    nameRow.appendChild(nameInput);
+    this.root.appendChild(nameRow);
 
-function renderRoomCreated(
-  root: HTMLElement,
-  code: string,
-  name: string,
-  finish: (code: string, name: string) => void,
-): void {
-  root.innerHTML = `
-    <h1>ROOM READY</h1>
-    <div style="opacity:0.7; text-align:center;">
-      Share this code with your friends so they can join.
-    </div>
-    <div id="lob-code-display" style="
-      font-family: 'SF Mono', Consolas, monospace;
-      font-size: 3rem;
-      letter-spacing: 0.4em;
-      padding: 1rem 1.5rem;
-      background: #11122a;
-      border: 1px solid #6ee7ff;
-      border-radius: 8px;
-      color: #6ee7ff;
-      user-select: all;
-      cursor: text;
-    "></div>
-    <div class="row">
-      <button id="lob-copy">Copy code</button>
-      <button id="lob-start">Start →</button>
-    </div>
-    <button id="lob-back" style="opacity:0.6;">Back</button>
-    <div class="err" id="lob-status" style="color:#9dffa0; min-height:1.2em;"></div>
-  `;
+    const createBtn = document.createElement('button');
+    createBtn.textContent = 'Create new room';
+    this.root.appendChild(createBtn);
 
-  const codeEl = root.querySelector<HTMLDivElement>('#lob-code-display')!;
-  codeEl.textContent = code;
-  const copyBtn = root.querySelector<HTMLButtonElement>('#lob-copy')!;
-  const startBtn = root.querySelector<HTMLButtonElement>('#lob-start')!;
-  const backBtn = root.querySelector<HTMLButtonElement>('#lob-back')!;
-  const status = root.querySelector<HTMLDivElement>('#lob-status')!;
+    const joinRow = document.createElement('div');
+    joinRow.className = 'row';
+    const codeInput = document.createElement('input');
+    codeInput.placeholder = 'room code';
+    codeInput.maxLength = 8;
+    codeInput.style.textTransform = 'uppercase';
+    const joinBtn = document.createElement('button');
+    joinBtn.textContent = 'Join';
+    joinBtn.style.minWidth = '6rem';
+    joinRow.appendChild(codeInput);
+    joinRow.appendChild(joinBtn);
+    this.root.appendChild(joinRow);
 
-  copyBtn.addEventListener('click', async () => {
-    try {
-      await navigator.clipboard.writeText(code);
-      status.textContent = 'Copied!';
+    const err = document.createElement('div');
+    err.className = 'err';
+    this.root.appendChild(err);
+
+    createBtn.onclick = () => {
+      this.finish({ roomCode: '', name: nameInput.value.trim() });
+    };
+    joinBtn.onclick = () => {
+      const code = codeInput.value.trim().toUpperCase();
+      if (code.length < 2) {
+        err.textContent = 'Enter a room code';
+        return;
+      }
+      this.finish({ roomCode: code, name: nameInput.value.trim() });
+    };
+    codeInput.onkeydown = (e) => {
+      if (e.key === 'Enter') joinBtn.click();
+    };
+  }
+
+  // Show the joined room code while the connection is alive.
+  showRoomCode(code: string): HTMLDivElement {
+    const banner = document.createElement('div');
+    banner.style.position = 'fixed';
+    banner.style.bottom = '8px';
+    banner.style.left = '8px';
+    banner.style.fontFamily = "'SF Mono', Consolas, monospace";
+    banner.style.fontSize = '12px';
+    banner.style.color = '#cfd6e0';
+    banner.style.background = 'rgba(0,0,0,0.4)';
+    banner.style.padding = '6px 10px';
+    banner.style.borderRadius = '4px';
+    banner.style.zIndex = '5';
+    banner.innerHTML = `<span style="opacity:0.7">room</span> <strong style="color:#6ee7ff;letter-spacing:0.1em">${code}</strong> <span style="opacity:0.5">(click to copy)</span>`;
+    banner.style.cursor = 'pointer';
+    banner.onclick = () => {
+      void navigator.clipboard?.writeText(code);
+      banner.querySelector('span:last-child')!.textContent = '(copied!)';
       setTimeout(() => {
-        status.textContent = '';
-      }, 1500);
-    } catch {
-      status.textContent = 'Could not copy — select the code manually.';
-    }
-  });
+        const span = banner.querySelector('span:last-child');
+        if (span) span.textContent = '(click to copy)';
+      }, 1200);
+    };
+    document.body.appendChild(banner);
+    return banner;
+  }
 
-  startBtn.addEventListener('click', () => {
-    finish(code, name);
-  });
+  showError(message: string): void {
+    const err = this.root.querySelector('.err');
+    if (err) err.textContent = message;
+  }
 
-  backBtn.addEventListener('click', () => {
-    renderHome(root, finish);
-  });
+  reset(): void {
+    this.renderPicker();
+    document.body.appendChild(this.root);
+  }
 
-  // Pressing Enter in this view starts the game
-  const onKey = (e: KeyboardEvent) => {
-    if (e.code === 'Enter') {
-      window.removeEventListener('keydown', onKey);
-      finish(code, name);
-    }
-  };
-  window.addEventListener('keydown', onKey);
+  private finish(r: LobbyResult): void {
+    if (!this.resolveFn) return;
+    const fn = this.resolveFn;
+    this.resolveFn = null;
+    this.hide();
+    fn(r);
+  }
 }

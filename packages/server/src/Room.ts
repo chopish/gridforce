@@ -1,219 +1,248 @@
+import { performance } from 'node:perf_hooks';
+
 import {
-  DEFAULT_GRID_H,
-  DEFAULT_GRID_W,
+  ErrorCode,
+  ErrorMsg,
   MAX_PLAYERS_PER_ROOM,
-  TICK_DT_MS,
-  TICK_DT_S,
-  createGrid,
-  createPlayer,
-  gridPixelHeight,
-  gridPixelWidth,
-  pickSpawn,
-  simulate,
-  type Player,
-  type PlayerInput,
-  type WorldState,
+  PlayerJoinedMsg,
+  PlayerLeftMsg,
+  SERVER_SNAPSHOT_INTERVAL_MS,
+  SERVER_TICK_DT_MS,
+  SERVER_TICK_DT_S,
+  SnapshotMsg,
+  WelcomeMsg,
+  createDefaultGrid,
+  newPlayerState,
+  stepPlayer,
+  type GridDef,
+  type PlayerId,
+  type PlayerState,
 } from '@gridforce/shared';
-import type { Bot } from './bots/Bot.js';
-import { IdleBot } from './bots/IdleBot.js';
-import { Connection } from './Connection.js';
 
-let nextBotId = 1;
+import type { Connection } from './Connection.js';
+import type { Pilot } from './Pilot.js';
+import { WanderBot } from './bots/WanderBot.js';
 
-export class Room {
-  readonly code: string;
-  readonly capacity = MAX_PLAYERS_PER_ROOM;
-  private state: WorldState;
-  private connections = new Map<string, Connection>();
-  private bots: Bot[] = [];
-  private tickHandle: NodeJS.Timeout | null = null;
-  private tickStopped = false;
-  private startedAt = Date.now();
-  private lastActivityAt = Date.now();
-  private onDisposed: () => void;
-  // Maximum simulation ticks to run from one timer callback after a host stall.
-  // Keeps the server from spiraling while still catching ordinary timer drift.
-  private static readonly MAX_CATCHUP = 8;
+const MAX_CATCHUP_PHYSICS_TICKS = 8;
+const SCHEDULER_GRANULARITY_MS = 4; // never sleep finer than this
 
-  constructor(code: string, onDisposed: () => void) {
-    this.code = code;
-    this.onDisposed = onDisposed;
-    const grid = createGrid(DEFAULT_GRID_W, DEFAULT_GRID_H);
-    this.state = {
-      tick: 0,
-      grid,
-      players: [],
-      rngState: hashCodeToInt(code),
-    };
-    this.startTickLoop();
-  }
-
-  get worldState(): WorldState {
-    return this.state;
-  }
-
-  get population(): number {
-    return this.connections.size + this.bots.length;
-  }
-
-  shouldPrune(): boolean {
-    return this.connections.size === 0 && Date.now() - this.lastActivityAt > 60_000;
-  }
-
-  getPlayerSummaries(): Array<{ id: string; name: string; isBot: boolean }> {
-    return this.state.players.map((p) => ({ id: p.id, name: p.name, isBot: p.isBot }));
-  }
-
-  addConnection(conn: Connection): { success: true } | { success: false; reason: 'ROOM_FULL' } {
-    if (this.population >= this.capacity) {
-      return { success: false, reason: 'ROOM_FULL' };
-    }
-
-    const worldW = gridPixelWidth(this.state.grid);
-    const worldH = gridPixelHeight(this.state.grid);
-    const spawn = pickSpawn(worldW, worldH, this.state.players);
-    const player = createPlayer(conn.playerId, conn.name, false, spawn.x, spawn.y);
-
-    this.state = { ...this.state, players: [...this.state.players, player] };
-    this.connections.set(conn.playerId, conn);
-    this.lastActivityAt = Date.now();
-
-    // Send Welcome with full grid + immediate snapshot
-    conn.send({
-      type: 'welcome',
-      playerId: conn.playerId,
-      roomCode: this.code,
-      grid: this.state.grid,
-      snapshot: this.makeSnapshot(conn),
-    });
-
-    // Notify other connections
-    this.broadcastExcept(conn.playerId, { type: 'playerJoined', player });
-
-    return { success: true };
-  }
-
-  removeConnection(playerId: string): void {
-    if (!this.connections.has(playerId)) return;
-    this.connections.delete(playerId);
-    this.state = {
-      ...this.state,
-      players: this.state.players.filter((p) => p.id !== playerId),
-    };
-    this.broadcastAll({ type: 'playerLeft', playerId });
-    this.lastActivityAt = Date.now();
-  }
-
-  addBot(): Bot | null {
-    if (this.population >= this.capacity) return null;
-    const id = `bot-${nextBotId++}`;
-    const bot = new IdleBot(id, `Bot ${id.slice(4)}`);
-    this.bots.push(bot);
-
-    const worldW = gridPixelWidth(this.state.grid);
-    const worldH = gridPixelHeight(this.state.grid);
-    const spawn = pickSpawn(worldW, worldH, this.state.players);
-    const botPlayer = createPlayer(bot.id, bot.name, true, spawn.x, spawn.y);
-    this.state = { ...this.state, players: [...this.state.players, botPlayer] };
-    this.broadcastAll({ type: 'playerJoined', player: botPlayer });
-    return bot;
-  }
-
-  ingestInput(playerId: string, input: PlayerInput): void {
-    const conn = this.connections.get(playerId);
-    if (!conn) return;
-    conn.bufferInput(input);
-    this.lastActivityAt = Date.now();
-  }
-
-  dispose(): void {
-    this.tickStopped = true;
-    if (this.tickHandle) {
-      clearTimeout(this.tickHandle);
-      this.tickHandle = null;
-    }
-    for (const conn of this.connections.values()) conn.close();
-    this.connections.clear();
-    this.bots = [];
-    this.onDisposed();
-  }
-
-  // ---------- private ----------
-
-  private startTickLoop(): void {
-    // Self-correcting fixed-step loop. If a timer fires late, run the due
-    // number of simulation ticks now (bounded by MAX_CATCHUP) instead of
-    // letting the server fall permanently behind the 60 Hz input stream.
-    let nextAt = performance.now() + TICK_DT_MS;
-    const loop = (): void => {
-      if (this.tickStopped) return;
-
-      const now = performance.now();
-      let steps = 0;
-      while (now >= nextAt && steps < Room.MAX_CATCHUP) {
-        this.runOneSubTick();
-        nextAt += TICK_DT_MS;
-        steps++;
-      }
-
-      if (steps > 0) {
-        for (const conn of this.connections.values()) {
-          conn.send(this.makeSnapshot(conn));
-        }
-      }
-
-      // If the process was paused for a long time, drop the excess elapsed
-      // time instead of burning CPU on hundreds of stale ticks.
-      if (steps === Room.MAX_CATCHUP && performance.now() >= nextAt) {
-        nextAt = performance.now() + TICK_DT_MS;
-      }
-
-      const delay = Math.max(0, nextAt - performance.now());
-      this.tickHandle = setTimeout(loop, delay);
-    };
-    this.tickHandle = setTimeout(loop, TICK_DT_MS);
-  }
-
-  private runOneSubTick(): void {
-    const inputs = new Map<string, PlayerInput>();
-    const targetTick = this.state.tick + 1;
-
-    for (const conn of this.connections.values()) {
-      inputs.set(conn.playerId, conn.consumeInputForTick(targetTick));
-    }
-
-    for (const bot of this.bots) {
-      inputs.set(bot.id, bot.getInput(this.state, targetTick));
-    }
-
-    this.state = simulate(this.state, inputs, TICK_DT_S);
-  }
-
-  private makeSnapshot(conn: Connection) {
-    return {
-      type: 'snapshot' as const,
-      tick: this.state.tick,
-      serverTime: Date.now(),
-      players: this.state.players,
-      ackInputTick: conn.lastAppliedInputTick,
-    };
-  }
-
-  private broadcastAll(msg: Parameters<Connection['send']>[0]): void {
-    for (const conn of this.connections.values()) conn.send(msg);
-  }
-
-  private broadcastExcept(playerId: string, msg: Parameters<Connection['send']>[0]): void {
-    for (const conn of this.connections.values()) {
-      if (conn.playerId !== playerId) conn.send(msg);
-    }
-  }
+// Place new players around the centre, spread on a circle so they don't spawn on top of each other.
+function spawnPosition(grid: GridDef, slot: number): { x: number; y: number } {
+  const cx = (grid.cols * grid.panelSize) / 2;
+  const cy = (grid.rows * grid.panelSize) / 2;
+  const r = Math.min(grid.cols, grid.rows) * grid.panelSize * 0.15;
+  const theta = (slot / MAX_PLAYERS_PER_ROOM) * Math.PI * 2;
+  return { x: cx + Math.cos(theta) * r, y: cy + Math.sin(theta) * r };
 }
 
-function hashCodeToInt(code: string): number {
-  let h = 0;
-  for (let i = 0; i < code.length; i++) {
-    h = (h * 31 + code.charCodeAt(i)) | 0;
+export class Room {
+  readonly grid: GridDef = createDefaultGrid();
+  readonly pilots = new Map<PlayerId, Pilot>();
+  readonly states = new Map<PlayerId, PlayerState>();
+
+  tick = 0;
+  private nextPlayerId: PlayerId = 0;
+  private startWallMs = 0;
+  private lastPhysicsAtMs = 0;
+  private lastSnapshotAtMs = 0;
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private running = false;
+  private lastNonEmptyAtMs = performance.now();
+
+  constructor(public readonly code: string) {}
+
+  get isEmpty(): boolean {
+    for (const p of this.pilots.values()) {
+      if (!p.isBot) return false;
+    }
+    return true;
   }
-  return h >>> 0;
+
+  get lastNonEmptyAt(): number {
+    return this.lastNonEmptyAtMs;
+  }
+
+  start(): void {
+    if (this.running) return;
+    const now = performance.now();
+    this.startWallMs = now;
+    this.lastPhysicsAtMs = now;
+    this.lastSnapshotAtMs = now;
+    this.running = true;
+    this.scheduleNext();
+  }
+
+  stop(): void {
+    this.running = false;
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+  }
+
+  // --- Membership ---
+
+  // Two-phase join: caller reserves a slot, constructs the Connection with
+  // the assigned id, then commits. Lets Connection's playerId stay readonly
+  // and avoids the awkward "create then mutate" pattern.
+  reserveSlot(): { ok: true; playerId: PlayerId } | { ok: false; code: number } {
+    if (this.pilots.size >= MAX_PLAYERS_PER_ROOM) {
+      return { ok: false, code: ErrorCode.RoomFull };
+    }
+    return { ok: true, playerId: this.allocPlayerId() };
+  }
+
+  commitJoin(conn: Connection): void {
+    const id = conn.playerId;
+    this.attach(id, conn, this.makeSpawnState(id));
+    this.broadcastExcept(id, PlayerJoinedMsg.encode({ player: this.states.get(id)! }));
+    this.sendWelcome(conn);
+  }
+
+  addBot(): { ok: true; playerId: PlayerId } | { ok: false; code: number } {
+    if (this.pilots.size >= MAX_PLAYERS_PER_ROOM) {
+      return { ok: false, code: ErrorCode.RoomFull };
+    }
+    const id = this.allocPlayerId();
+    const bot = new WanderBot(id);
+    this.attach(id, bot, this.makeSpawnState(id));
+    this.broadcastAll(PlayerJoinedMsg.encode({ player: this.states.get(id)! }));
+    return { ok: true, playerId: id };
+  }
+
+  remove(playerId: PlayerId): void {
+    const pilot = this.pilots.get(playerId);
+    if (!pilot) return;
+    pilot.dispose();
+    this.pilots.delete(playerId);
+    this.states.delete(playerId);
+    this.broadcastAll(PlayerLeftMsg.encode({ playerId }));
+    if (!this.isEmpty) this.lastNonEmptyAtMs = performance.now();
+  }
+
+  rejectJoin(conn: Connection, code: number, message: string): void {
+    conn.send(ErrorMsg.encode({ code, message }));
+    conn.close(1008, message);
+  }
+
+  private attach(playerId: PlayerId, pilot: Pilot, state: PlayerState): void {
+    this.pilots.set(playerId, pilot);
+    this.states.set(playerId, state);
+    if (!this.isEmpty) this.lastNonEmptyAtMs = performance.now();
+  }
+
+  private allocPlayerId(): PlayerId {
+    // 0..255; reuse freed slots
+    for (let i = 0; i < 256; i++) {
+      const candidate = (this.nextPlayerId + i) & 0xff;
+      if (!this.pilots.has(candidate)) {
+        this.nextPlayerId = (candidate + 1) & 0xff;
+        return candidate;
+      }
+    }
+    throw new Error('No player id slot available');
+  }
+
+  private makeSpawnState(id: PlayerId): PlayerState {
+    const slot = this.pilots.size;
+    const { x, y } = spawnPosition(this.grid, slot);
+    return newPlayerState(id, x, y);
+  }
+
+  private sendWelcome(conn: Connection): void {
+    conn.send(
+      WelcomeMsg.encode({
+        yourPlayerId: conn.playerId,
+        grid: this.grid,
+        startTick: this.tick,
+        serverTimeMs: Date.now(),
+        players: Array.from(this.states.values()),
+      }),
+    );
+  }
+
+  // --- Broadcast helpers ---
+
+  private broadcastAll(bytes: Uint8Array): void {
+    for (const p of this.pilots.values()) p.send(bytes);
+  }
+  private broadcastExcept(except: PlayerId, bytes: Uint8Array): void {
+    for (const [id, p] of this.pilots) {
+      if (id !== except) p.send(bytes);
+    }
+  }
+
+  // --- Tick loop ---
+
+  private scheduleNext(): void {
+    if (!this.running) return;
+    const now = performance.now();
+    const nextPhysics = this.lastPhysicsAtMs + SERVER_TICK_DT_MS;
+    const nextSnapshot = this.lastSnapshotAtMs + SERVER_SNAPSHOT_INTERVAL_MS;
+    const next = Math.min(nextPhysics, nextSnapshot);
+    const delay = Math.max(SCHEDULER_GRANULARITY_MS, next - now);
+    this.timer = setTimeout(this.driveTick, delay);
+  }
+
+  private driveTick = (): void => {
+    if (!this.running) return;
+    const now = performance.now();
+
+    // Catch up physics with a hard cap (anti-spiral).
+    let catchups = 0;
+    while (now - this.lastPhysicsAtMs >= SERVER_TICK_DT_MS && catchups < MAX_CATCHUP_PHYSICS_TICKS) {
+      this.lastPhysicsAtMs += SERVER_TICK_DT_MS;
+      this.tick++;
+      this.physicsStep();
+      catchups++;
+    }
+    if (now - this.lastPhysicsAtMs > SERVER_TICK_DT_MS) {
+      // Still behind after max catch-up — fast-forward without sim.
+      this.lastPhysicsAtMs = now;
+    }
+
+    // Snapshot at its own cadence; never spiral.
+    if (now - this.lastSnapshotAtMs >= SERVER_SNAPSHOT_INTERVAL_MS) {
+      this.lastSnapshotAtMs += SERVER_SNAPSHOT_INTERVAL_MS;
+      if (now - this.lastSnapshotAtMs > SERVER_SNAPSHOT_INTERVAL_MS) {
+        this.lastSnapshotAtMs = now;
+      }
+      this.broadcastSnapshot();
+    }
+
+    if (!this.isEmpty) this.lastNonEmptyAtMs = now;
+    this.scheduleNext();
+  };
+
+  private physicsStep(): void {
+    for (const [id, state] of this.states) {
+      const pilot = this.pilots.get(id);
+      const input = pilot ? pilot.consumeInputForTick(this.tick) : null;
+      const next = stepPlayer(state, input, SERVER_TICK_DT_S, this.grid);
+      this.states.set(id, next);
+    }
+  }
+
+  private broadcastSnapshot(): void {
+    const players = Array.from(this.states.values());
+    const serverTimeMs = Date.now();
+    for (const pilot of this.pilots.values()) {
+      // AOI hook (Phase 0: identity). When per-client culling ships, this
+      // returns a per-pilot subset and we move encoding here-per-pilot.
+      const visible = this.aoiFilter(pilot, players);
+      const bytes = SnapshotMsg.encode({
+        tick: this.tick,
+        serverTimeMs,
+        ackInputTick: pilot.ackInputTick,
+        inputAckBitmask: pilot.computeAckBitmask(),
+        players: visible,
+      });
+      pilot.send(bytes);
+    }
+  }
+
+  // Stub: no culling yet.
+  private aoiFilter(_pilot: Pilot, all: PlayerState[]): PlayerState[] {
+    return all;
+  }
 }

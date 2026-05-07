@@ -1,58 +1,41 @@
 import { Container, Graphics } from 'pixi.js';
-import { TILE_SIZE, type Grid } from '@gridforce/shared';
 
-const PANEL_LIVE_FILL = 0x162038;
-const PANEL_LIVE_STROKE = 0x2a3f6e;
-const PANEL_LIVE_GLOW = 0x6ee7ff;
-const PANEL_DAMAGED_FILL = 0x1d1817;
-const PANEL_DAMAGED_STROKE = 0x4a3a2a;
-const PANEL_BROKEN_FILL = 0x070707;
-const PANEL_BROKEN_STROKE = 0x1a1a1a;
+import type { GridDef } from '@gridforce/shared';
 
+const PANEL_FILL = 0x121826;
+const PANEL_STROKE = 0x1f2a44;
+const PANEL_HIGHLIGHT = 0x223052;
+const GRID_BG = 0x080a13;
+
+// Phase 0 grid: a flat field of solar panels. Just visual; no game-affecting
+// state (no HP, no shock, no live/dead distinction). Future revs will track
+// per-panel state (cracked / live / dead) and re-draw on change.
 export class GridRenderer {
-  readonly view: Container;
-  private g: Graphics;
+  root = new Container();
+  private gfx = new Graphics();
 
-  constructor() {
-    this.view = new Container();
-    this.g = new Graphics();
-    this.view.addChild(this.g);
+  constructor(grid: GridDef) {
+    this.root.addChild(this.gfx);
+    this.draw(grid);
   }
 
-  render(grid: Grid): void {
-    const g = this.g;
+  private draw(grid: GridDef): void {
+    const { cols, rows, panelSize: ps } = grid;
+    const w = cols * ps;
+    const h = rows * ps;
+    const g = this.gfx;
     g.clear();
-
-    // Draw grid background (slightly outside grid for ambience)
-    const w = grid.width * TILE_SIZE;
-    const h = grid.height * TILE_SIZE;
-    g.rect(-12, -12, w + 24, h + 24).fill({ color: 0x05060a });
-
-    for (let row = 0; row < grid.height; row++) {
-      for (let col = 0; col < grid.width; col++) {
-        const idx = row * grid.width + col;
-        const panel = grid.panels[idx]!;
-        const x = col * TILE_SIZE;
-        const y = row * TILE_SIZE;
-
-        let fill = PANEL_BROKEN_FILL;
-        let stroke = PANEL_BROKEN_STROKE;
-        if (panel.state === 'LIVE') {
-          fill = PANEL_LIVE_FILL;
-          stroke = PANEL_LIVE_STROKE;
-        } else if (panel.state === 'DAMAGED') {
-          fill = PANEL_DAMAGED_FILL;
-          stroke = PANEL_DAMAGED_STROKE;
-        }
-
-        g.rect(x + 2, y + 2, TILE_SIZE - 4, TILE_SIZE - 4)
-          .fill({ color: fill })
-          .stroke({ color: stroke, width: 1, alignment: 1 });
-
-        if (panel.state === 'LIVE') {
-          // Subtle inner highlight to imply solar-cell sheen
-          g.rect(x + 6, y + 6, TILE_SIZE - 12, 2).fill({ color: PANEL_LIVE_GLOW, alpha: 0.18 });
-        }
+    g.rect(0, 0, w, h).fill({ color: GRID_BG });
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const x = c * ps + 1;
+        const y = r * ps + 1;
+        const innerW = ps - 2;
+        const innerH = ps - 2;
+        const fill = (c + r) % 2 === 0 ? PANEL_FILL : PANEL_HIGHLIGHT;
+        g.roundRect(x, y, innerW, innerH, 4)
+          .fill({ color: fill, alpha: 0.9 })
+          .stroke({ width: 1, color: PANEL_STROKE, alpha: 0.6 });
       }
     }
   }

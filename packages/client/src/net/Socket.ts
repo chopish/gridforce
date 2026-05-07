@@ -1,112 +1,232 @@
 import {
-  decode,
-  encode,
-  type ClientMessage,
+  HelloMsg,
+  InputMsg,
+  MessageType,
+  NetSim,
+  NETSIM_PROFILES,
+  PingMsg,
+  SCHEMA_VERSION,
+  decodeMessage,
+  type DecodedMessage,
+  type NetSimProfile,
   type PlayerInput,
-  type ServerMessage,
 } from '@gridforce/shared';
+
 import { SERVER_WS } from '../config.js';
 
-type Handler = (msg: ServerMessage) => void;
+export type MessageListener = (m: DecodedMessage) => void;
 
-export class GameSocket {
-  private ws: WebSocket;
-  private handlers = new Set<Handler>();
-  private closeHandlers = new Set<() => void>();
+export interface SocketStatus {
+  state: 'connecting' | 'open' | 'closed' | 'error';
+  rttMs: number;
+  serverTimeOffsetMs: number; // EWMA of (serverTime - clientTime - owDelay)
+  lastSimProfileName: string;
+}
 
-  // Most recent measured RTT in ms (from ping/pong).
-  rttMs = 0;
-  private pingInterval: ReturnType<typeof setInterval> | null = null;
+const PING_INTERVAL_MS = 1000;
+const RTT_EWMA_ALPHA = 0.2;
 
-  constructor(roomCode: string, name: string) {
-    const url = `${SERVER_WS}/ws?code=${encodeURIComponent(roomCode)}&name=${encodeURIComponent(name)}`;
-    this.ws = new WebSocket(url);
-    this.ws.addEventListener('message', (ev) => {
-      try {
-        const msg = decode<ServerMessage>(ev.data);
-        if (msg.type === 'pong') {
-          this.rttMs = Date.now() - msg.clientTime;
-          return;
-        }
-        for (const h of this.handlers) h(msg);
-      } catch {
-        // ignore malformed
-      }
-    });
-    this.ws.addEventListener('close', () => {
+export class Socket {
+  private ws: WebSocket | null = null;
+  private listeners = new Set<MessageListener>();
+  private pingTimer: ReturnType<typeof setInterval> | null = null;
+  private nextNonce = 1;
+  private pendingPings = new Map<number, number>(); // nonce -> clientTimeMs
+  private rttMs = 0;
+  private serverTimeOffsetMs = 0;
+  private outSim: NetSim | null = null;
+  private inSim: NetSim | null = null;
+  private simName = 'off';
+  private state: SocketStatus['state'] = 'closed';
+  private name = '';
+  private roomCode = '';
+  private outboxBeforeOpen: Uint8Array[] = [];
+
+  connect(opts: { roomCode: string; name: string }): void {
+    this.roomCode = opts.roomCode;
+    this.name = opts.name;
+    this.state = 'connecting';
+    this.openSocket();
+  }
+
+  private openSocket(): void {
+    const ws = new WebSocket(SERVER_WS);
+    ws.binaryType = 'arraybuffer';
+    this.ws = ws;
+
+    ws.onopen = () => {
+      this.state = 'open';
+      // Hello bypasses NetSim — handshake is reliable. NetSim simulates
+      // in-game gameplay traffic only.
+      this.sendDirect(
+        HelloMsg.encode({
+          schemaVersion: SCHEMA_VERSION,
+          roomCode: this.roomCode,
+          name: this.name,
+        }),
+      );
+      // Flush anything queued before open.
+      for (const b of this.outboxBeforeOpen) this.send(b);
+      this.outboxBeforeOpen = [];
+      // Begin pinging.
+      this.startPings();
+    };
+
+    ws.onmessage = (e) => {
+      const data = e.data;
+      let bytes: Uint8Array;
+      if (data instanceof ArrayBuffer) bytes = new Uint8Array(data);
+      else return; // text/blob ignored
+      this.deliverIncoming(bytes);
+    };
+
+    ws.onclose = () => {
+      this.state = 'closed';
       this.stopPings();
-      for (const h of this.closeHandlers) h();
-    });
+    };
+    ws.onerror = () => {
+      this.state = 'error';
+    };
   }
 
-  get readyState(): number {
-    return this.ws.readyState;
-  }
+  // Public API ---------------------------------------------------------------
 
-  ready(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      if (this.ws.readyState === WebSocket.OPEN) {
-        resolve();
-        return;
-      }
-      const onOpen = () => {
-        this.ws.removeEventListener('open', onOpen);
-        this.ws.removeEventListener('error', onErr);
-        this.startPings();
-        resolve();
-      };
-      const onErr = (e: Event) => {
-        this.ws.removeEventListener('open', onOpen);
-        this.ws.removeEventListener('error', onErr);
-        reject(e);
-      };
-      this.ws.addEventListener('open', onOpen);
-      this.ws.addEventListener('error', onErr);
-    });
-  }
-
-  onMessage(handler: Handler): () => void {
-    this.handlers.add(handler);
-    return () => this.handlers.delete(handler);
-  }
-
-  onClose(handler: () => void): () => void {
-    this.closeHandlers.add(handler);
-    return () => this.closeHandlers.delete(handler);
+  addListener(l: MessageListener): () => void {
+    this.listeners.add(l);
+    return () => this.listeners.delete(l);
   }
 
   sendInput(input: PlayerInput): void {
-    this.send({ type: 'input', input, clientTime: Date.now() });
+    this.send(InputMsg.encode(input));
   }
 
-  addBot(): void {
-    this.send({ type: 'addBot' });
+  // Send any pre-encoded message (e.g. AddBot). Exposed so callers don't have
+  // to know which messages can be queued before open vs not.
+  sendRaw(bytes: Uint8Array): void {
+    this.send(bytes);
+  }
+
+  setNetSimProfile(name: string, profile: NetSimProfile): void {
+    this.simName = name;
+    if (profile.owDelayMs === 0 && profile.jitterMs === 0 && profile.lossPct === 0) {
+      this.outSim = null;
+      this.inSim = null;
+      return;
+    }
+    this.outSim = new NetSim(profile);
+    this.inSim = new NetSim(profile);
+  }
+
+  cycleNetSimProfile(): string {
+    const names = Object.keys(NETSIM_PROFILES);
+    const i = names.indexOf(this.simName);
+    const next = names[(i + 1) % names.length]!;
+    this.setNetSimProfile(next, NETSIM_PROFILES[next]!);
+    return next;
+  }
+
+  status(): SocketStatus {
+    return {
+      state: this.state,
+      rttMs: this.rttMs,
+      serverTimeOffsetMs: this.serverTimeOffsetMs,
+      lastSimProfileName: this.simName,
+    };
   }
 
   close(): void {
     this.stopPings();
-    this.ws.close();
+    if (this.ws) {
+      try {
+        this.ws.close();
+      } catch {
+        // ignore
+      }
+    }
+    this.ws = null;
+    this.state = 'closed';
   }
 
-  private send(msg: ClientMessage): void {
-    if (this.ws.readyState !== WebSocket.OPEN) return;
-    try {
-      this.ws.send(encode(msg));
-    } catch {
-      /* socket dead */
+  // Internal -----------------------------------------------------------------
+
+  private send(bytes: Uint8Array): void {
+    if (this.state !== 'open') {
+      this.outboxBeforeOpen.push(bytes);
+      return;
+    }
+    if (this.outSim) {
+      this.outSim.passThrough(bytes, (b) => this.sendDirect(b));
+    } else {
+      this.sendDirect(bytes);
     }
   }
 
+  private sendDirect(bytes: Uint8Array): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    try {
+      this.ws.send(bytes);
+    } catch {
+      // socket gone; ignore
+    }
+  }
+
+  private deliverIncoming(bytes: Uint8Array): void {
+    // Welcome / Error bypass NetSim. Tag is the first byte of the LE u16 header.
+    const isHandshake =
+      bytes.byteLength >= 2 &&
+      (bytes[0] === MessageType.Welcome || bytes[0] === MessageType.Error);
+    if (this.inSim && !isHandshake) {
+      this.inSim.passThrough(bytes, (b) => this.dispatch(b));
+    } else {
+      this.dispatch(bytes);
+    }
+  }
+
+  private dispatch(bytes: Uint8Array): void {
+    let decoded: DecodedMessage;
+    try {
+      decoded = decodeMessage(bytes);
+    } catch (err) {
+      console.warn('[socket] decode error:', err);
+      return;
+    }
+    if (decoded.type === MessageType.Pong) {
+      const sent = this.pendingPings.get(decoded.payload.nonce);
+      if (sent !== undefined) {
+        this.pendingPings.delete(decoded.payload.nonce);
+        const rtt = performance.now() - sent;
+        this.rttMs = this.rttMs === 0 ? rtt : this.rttMs * (1 - RTT_EWMA_ALPHA) + rtt * RTT_EWMA_ALPHA;
+        const owLatency = this.rttMs / 2;
+        const offset = decoded.payload.serverTimeMs - performance.now() - owLatency;
+        this.serverTimeOffsetMs =
+          this.serverTimeOffsetMs === 0
+            ? offset
+            : this.serverTimeOffsetMs * (1 - RTT_EWMA_ALPHA) + offset * RTT_EWMA_ALPHA;
+      }
+    }
+    for (const l of this.listeners) l(decoded);
+  }
+
   private startPings(): void {
-    this.pingInterval = setInterval(() => {
-      this.send({ type: 'ping', clientTime: Date.now() });
-    }, 1000);
+    if (this.pingTimer) return;
+    this.pingTimer = setInterval(() => {
+      const nonce = this.nextNonce++;
+      const clientTimeMs = performance.now();
+      this.pendingPings.set(nonce, clientTimeMs);
+      // Drop very old pending pings (lost packets) so the map doesn't grow.
+      if (this.pendingPings.size > 16) {
+        let oldestNonce = Number.POSITIVE_INFINITY;
+        for (const k of this.pendingPings.keys()) if (k < oldestNonce) oldestNonce = k;
+        if (Number.isFinite(oldestNonce)) this.pendingPings.delete(oldestNonce);
+      }
+      this.send(PingMsg.encode({ nonce, clientTimeMs }));
+    }, PING_INTERVAL_MS);
   }
 
   private stopPings(): void {
-    if (this.pingInterval) {
-      clearInterval(this.pingInterval);
-      this.pingInterval = null;
+    if (this.pingTimer) {
+      clearInterval(this.pingTimer);
+      this.pingTimer = null;
     }
   }
 }

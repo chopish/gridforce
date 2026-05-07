@@ -1,101 +1,151 @@
 import type { WebSocket } from 'ws';
+
 import {
-  encode,
+  MAX_INPUT_BUFFER,
+  type PlayerId,
   type PlayerInput,
-  type ServerMessage,
+  decodeMessage,
+  MessageType,
 } from '@gridforce/shared';
 
-// Connection wraps a single WebSocket bound to one player in one room.
-// It owns the player's input buffer (most-recent-wins, keyed by tick).
-export class Connection {
-  readonly playerId: string;
-  readonly name: string;
-  readonly socket: WebSocket;
+import type { Pilot } from './Pilot.js';
 
-  // Buffered inputs by tick. We keep a small history because the server
-  // may need to apply an input for the tick the client INTENDED, which is
-  // typically a tick or two ahead of where the server currently is when the
-  // packet arrives.
-  private inputBuffer = new Map<number, PlayerInput>();
-  private heldInput: PlayerInput = { tick: -1, mx: 0, my: 0, dash: false };
+const INPUT_BUFFER_HARD_CAP = MAX_INPUT_BUFFER;
+const APPLIED_HISTORY = 64;
 
-  // Last input tick the server has processed for this player. "Processed" may
-  // mean applied or superseded as stale; either way the client can stop
-  // replaying it after this value is acked in a snapshot.
-  lastAppliedInputTick = -1;
+export type ConnectionMessageHandler = (
+  conn: Connection,
+  decoded: ReturnType<typeof decodeMessage>,
+) => void;
 
-  alive = true;
+export class Connection implements Pilot {
+  readonly isBot = false;
+  ackInputTick = -1;
 
-  constructor(playerId: string, name: string, socket: WebSocket) {
-    this.playerId = playerId;
-    this.name = name;
-    this.socket = socket;
+  private inputs = new Map<number, PlayerInput>();
+  private appliedTicks = new Set<number>();
+  private closed = false;
+
+  constructor(
+    public readonly playerId: PlayerId,
+    private readonly ws: WebSocket,
+    private readonly onMessage: ConnectionMessageHandler,
+  ) {
+    ws.on('message', this.handleRaw);
+    ws.on('close', () => {
+      this.closed = true;
+    });
+    ws.on('error', () => {
+      this.closed = true;
+    });
   }
 
-  bufferInput(input: PlayerInput): void {
-    if (input.tick <= this.lastAppliedInputTick) return;
-    this.inputBuffer.set(input.tick, input);
-
-    // Cap is generous — at 60 Hz this allows ~17 s of buffered inputs before
-    // we start dropping oldest. If that ever happens, mark the dropped tick as
-    // processed so the client does not replay an input the server will never
-    // consume.
-    if (this.inputBuffer.size > 1024) {
-      const oldestTick = Math.min(...this.inputBuffer.keys());
-      this.inputBuffer.delete(oldestTick);
-      if (oldestTick > this.lastAppliedInputTick) this.lastAppliedInputTick = oldestTick;
+  private handleRaw = (data: unknown, isBinary: boolean): void => {
+    if (this.closed) return;
+    if (!isBinary) return; // text frames are ignored
+    let bytes: Uint8Array;
+    if (data instanceof ArrayBuffer) {
+      bytes = new Uint8Array(data);
+    } else if (data instanceof Buffer) {
+      bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+    } else if (Array.isArray(data)) {
+      // ws's "fragment" array form
+      const total = data.reduce((n, b: Buffer) => n + b.byteLength, 0);
+      bytes = new Uint8Array(total);
+      let off = 0;
+      for (const b of data as Buffer[]) {
+        bytes.set(new Uint8Array(b.buffer, b.byteOffset, b.byteLength), off);
+        off += b.byteLength;
+      }
+    } else {
+      return;
     }
+
+    let decoded: ReturnType<typeof decodeMessage>;
+    try {
+      decoded = decodeMessage(bytes);
+    } catch (err) {
+      // Bad frames close the connection — never try to recover from a corrupt stream.
+      console.warn(`[conn ${this.playerId}] decode error:`, err);
+      this.ws.close(1003, 'bad frame');
+      return;
+    }
+
+    if (decoded.type === MessageType.Input) {
+      this.bufferInput(decoded.payload);
+      return;
+    }
+
+    this.onMessage(this, decoded);
+  };
+
+  private bufferInput(input: PlayerInput): void {
+    if (input.tick <= this.ackInputTick) return;
+    if (this.inputs.size >= INPUT_BUFFER_HARD_CAP) {
+      let oldest = Number.POSITIVE_INFINITY;
+      for (const t of this.inputs.keys()) if (t < oldest) oldest = t;
+      if (Number.isFinite(oldest)) this.inputs.delete(oldest);
+    }
+    this.inputs.set(input.tick, input);
   }
 
-  // Number of inputs currently buffered (waiting to be consumed).
-  bufferedInputCount(): number {
-    this.dropProcessedInputs();
-    return this.inputBuffer.size;
-  }
+  consumeInputForTick(targetTick: number): PlayerInput | null {
+    const input = this.inputs.get(targetTick) ?? null;
+    if (input) {
+      this.inputs.delete(targetTick);
+      this.appliedTicks.add(targetTick);
+    }
+    if (targetTick > this.ackInputTick) this.ackInputTick = targetTick;
 
-  // Returns the newest buffered input intended for or before targetTick. Inputs
-  // older than that are processed as stale/superseded because their world tick
-  // has already passed. If no input has arrived for this tick, keep moving with
-  // the last non-dash movement input instead of injecting a one-tick stop.
-  consumeInputForTick(targetTick: number): PlayerInput {
-    this.dropProcessedInputs();
-    let best: PlayerInput | undefined;
-    for (const [tick, input] of this.inputBuffer) {
-      if (tick <= targetTick) {
-        if (!best || tick > best.tick) best = input;
+    // Drop any older inputs we never got around to (shouldn't happen often,
+    // but guards against pathological clients).
+    for (const t of this.inputs.keys()) {
+      if (t < targetTick) this.inputs.delete(t);
+    }
+
+    if (this.appliedTicks.size > APPLIED_HISTORY) {
+      const cutoff = this.ackInputTick - APPLIED_HISTORY;
+      for (const t of this.appliedTicks) {
+        if (t < cutoff) this.appliedTicks.delete(t);
       }
     }
-    if (!best) {
-      return { ...this.heldInput, tick: targetTick, dash: false };
-    }
 
-    this.lastAppliedInputTick = best.tick;
-    this.dropProcessedInputs();
-    this.heldInput = { ...best, dash: false };
-    return best;
+    return input;
   }
 
-  send(msg: ServerMessage): void {
-    if (!this.alive) return;
+  computeAckBitmask(): number {
+    if (this.ackInputTick < 0) return 0;
+    let mask = 0;
+    for (let i = 0; i < 32; i++) {
+      const t = this.ackInputTick - 1 - i;
+      if (t < 0) break;
+      if (this.appliedTicks.has(t)) mask |= 1 << i;
+    }
+    return mask >>> 0;
+  }
+
+  send(bytes: Uint8Array): void {
+    if (this.closed) return;
+    if (this.ws.readyState !== this.ws.OPEN) return;
     try {
-      this.socket.send(encode(msg));
+      this.ws.send(bytes, { binary: true });
     } catch {
-      this.alive = false;
+      this.closed = true;
     }
   }
 
-  close(): void {
-    this.alive = false;
+  close(code = 1000, reason = ''): void {
+    this.closed = true;
     try {
-      this.socket.close();
+      this.ws.close(code, reason);
     } catch {
-      /* noop */
+      // already closed
     }
   }
 
-  private dropProcessedInputs(): void {
-    for (const tick of [...this.inputBuffer.keys()]) {
-      if (tick <= this.lastAppliedInputTick) this.inputBuffer.delete(tick);
-    }
+  dispose(): void {
+    this.close();
+    this.inputs.clear();
+    this.appliedTicks.clear();
   }
 }

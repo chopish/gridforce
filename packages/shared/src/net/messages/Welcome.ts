@@ -1,0 +1,37 @@
+import { SCHEMA_VERSION } from '../../constants.js';
+import type { PlayerState, WelcomePayload } from '../../types.js';
+import { PlayerEncoder } from '../entities/PlayerEncoder.js';
+import { BinaryReader, BinaryWriter, MessageType, writeHeader } from '../wire.js';
+
+export function encode(p: WelcomePayload): Uint8Array {
+  const w = new BinaryWriter(128);
+  writeHeader(w, MessageType.Welcome, SCHEMA_VERSION);
+  w.u8(p.yourPlayerId & 0xff);
+  w.u16(p.grid.cols);
+  w.u16(p.grid.rows);
+  w.u16(p.grid.panelSize);
+  w.u32(p.startTick >>> 0);
+  w.f64(p.serverTimeMs);
+  w.varuint(p.players.length);
+  for (const pl of p.players) PlayerEncoder.encode(w, pl);
+  return w.finish();
+}
+
+export function decode(r: BinaryReader): WelcomePayload {
+  const yourPlayerId = r.u8();
+  const cols = r.u16();
+  const rows = r.u16();
+  const panelSize = r.u16();
+  const startTick = r.u32();
+  const serverTimeMs = r.f64();
+  const count = r.varuint();
+  const players: PlayerState[] = [];
+  for (let i = 0; i < count; i++) players.push(PlayerEncoder.decode(r) as PlayerState);
+  return {
+    yourPlayerId,
+    grid: { cols, rows, panelSize },
+    startTick,
+    serverTimeMs,
+    players,
+  };
+}
