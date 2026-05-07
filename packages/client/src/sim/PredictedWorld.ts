@@ -53,6 +53,25 @@ export class PredictedWorld {
   serverTick = 0;
   predictedTick = 0;
 
+  // The "lead" — how many ticks ahead of the server we predict — is the
+  // floor below which inputs we send arrive too late to be applied. Defaults
+  // to INPUT_LEAD_TICKS but grows when measured RTT pushes that floor up.
+  // main.ts updates this from the live RTT EWMA each frame.
+  private targetLead = INPUT_LEAD_TICKS;
+  setTargetLead(ticks: number): void {
+    this.targetLead = Math.max(INPUT_LEAD_TICKS, Math.floor(ticks));
+  }
+  get currentLead(): number {
+    return this.targetLead;
+  }
+
+  // Last-rendered visual position + the alpha used. Lets applySnapshot
+  // compute a correction that preserves on-screen position exactly, so
+  // there's no visible discontinuity when a snapshot arrives mid-tick.
+  private lastRenderAlpha = 0;
+  private lastVisualX = 0;
+  private lastVisualY = 0;
+
   // Inputs we've shipped that the server hasn't acknowledged yet. Strictly
   // increasing in `tick`. Replayed on top of every snapshot to keep the local
   // player's predicted state consistent with what we'll see next.
@@ -87,9 +106,9 @@ export class PredictedWorld {
     this.localPlayerId = w.yourPlayerId;
     // Lead the server tick from the start: by the time our first input
     // reaches the server, the server has already advanced past startTick by
-    // ~RTT/2 ticks. Tagging from (startTick + LEAD) ensures the input lands
+    // ~RTT/2 ticks. Tagging from (startTick + lead) ensures the input lands
     // in the future relative to wherever the server is by then.
-    this.predictedTick = w.startTick + INPUT_LEAD_TICKS;
+    this.predictedTick = w.startTick + this.targetLead;
     this.serverTick = w.startTick;
     this.players.clear();
     this.prevPlayers.clear();
@@ -163,7 +182,7 @@ export class PredictedWorld {
     // ahead and this branch never runs.
     const MIN_SAFE_LEAD = 2;
     if (this.predictedTick < snap.tick + MIN_SAFE_LEAD) {
-      this.predictedTick = snap.tick + INPUT_LEAD_TICKS;
+      this.predictedTick = snap.tick + this.targetLead;
       this.pending = [];
     }
 
@@ -208,31 +227,50 @@ export class PredictedWorld {
     const err = Math.hypot(dx, dy);
     this.diagnostics.lastPredictionErrorPx = err;
 
-    if (err < PREDICTION_THRESHOLD_PX) {
-      // Below the visible threshold; commit silently.
-    } else if (err < PREDICTION_HARD_SNAP_PX) {
-      // Smooth correction: visual stays where it was, simulated jumps; the
-      // visible offset (correctionX/Y) bleeds to zero over PREDICTION_BLEND_MS.
-      this.correctionX += dx;
-      this.correctionY += dy;
-      this.diagnostics.smoothCorrections++;
-      this.diagnostics.lastSnapAtTick = snap.tick;
-    } else {
-      // Hard snap — likely a real bug or extreme packet loss. Log it.
-      this.correctionX = 0;
-      this.correctionY = 0;
-      this.diagnostics.hardSnaps++;
-      this.diagnostics.lastSnapAtTick = snap.tick;
-      console.warn(`[reconcile] hard snap ${err.toFixed(1)}px at tick ${snap.tick}`);
+    // Update the simulated state to rebased. CRUCIAL: do NOT reset prev to
+    // rebased here. If we did, the render-time lerp(prev, cur, alpha) would
+    // return rebased for any alpha and the on-screen position would freeze
+    // until the next step() runs (up to ~16ms of dropped-frame appearance,
+    // visible as constant micro-stutter at the snapshot rate). Leaving prev
+    // alone lets the lerp finish smoothly from where it was toward the
+    // rebased target over the rest of this tick.
+    const oldPrev = this.prevPlayers.get(this.localPlayerId);
+    this.players.set(this.localPlayerId, rebased);
+
+    // Visual continuity. Compute the correction that, applied to the next
+    // render frame, keeps the on-screen position exactly where it just was —
+    // regardless of how much the rebase moved the simulated position. The
+    // correction then bleeds to zero over PREDICTION_BLEND_MS, smoothly
+    // pulling the visual to the true simulated position.
+    if (oldPrev) {
+      const expectedNextLerpX = oldPrev.x + this.lastRenderAlpha * (rebased.x - oldPrev.x);
+      const expectedNextLerpY = oldPrev.y + this.lastRenderAlpha * (rebased.y - oldPrev.y);
+      const visCorrX = this.lastVisualX - expectedNextLerpX;
+      const visCorrY = this.lastVisualY - expectedNextLerpY;
+      // Only ADD this on top of the existing decaying correction if the
+      // divergence actually exceeded the threshold; otherwise small (sub-px)
+      // visual continuity errors decay naturally without us adding to them.
+      if (err >= PREDICTION_THRESHOLD_PX && err < PREDICTION_HARD_SNAP_PX) {
+        this.correctionX = visCorrX;
+        this.correctionY = visCorrY;
+        this.diagnostics.smoothCorrections++;
+        this.diagnostics.lastSnapAtTick = snap.tick;
+      } else if (err >= PREDICTION_HARD_SNAP_PX) {
+        // Hard snap — wipe correction so visual moves to rebased immediately.
+        this.correctionX = 0;
+        this.correctionY = 0;
+        this.diagnostics.hardSnaps++;
+        this.diagnostics.lastSnapAtTick = snap.tick;
+        console.warn(`[reconcile] hard snap ${err.toFixed(1)}px at tick ${snap.tick}`);
+      } else {
+        // err < threshold: also adjust correction to preserve continuity but
+        // by a tiny amount that decays in a frame or two.
+        this.correctionX = visCorrX;
+        this.correctionY = visCorrY;
+      }
     }
 
     if (err > this.diagnostics.recentMaxErrorPx) this.diagnostics.recentMaxErrorPx = err;
-
-    this.players.set(this.localPlayerId, rebased);
-    // Also reset prev for local so the next render frame interpolates from
-    // the new authoritative position rather than an old predicted one. The
-    // visible smoothing is now driven entirely by correctionX/Y.
-    this.prevPlayers.set(this.localPlayerId, rebased);
 
     this.diagnostics.pendingInputs = this.pending.length;
   }
@@ -260,13 +298,17 @@ export class PredictedWorld {
   }
 
   // Visual position of the local player given an interpolation alpha
-  // between prev and curr predicted states (0..1).
+  // between prev and curr predicted states (0..1). Caches alpha + result
+  // so applySnapshot can compute a visually-continuous correction.
   visualLocalPosition(alpha: number): { x: number; y: number; facing: number } {
+    this.lastRenderAlpha = alpha;
     const cur = this.players.get(this.localPlayerId);
     if (!cur) return { x: 0, y: 0, facing: 0 };
     const prev = this.prevPlayers.get(this.localPlayerId) ?? cur;
     const x = prev.x + (cur.x - prev.x) * alpha + this.correctionX;
     const y = prev.y + (cur.y - prev.y) * alpha + this.correctionY;
+    this.lastVisualX = x;
+    this.lastVisualY = y;
     // Facing interpolation must take the short way around the circle.
     const facing = lerpAngle(prev.facing, cur.facing, alpha);
     return { x, y, facing };

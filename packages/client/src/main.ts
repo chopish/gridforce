@@ -132,6 +132,16 @@ async function bootstrap(): Promise<void> {
       const alpha = Math.max(0, Math.min(1, accumulator / SERVER_TICK_DT_MS));
       world.decayCorrection(dt * 1000);
 
+      // Adaptive input lead: scales with measured RTT so high-latency
+      // connections don't have their inputs land in the server's past.
+      // Base lead handles ~165 ms RTT; we add half-RTT-in-ticks plus a
+      // 2-tick safety margin for jitter.
+      const rtt = socket.status().rttMs;
+      if (rtt > 0) {
+        const oneWayTicks = Math.ceil(rtt / 2 / SERVER_TICK_DT_MS);
+        world.setTargetLead(oneWayTicks + 2);
+      }
+
       // Render players: local from prediction, remotes from interpolator.
       const ids: PlayerId[] = [];
       for (const id of world.players.keys()) ids.push(id);
