@@ -8,6 +8,7 @@ User=gridforce
 Group=gridforce
 WorkingDirectory=/opt/gridforce
 EnvironmentFile=/etc/gridforce/webhook.env
+Environment=GIT_SSH_COMMAND=ssh -i /etc/gridforce/deploy_key -o UserKnownHostsFile=/etc/gridforce/known_hosts -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
 ExecStart=/usr/bin/node tools/deploy/webhook-server.mjs
 Restart=on-failure
 RestartSec=3
@@ -16,7 +17,6 @@ StandardError=journal
 
 NoNewPrivileges=true
 ProtectSystem=full
-ProtectHome=true
 PrivateTmp=true
 
 [Install]
