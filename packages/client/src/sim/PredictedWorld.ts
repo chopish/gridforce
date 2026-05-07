@@ -201,19 +201,31 @@ export class PredictedWorld {
     this.serverTick = snap.tick;
     this.diagnostics.serverTick = snap.tick;
 
-    // Safety: if our predicted tick has crept down close to (or below) the
-    // server's current tick, our next input will arrive labeled with a tick
-    // the server has already moved past — it'll be dropped as stale, and
-    // the local player will appear "tethered" to their last good position
-    // while smooth-correction snaps them back. Detect this and jump
-    // predictedTick forward to the ideal lead, dropping pending inputs
-    // whose tags are now stale. Only fires when we've actually fallen into
-    // the drop zone (lead < 2 ticks); in steady state we sit at LEAD ticks
-    // ahead and this branch never runs.
+    // Lead maintenance. Two regimes:
+    //   1. predictedTick has fallen below MIN_SAFE_LEAD (or even past the
+    //      server) — our next input will arrive tagged for a tick the
+    //      server already processed, so it'll be dropped. Hard reset:
+    //      jump predictedTick to (snap.tick + targetLead) and drop
+    //      pending inputs whose tags are now stale.
+    //   2. predictedTick is healthy but below targetLead — RTT measurement
+    //      grew (e.g. user switched netsim to a worse profile or actual
+    //      latency rose) and we need more lead. Skip a few ticks to push
+    //      predictedTick up to targetLead. Don't drop pending: those
+    //      inputs are still valid for their tagged ticks. The skipped
+    //      ticks have no inputs sent — both server and client treat them
+    //      as idle, so they remain in agreement.
+    // Without (2), setTargetLead's adaptive bump only takes effect via the
+    // recovery in (1), which only fires when lead drops near zero. Result
+    // pre-fix: HUD `lead` would stick at INPUT_LEAD_TICKS regardless of
+    // RTT, inputs would arrive late at server on bad profiles, and the
+    // server would idle for those ticks → ~7 px/tick divergence → visible
+    // sustained correction.
     const MIN_SAFE_LEAD = 2;
     if (this.predictedTick < snap.tick + MIN_SAFE_LEAD) {
       this.predictedTick = snap.tick + this.targetLead;
       this.pending = [];
+    } else if (this.predictedTick < snap.tick + this.targetLead) {
+      this.predictedTick = snap.tick + this.targetLead;
     }
 
     // Drop pending inputs that have been processed server-side.
