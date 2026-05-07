@@ -49,7 +49,12 @@ test('varuint round-trips across boundaries', () => {
 });
 
 test('Hello round-trip', () => {
-  const payload = { schemaVersion: SCHEMA_VERSION, roomCode: 'ABCD', name: 'crab' };
+  const payload = {
+    schemaVersion: SCHEMA_VERSION,
+    roomCode: 'ABCD',
+    name: 'crab',
+    accessKey: 'kx7q9z',
+  };
   roundtrip(HelloMsg.encode(payload), { type: MessageType.Hello, payload }, (a, b) => {
     assert.deepEqual(a, b);
   });

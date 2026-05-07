@@ -42,11 +42,13 @@ export class Socket {
   private state: SocketStatus['state'] = 'closed';
   private name = '';
   private roomCode = '';
+  private accessKey = '';
   private outboxBeforeOpen: Uint8Array[] = [];
 
-  connect(opts: { roomCode: string; name: string }): void {
+  connect(opts: { roomCode: string; name: string; accessKey?: string }): void {
     this.roomCode = opts.roomCode;
     this.name = opts.name;
+    this.accessKey = opts.accessKey ?? '';
     this.state = 'connecting';
     this.openSocket();
   }
@@ -65,6 +67,7 @@ export class Socket {
           schemaVersion: SCHEMA_VERSION,
           roomCode: this.roomCode,
           name: this.name,
+          accessKey: this.accessKey,
         }),
       );
       // Flush anything queued before open.

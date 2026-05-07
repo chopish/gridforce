@@ -5,7 +5,8 @@
 // History:
 //   v1: initial binary protocol
 //   v2: PlayerEncoder gained dashCooldownS + dashRemainingS u8 quantized
-export const SCHEMA_VERSION = 2;
+//   v3: Hello carries accessKey for private-room invite redemption
+export const SCHEMA_VERSION = 3;
 
 // Tick rates
 export const SERVER_TICK_HZ = 30;

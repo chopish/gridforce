@@ -12,3 +12,18 @@ function defaultUrl(): string {
 }
 
 export const SERVER_WS = envUrl ?? defaultUrl();
+
+// HTTP base derived from the WS URL: ws→http, wss→https, drop the /ws suffix,
+// add /api. Lobby endpoints sit at /api/* alongside the WS endpoint, behind
+// the same nginx proxy block in production.
+function deriveHttpBase(ws: string): string {
+  const httpScheme = ws.startsWith('wss://')
+    ? 'https://'
+    : ws.startsWith('ws://')
+      ? 'http://'
+      : 'http://';
+  const rest = ws.replace(/^wss?:\/\//, '').replace(/\/ws$/, '');
+  return `${httpScheme}${rest}/api`;
+}
+
+export const SERVER_HTTP = deriveHttpBase(SERVER_WS);

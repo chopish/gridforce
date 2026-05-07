@@ -8,6 +8,7 @@ import {
   type PlayerState,
 } from '@gridforce/shared';
 
+import { redeemInvite } from './api.js';
 import { InputCapture } from './input/InputCapture.js';
 import { Socket } from './net/Socket.js';
 import { Renderer } from './render/Renderer.js';
@@ -24,7 +25,26 @@ async function bootstrap(): Promise<void> {
   if (!appHost) throw new Error('#app missing');
 
   const lobby = new Lobby(appHost);
-  const { roomCode, name } = await lobby.show();
+
+  // ?inv=<token> — redeem before showing the lobby so the user lands on a
+  // simple "name + Enter" prompt instead of having to navigate the picker.
+  // Failed redemption falls through to the normal lobby with an error shown.
+  const url = new URL(window.location.href);
+  const inviteToken = url.searchParams.get('inv');
+  if (inviteToken) {
+    try {
+      const access = await redeemInvite(inviteToken);
+      lobby.setInvitePrefill({ code: access.code, accessKey: access.accessKey });
+    } catch (err) {
+      console.warn('[lobby] invite redeem failed:', err);
+    }
+    // Strip the param so a refresh doesn't double-burn the invite (the access
+    // key is single-use already, but the token would 404/expire on refresh).
+    url.searchParams.delete('inv');
+    window.history.replaceState({}, '', url.toString());
+  }
+
+  const { roomCode, name, accessKey } = await lobby.show();
 
   const socket = new Socket();
   const world = new PredictedWorld();
@@ -33,7 +53,7 @@ async function bootstrap(): Promise<void> {
   let hud: DebugHud | null = null;
   let codeBanner: HTMLElement | null = null;
 
-  socket.connect({ roomCode, name });
+  socket.connect({ roomCode, name, accessKey });
 
   let welcomeReceived = false;
 

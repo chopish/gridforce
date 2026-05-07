@@ -35,10 +35,28 @@ function spawnPosition(grid: GridDef, slot: number): { x: number; y: number } {
   return { x: cx + Math.cos(theta) * r, y: cy + Math.sin(theta) * r };
 }
 
+export type RoomVisibility = 'public' | 'unlisted' | 'private';
+
+export interface RoomOptions {
+  // Display name shown in the public listing. Empty for unnamed rooms.
+  name?: string;
+  // public:   listed at GET /rooms; joinable with code only
+  // unlisted: not listed; joinable with code only
+  // private:  not listed; requires a valid accessKey (from invite redemption)
+  visibility?: RoomVisibility;
+  // Hard cap on humans + bots. Clamped to MAX_PLAYERS_PER_ROOM upstream.
+  maxPlayers?: number;
+}
+
 export class Room {
   readonly grid: GridDef = createDefaultGrid();
   readonly pilots = new Map<PlayerId, Pilot>();
   readonly states = new Map<PlayerId, PlayerState>();
+
+  readonly name: string;
+  readonly visibility: RoomVisibility;
+  readonly maxPlayers: number;
+  readonly createdAtMs = performance.now();
 
   tick = 0;
   private nextPlayerId: PlayerId = 0;
@@ -49,7 +67,16 @@ export class Room {
   private running = false;
   private lastNonEmptyAtMs = performance.now();
 
-  constructor(public readonly code: string) {}
+  constructor(public readonly code: string, opts: RoomOptions = {}) {
+    this.name = (opts.name ?? '').slice(0, 32);
+    this.visibility = opts.visibility ?? 'unlisted';
+    const cap = opts.maxPlayers ?? MAX_PLAYERS_PER_ROOM;
+    this.maxPlayers = Math.max(1, Math.min(MAX_PLAYERS_PER_ROOM, cap));
+  }
+
+  get playerCount(): number {
+    return this.pilots.size;
+  }
 
   get isEmpty(): boolean {
     for (const p of this.pilots.values()) {
@@ -86,7 +113,7 @@ export class Room {
   // the assigned id, then commits. Lets Connection's playerId stay readonly
   // and avoids the awkward "create then mutate" pattern.
   reserveSlot(): { ok: true; playerId: PlayerId } | { ok: false; code: number } {
-    if (this.pilots.size >= MAX_PLAYERS_PER_ROOM) {
+    if (this.pilots.size >= this.maxPlayers) {
       return { ok: false, code: ErrorCode.RoomFull };
     }
     return { ok: true, playerId: this.allocPlayerId() };
@@ -100,7 +127,7 @@ export class Room {
   }
 
   addBot(): { ok: true; playerId: PlayerId } | { ok: false; code: number } {
-    if (this.pilots.size >= MAX_PLAYERS_PER_ROOM) {
+    if (this.pilots.size >= this.maxPlayers) {
       return { ok: false, code: ErrorCode.RoomFull };
     }
     const id = this.allocPlayerId();

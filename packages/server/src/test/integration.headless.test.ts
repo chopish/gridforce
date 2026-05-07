@@ -13,6 +13,8 @@ import {
   type NetSimProfile,
 } from '@gridforce/shared';
 
+import { AccessKeyStore } from '../AccessKeyStore.js';
+import { InviteStore } from '../InviteStore.js';
 import { RoomManager } from '../RoomManager.js';
 import { attachWsHandler } from '../wsHandler.js';
 import { TestClient } from './TestClient.js';
@@ -60,14 +62,19 @@ interface RunResult {
 
 async function startServerOnEphemeralPort(): Promise<{
   url: string;
+  manager: RoomManager;
   shutdown: () => Promise<void>;
 }> {
   const app = express();
   app.get('/healthz', (_req, res) => res.json({ ok: true }));
   const httpServer = createServer(app);
   const manager = new RoomManager();
+  const invites = new InviteStore();
+  const accessKeys = new AccessKeyStore();
   manager.start();
-  attachWsHandler(httpServer, manager);
+  invites.start();
+  accessKeys.start();
+  attachWsHandler(httpServer, { manager, invites, accessKeys });
 
   await new Promise<void>((resolve) => httpServer.listen(0, () => resolve()));
   const addr = httpServer.address() as AddressInfo;
@@ -75,8 +82,11 @@ async function startServerOnEphemeralPort(): Promise<{
 
   return {
     url,
+    manager,
     shutdown: async () => {
       manager.stop();
+      invites.stop();
+      accessKeys.stop();
       await new Promise<void>((resolve) => httpServer.close(() => resolve()));
     },
   };
@@ -84,11 +94,13 @@ async function startServerOnEphemeralPort(): Promise<{
 
 async function runProfile(
   url: string,
+  manager: RoomManager,
   profileName: string,
   profile: NetSimProfile,
 ): Promise<RunResult> {
-  // Each profile gets its own room so they're independent.
-  const roomCode = `T${profileName.slice(0, 3).toUpperCase()}`;
+  // Each profile gets its own room so they're independent. Rooms must be
+  // explicitly created post-RoomManager-refactor — auto-create-on-WS is gone.
+  const roomCode = manager.createRoom({ visibility: 'unlisted' }).code;
   const clients: TestClient[] = [];
   for (let i = 0; i < CLIENT_COUNT; i++) {
     const c = new TestClient({
@@ -150,11 +162,11 @@ function makeDrive(seed: number): (tick: number) => { mx: number; my: number; da
 }
 
 test('headless integration: 4 clients × network profiles', { timeout: TEST_TIMEOUT_MS }, async () => {
-  const { url, shutdown } = await startServerOnEphemeralPort();
+  const { url, manager, shutdown } = await startServerOnEphemeralPort();
   try {
     const results: RunResult[] = [];
     for (const { name, profile } of PROFILES) {
-      const r = await runProfile(url, name, profile);
+      const r = await runProfile(url, manager, name, profile);
       results.push(r);
     }
 
@@ -218,12 +230,13 @@ test('headless integration: 4 clients × network profiles', { timeout: TEST_TIME
 // the server's past and get dropped, leaving the player oscillating around
 // spawn while smooth-correction repeatedly snaps them back.
 test('late-joining client can actually move', { timeout: 15_000 }, async () => {
-  const { url, shutdown } = await startServerOnEphemeralPort();
+  const { url, manager, shutdown } = await startServerOnEphemeralPort();
   try {
-    // First, join a "warm-up" client just to create the room and let it tick.
+    const roomCode = manager.createRoom({ visibility: 'unlisted' }).code;
+    // First, join a "warm-up" client just to let the room tick for a while.
     const warmup = new TestClient({
       url,
-      roomCode: 'WARM',
+      roomCode,
       name: 'warm',
       drive: () => ({ mx: 0, my: 0, dash: false }), // idle
     });
@@ -235,7 +248,7 @@ test('late-joining client can actually move', { timeout: 15_000 }, async () => {
     // Now connect the late-joiner. It will see a startTick deep into room life.
     const late = new TestClient({
       url,
-      roomCode: 'WARM',
+      roomCode,
       name: 'late',
       drive: () => ({ mx: 1, my: 0, dash: false }),
     });

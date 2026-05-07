@@ -2,7 +2,7 @@ import { performance } from 'node:perf_hooks';
 
 import { ROOM_CODE_LENGTH, ROOM_IDLE_PRUNE_MS } from '@gridforce/shared';
 
-import { Room } from './Room.js';
+import { Room, type RoomOptions } from './Room.js';
 
 // Avoid 0/O, 1/I/L confusion in spoken codes.
 const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
@@ -13,6 +13,13 @@ function randomCode(): string {
     s += CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)]!;
   }
   return s;
+}
+
+export interface PublicRoomInfo {
+  code: string;
+  name: string;
+  players: number;
+  maxPlayers: number;
 }
 
 export class RoomManager {
@@ -33,32 +40,38 @@ export class RoomManager {
     this.rooms.clear();
   }
 
-  createRoom(): Room {
+  // Explicit creation. Always allocates a fresh code and applies the supplied
+  // metadata. Use this for the HTTP create-room endpoint.
+  createRoom(opts: RoomOptions = {}): Room {
     let code: string;
     do {
       code = randomCode();
     } while (this.rooms.has(code));
-    const room = new Room(code);
+    const room = new Room(code, opts);
     this.rooms.set(code, room);
     room.start();
     return room;
   }
 
-  // Get-or-create. Empty room codes (or "" placeholder) create a new room.
-  resolveRoom(code: string): Room {
-    const k = code.trim().toUpperCase();
-    if (k.length === 0) return this.createRoom();
-    const existing = this.rooms.get(k);
-    if (existing) return existing;
-    // Honor whatever code the client supplied — they have a copy/share UX.
-    const fresh = new Room(k);
-    this.rooms.set(k, fresh);
-    fresh.start();
-    return fresh;
+  // Strict lookup. Returns undefined if no such room — does NOT auto-create.
+  // Auto-creation is gone: rooms are only born via createRoom() so visibility
+  // and invite policy can't be bypassed by guessing a code.
+  findRoom(code: string): Room | undefined {
+    return this.rooms.get(code.trim().toUpperCase());
   }
 
-  getRoom(code: string): Room | undefined {
-    return this.rooms.get(code.trim().toUpperCase());
+  listPublic(): PublicRoomInfo[] {
+    const out: PublicRoomInfo[] = [];
+    for (const room of this.rooms.values()) {
+      if (room.visibility !== 'public') continue;
+      out.push({
+        code: room.code,
+        name: room.name,
+        players: room.playerCount,
+        maxPlayers: room.maxPlayers,
+      });
+    }
+    return out;
   }
 
   private pruneIdle(): void {

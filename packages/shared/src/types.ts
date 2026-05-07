@@ -49,6 +49,11 @@ export interface HelloPayload {
   schemaVersion: number;
   roomCode: string;
   name: string;
+  // Short-lived bearer issued by HTTP /invites/:token/redeem (private rooms)
+  // or /rooms/:code/access (public/unlisted). Empty string is rejected for
+  // private rooms; allowed for public/unlisted to keep invite-less joins
+  // possible during dev.
+  accessKey: string;
 }
 
 export interface PingPayload {
@@ -79,5 +84,6 @@ export const ErrorCode = {
   SchemaMismatch: 1,
   RoomFull: 2,
   RoomNotFound: 3,
+  AccessDenied: 4,
   Internal: 99,
 } as const;

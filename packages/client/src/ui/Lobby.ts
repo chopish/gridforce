@@ -1,18 +1,36 @@
-// Lightweight DOM-based lobby. Two screens:
-//   1) "Create new room" or "Join existing" picker
-//   2) Room code display (after creating) with copy-to-clipboard
+// DOM-based lobby with three views: Browse public rooms, Join by code,
+// Create a new room. The lobby's job is to produce a `LobbyResult` that
+// includes a roomCode + name + accessKey, which main.ts then hands to
+// Socket.connect. Access keys are issued by the server's HTTP layer.
 //
-// Submitting either path produces a roomCode + name and resolves the promise
-// returned by `show()`.
+// Special case: if the page was opened with `?inv=<token>` we skip the
+// tab UI entirely and go straight to a name prompt — main.ts redeems the
+// invite before showing the lobby and passes the result in.
+
+import {
+  createRoom,
+  listPublicRooms,
+  redeemInvite,
+  requestAccess,
+  LobbyApiError,
+  type AccessResult,
+  type PublicRoomSummary,
+} from '../api.js';
 
 export interface LobbyResult {
   roomCode: string;
   name: string;
+  accessKey: string;
 }
+
+type View = 'home' | 'browse' | 'join' | 'create' | 'invite';
 
 export class Lobby {
   private root: HTMLDivElement;
   private resolveFn: ((r: LobbyResult) => void) | null = null;
+  private name = '';
+  // Carry-through invite redemption result (set by main.ts when ?inv= present).
+  private prefilledInvite: { code: string; accessKey: string; roomName?: string } | null = null;
 
   constructor(parent: HTMLElement) {
     this.root = document.createElement('div');
@@ -21,7 +39,11 @@ export class Lobby {
   }
 
   show(): Promise<LobbyResult> {
-    this.renderPicker();
+    if (this.prefilledInvite) {
+      this.renderInviteJoin(this.prefilledInvite);
+    } else {
+      this.renderHome();
+    }
     if (!this.root.parentElement) document.body.appendChild(this.root);
     this.root.style.display = '';
     return new Promise<LobbyResult>((resolve) => {
@@ -33,61 +55,355 @@ export class Lobby {
     this.root.style.display = 'none';
   }
 
-  private setFormDisabled(disabled: boolean): void {
-    this.root.querySelectorAll('button, input').forEach((el) => {
-      (el as HTMLButtonElement | HTMLInputElement).disabled = disabled;
-    });
+  setInvitePrefill(p: { code: string; accessKey: string; roomName?: string } | null): void {
+    this.prefilledInvite = p;
   }
 
-  private renderPicker(): void {
+  // --- Common chrome ---
+
+  private resetRoot(): void {
     this.root.innerHTML = '';
+  }
+
+  private title(text: string): void {
     const h = document.createElement('h1');
-    h.textContent = 'GRIDFORCE';
+    h.textContent = text;
     this.root.appendChild(h);
+  }
+
+  private nameField(): HTMLInputElement {
+    const input = document.createElement('input');
+    input.placeholder = 'name (optional)';
+    input.maxLength = 24;
+    input.value = this.name;
+    input.addEventListener('input', () => {
+      this.name = input.value.trim();
+    });
+    return input;
+  }
+
+  private errLine(): HTMLDivElement {
+    const err = document.createElement('div');
+    err.className = 'err';
+    return err;
+  }
+
+  private button(text: string, onClick: () => void): HTMLButtonElement {
+    const b = document.createElement('button');
+    b.textContent = text;
+    b.onclick = onClick;
+    return b;
+  }
+
+  // --- Views ---
+
+  private renderHome(): void {
+    this.resetRoot();
+    this.title('GRIDFORCE');
 
     const nameRow = document.createElement('div');
     nameRow.className = 'row';
-    const nameInput = document.createElement('input');
-    nameInput.placeholder = 'name (optional)';
-    nameInput.maxLength = 24;
-    nameRow.appendChild(nameInput);
+    nameRow.appendChild(this.nameField());
     this.root.appendChild(nameRow);
 
-    const createBtn = document.createElement('button');
-    createBtn.textContent = 'Create new room';
-    this.root.appendChild(createBtn);
+    this.root.appendChild(this.button('Browse public rooms', () => this.renderBrowse()));
+    this.root.appendChild(this.button('Join by code', () => this.renderJoinByCode()));
+    this.root.appendChild(this.button('Create new room', () => this.renderCreate()));
 
-    const joinRow = document.createElement('div');
-    joinRow.className = 'row';
+    this.root.appendChild(this.errLine());
+  }
+
+  private renderBrowse(): void {
+    this.resetRoot();
+    this.title('Public rooms');
+
+    const list = document.createElement('div');
+    list.style.display = 'flex';
+    list.style.flexDirection = 'column';
+    list.style.gap = '0.5rem';
+    list.style.minWidth = '20rem';
+    list.style.maxHeight = '14rem';
+    list.style.overflowY = 'auto';
+    list.textContent = 'loading…';
+    this.root.appendChild(list);
+
+    const err = this.errLine();
+    this.root.appendChild(err);
+    this.root.appendChild(this.button('Back', () => this.renderHome()));
+
+    listPublicRooms()
+      .then(({ rooms }) => this.populateBrowse(list, err, rooms))
+      .catch((e: unknown) => {
+        list.textContent = '';
+        err.textContent = describeError(e);
+      });
+  }
+
+  private populateBrowse(
+    list: HTMLDivElement,
+    err: HTMLDivElement,
+    rooms: PublicRoomSummary[],
+  ): void {
+    list.innerHTML = '';
+    if (rooms.length === 0) {
+      const empty = document.createElement('div');
+      empty.style.opacity = '0.7';
+      empty.style.textAlign = 'center';
+      empty.textContent = 'no public rooms — create one or join by code';
+      list.appendChild(empty);
+      return;
+    }
+    for (const room of rooms) {
+      const row = document.createElement('button');
+      row.style.display = 'flex';
+      row.style.justifyContent = 'space-between';
+      row.style.alignItems = 'center';
+      row.style.minWidth = '20rem';
+      const label = document.createElement('span');
+      label.textContent = room.name || `Room ${room.code}`;
+      const meta = document.createElement('span');
+      meta.style.opacity = '0.7';
+      meta.textContent = `${room.code} · ${room.players}/${room.maxPlayers}`;
+      row.appendChild(label);
+      row.appendChild(meta);
+      const full = room.players >= room.maxPlayers;
+      if (full) {
+        row.disabled = true;
+        meta.textContent += ' · full';
+      }
+      row.onclick = () => {
+        err.textContent = '';
+        this.beginJoin(room.code).catch((e: unknown) => {
+          err.textContent = describeError(e);
+        });
+      };
+      list.appendChild(row);
+    }
+  }
+
+  private renderJoinByCode(): void {
+    this.resetRoot();
+    this.title('Join by code');
+
+    const nameRow = document.createElement('div');
+    nameRow.className = 'row';
+    nameRow.appendChild(this.nameField());
+    this.root.appendChild(nameRow);
+
+    const codeRow = document.createElement('div');
+    codeRow.className = 'row';
     const codeInput = document.createElement('input');
     codeInput.placeholder = 'room code';
     codeInput.maxLength = 8;
     codeInput.style.textTransform = 'uppercase';
+    codeRow.appendChild(codeInput);
     const joinBtn = document.createElement('button');
     joinBtn.textContent = 'Join';
     joinBtn.style.minWidth = '6rem';
-    joinRow.appendChild(codeInput);
-    joinRow.appendChild(joinBtn);
-    this.root.appendChild(joinRow);
+    codeRow.appendChild(joinBtn);
+    this.root.appendChild(codeRow);
 
-    const err = document.createElement('div');
-    err.className = 'err';
+    const err = this.errLine();
     this.root.appendChild(err);
+    this.root.appendChild(this.button('Back', () => this.renderHome()));
 
-    createBtn.onclick = () => {
-      this.finish({ roomCode: '', name: nameInput.value.trim() });
-    };
-    joinBtn.onclick = () => {
+    const submit = (): void => {
       const code = codeInput.value.trim().toUpperCase();
       if (code.length < 2) {
-        err.textContent = 'Enter a room code';
+        err.textContent = 'enter a room code';
         return;
       }
-      this.finish({ roomCode: code, name: nameInput.value.trim() });
+      err.textContent = '';
+      this.setFormDisabled(true);
+      this.beginJoin(code).catch((e: unknown) => {
+        this.setFormDisabled(false);
+        err.textContent = describeError(e);
+      });
     };
+    joinBtn.onclick = submit;
     codeInput.onkeydown = (e) => {
-      if (e.key === 'Enter') joinBtn.click();
+      if (e.key === 'Enter') submit();
     };
+  }
+
+  private renderCreate(): void {
+    this.resetRoot();
+    this.title('Create room');
+
+    const nameRow = document.createElement('div');
+    nameRow.className = 'row';
+    nameRow.appendChild(this.nameField());
+    this.root.appendChild(nameRow);
+
+    const roomNameInput = document.createElement('input');
+    roomNameInput.placeholder = 'room name (optional)';
+    roomNameInput.maxLength = 32;
+    this.root.appendChild(roomNameInput);
+
+    // Visibility radio
+    const visRow = document.createElement('div');
+    visRow.style.display = 'flex';
+    visRow.style.flexDirection = 'column';
+    visRow.style.gap = '0.25rem';
+    visRow.style.alignItems = 'flex-start';
+    visRow.style.fontSize = '0.9rem';
+    visRow.appendChild(makeRadio('vis', 'unlisted', 'Unlisted (code only)', true));
+    visRow.appendChild(makeRadio('vis', 'public', 'Public (listed)'));
+    visRow.appendChild(makeRadio('vis', 'private', 'Private (invite-only)'));
+    this.root.appendChild(visRow);
+
+    // Max players
+    const maxRow = document.createElement('div');
+    maxRow.className = 'row';
+    const maxLabel = document.createElement('span');
+    maxLabel.textContent = 'max players';
+    maxLabel.style.alignSelf = 'center';
+    const maxInput = document.createElement('input');
+    maxInput.type = 'number';
+    maxInput.min = '1';
+    maxInput.max = '4';
+    maxInput.value = '4';
+    maxInput.style.width = '4rem';
+    maxRow.appendChild(maxLabel);
+    maxRow.appendChild(maxInput);
+    this.root.appendChild(maxRow);
+
+    const err = this.errLine();
+    this.root.appendChild(err);
+
+    const createBtn = document.createElement('button');
+    createBtn.textContent = 'Create';
+    this.root.appendChild(createBtn);
+    this.root.appendChild(this.button('Back', () => this.renderHome()));
+
+    createBtn.onclick = () => {
+      const visibility = (
+        visRow.querySelector('input[name="vis"]:checked') as HTMLInputElement | null
+      )?.value as 'public' | 'unlisted' | 'private' | undefined;
+      if (!visibility) return;
+      const maxPlayers = Math.max(1, Math.min(4, Number(maxInput.value) || 4));
+      err.textContent = '';
+      this.setFormDisabled(true);
+      const body: Parameters<typeof createRoom>[0] = { visibility, maxPlayers };
+      const roomName = roomNameInput.value.trim();
+      if (roomName) body.name = roomName;
+      createRoom(body)
+        .then((room) => {
+          if (room.invite) {
+            this.renderInviteShare(room.code, room.invite.token, room.name);
+          } else {
+            return this.beginJoin(room.code);
+          }
+          return undefined;
+        })
+        .catch((e: unknown) => {
+          this.setFormDisabled(false);
+          err.textContent = describeError(e);
+        });
+    };
+  }
+
+  // After creating a private room, show the invite URL the host can share,
+  // plus an "Enter room" button so the host can join immediately.
+  private renderInviteShare(code: string, token: string, roomName: string): void {
+    this.resetRoot();
+    this.title('Room created');
+
+    const sub = document.createElement('div');
+    sub.style.opacity = '0.7';
+    sub.style.textAlign = 'center';
+    sub.textContent = roomName ? `${roomName} (${code})` : `code: ${code}`;
+    this.root.appendChild(sub);
+
+    const inviteUrl = `${window.location.origin}${window.location.pathname}?inv=${token}`;
+    const urlBox = document.createElement('input');
+    urlBox.value = inviteUrl;
+    urlBox.readOnly = true;
+    urlBox.style.minWidth = '24rem';
+    urlBox.style.fontFamily = "'SF Mono', Consolas, monospace";
+    urlBox.style.fontSize = '0.85rem';
+    urlBox.onclick = () => urlBox.select();
+    this.root.appendChild(urlBox);
+
+    const copyBtn = this.button('Copy invite link', () => {
+      void navigator.clipboard?.writeText(inviteUrl);
+      copyBtn.textContent = 'Copied!';
+      setTimeout(() => (copyBtn.textContent = 'Copy invite link'), 1200);
+    });
+    this.root.appendChild(copyBtn);
+
+    const err = this.errLine();
+    this.root.appendChild(err);
+
+    // Host enters via /access (private rooms accept the host through the same
+    // /invites/:token/redeem path as everyone else — burns one use).
+    this.root.appendChild(
+      this.button('Enter room', () => {
+        err.textContent = '';
+        this.setFormDisabled(true);
+        redeemInvite(token)
+          .then((access) => this.completeJoin(access))
+          .catch((e: unknown) => {
+            this.setFormDisabled(false);
+            err.textContent = describeError(e);
+          });
+      }),
+    );
+  }
+
+  // Auto-join landing when the page is opened with ?inv=<token>.
+  private renderInviteJoin(prefilled: {
+    code: string;
+    accessKey: string;
+    roomName?: string;
+  }): void {
+    this.resetRoot();
+    this.title('Joining room');
+
+    const sub = document.createElement('div');
+    sub.style.opacity = '0.7';
+    sub.style.textAlign = 'center';
+    sub.textContent = prefilled.roomName
+      ? `${prefilled.roomName} (${prefilled.code})`
+      : `code: ${prefilled.code}`;
+    this.root.appendChild(sub);
+
+    const nameRow = document.createElement('div');
+    nameRow.className = 'row';
+    nameRow.appendChild(this.nameField());
+    this.root.appendChild(nameRow);
+
+    const err = this.errLine();
+    this.root.appendChild(err);
+
+    this.root.appendChild(
+      this.button('Enter', () =>
+        this.completeJoin({ code: prefilled.code, accessKey: prefilled.accessKey }),
+      ),
+    );
+  }
+
+  // --- Join flow ---
+
+  private async beginJoin(code: string): Promise<void> {
+    const access = await requestAccess(code);
+    this.completeJoin(access);
+  }
+
+  private completeJoin(access: AccessResult): void {
+    if (!this.resolveFn) return;
+    const fn = this.resolveFn;
+    this.resolveFn = null;
+    this.setFormDisabled(true);
+    fn({ roomCode: access.code, name: this.name, accessKey: access.accessKey });
+  }
+
+  // --- Misc ---
+
+  private setFormDisabled(disabled: boolean): void {
+    this.root.querySelectorAll('button, input').forEach((el) => {
+      (el as HTMLButtonElement | HTMLInputElement).disabled = disabled;
+    });
   }
 
   // Show the joined room code while the connection is alive.
@@ -122,23 +438,54 @@ export class Lobby {
     if (err) err.textContent = message;
   }
 
-  // Re-show the lobby after a connection failed mid-handshake. Re-enables
-  // the form so the user can pick a different room or retry.
+  // Re-show the lobby after a connection failed mid-handshake. Reset to home
+  // so the user can pick a different room or retry.
   reset(): void {
-    this.renderPicker();
+    this.prefilledInvite = null;
+    this.renderHome();
     if (!this.root.parentElement) document.body.appendChild(this.root);
     this.root.style.display = '';
     this.setFormDisabled(false);
   }
+}
 
-  private finish(r: LobbyResult): void {
-    if (!this.resolveFn) return;
-    const fn = this.resolveFn;
-    this.resolveFn = null;
-    // Disable the form but keep it visible — main.ts will hide it when the
-    // server confirms the connection (Welcome). If we hid it here and the
-    // connection silently dropped, the user would be stuck on a blank page.
-    this.setFormDisabled(true);
-    fn(r);
+function makeRadio(name: string, value: string, label: string, checked = false): HTMLLabelElement {
+  const wrap = document.createElement('label');
+  wrap.style.display = 'flex';
+  wrap.style.alignItems = 'center';
+  wrap.style.gap = '0.4rem';
+  wrap.style.cursor = 'pointer';
+  const radio = document.createElement('input');
+  radio.type = 'radio';
+  radio.name = name;
+  radio.value = value;
+  radio.checked = checked;
+  wrap.appendChild(radio);
+  const span = document.createElement('span');
+  span.textContent = label;
+  wrap.appendChild(span);
+  return wrap;
+}
+
+function describeError(e: unknown): string {
+  if (e instanceof LobbyApiError) {
+    switch (e.code) {
+      case 'not_found':
+        return 'no such room';
+      case 'room_full':
+        return 'room is full';
+      case 'requires_invite':
+        return 'this room is invite-only';
+      case 'expired':
+        return 'invite has expired';
+      case 'exhausted':
+        return 'invite has been used up';
+      case 'room_gone':
+        return 'room no longer exists';
+      default:
+        return `server: ${e.code}`;
+    }
   }
+  if (e instanceof Error) return e.message;
+  return String(e);
 }

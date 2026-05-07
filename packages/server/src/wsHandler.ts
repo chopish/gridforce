@@ -12,16 +12,24 @@ import {
   decodeMessage,
 } from '@gridforce/shared';
 
+import type { AccessKeyStore } from './AccessKeyStore.js';
 import { Connection } from './Connection.js';
+import type { InviteStore } from './InviteStore.js';
 import type { RoomManager } from './RoomManager.js';
 import type { Room } from './Room.js';
 
 const HELLO_TIMEOUT_MS = 5_000;
 
-export function attachWsHandler(server: HttpServer, manager: RoomManager): WebSocketServer {
+export interface WsDeps {
+  manager: RoomManager;
+  invites: InviteStore;
+  accessKeys: AccessKeyStore;
+}
+
+export function attachWsHandler(server: HttpServer, deps: WsDeps): WebSocketServer {
   const wss = new WebSocketServer({ server, path: '/ws', perMessageDeflate: false });
   wss.on('connection', (ws: WebSocket) => {
-    bootstrap(ws, manager).catch((err) => {
+    bootstrap(ws, deps).catch((err) => {
       console.warn('[ws] bootstrap error:', err);
       try {
         ws.close(1011, 'internal');
@@ -31,7 +39,7 @@ export function attachWsHandler(server: HttpServer, manager: RoomManager): WebSo
   return wss;
 }
 
-async function bootstrap(ws: WebSocket, manager: RoomManager): Promise<void> {
+async function bootstrap(ws: WebSocket, deps: WsDeps): Promise<void> {
   // Disable Nagle for low-latency input.
   // ws exposes the underlying socket via `_socket`; setNoDelay is documented.
   const sock = (ws as unknown as { _socket?: { setNoDelay?: (v: boolean) => void } })._socket;
@@ -50,7 +58,48 @@ async function bootstrap(ws: WebSocket, manager: RoomManager): Promise<void> {
     return;
   }
 
-  const room = manager.resolveRoom(hello.roomCode);
+  const room = deps.manager.findRoom(hello.roomCode);
+  if (!room) {
+    ws.send(ErrorMsg.encode({ code: ErrorCode.RoomNotFound, message: 'no such room' }), {
+      binary: true,
+    });
+    ws.close(1008, 'room not found');
+    return;
+  }
+
+  // Visibility-aware access check. The HTTP layer is responsible for issuing
+  // access keys (after invite redemption for private, or after a plain GET
+  // for public/unlisted). The WS handshake just validates + consumes.
+  //
+  // For Phase 0 ergonomics, public/unlisted rooms accept an empty accessKey
+  // — joining via direct WS (e.g. tests, dev tools, manual reconnect) works
+  // without a round-trip to /rooms/:code/access. Private rooms always demand
+  // a key. When account auth ships, that empty-key shortcut is the line we
+  // tighten.
+  let consumedInvite: string | null = null;
+  if (room.visibility === 'private') {
+    if (!hello.accessKey) {
+      reject(ws, ErrorCode.AccessDenied, 'invite required');
+      return;
+    }
+    const consumed = deps.accessKeys.consume(hello.accessKey);
+    if (!consumed || consumed.roomCode !== room.code) {
+      reject(ws, ErrorCode.AccessDenied, 'invalid or expired invite');
+      return;
+    }
+    consumedInvite = consumed.inviteToken;
+  } else if (hello.accessKey) {
+    // Public/unlisted with a key supplied: validate it but don't require it.
+    // A bad key here is treated as "doesn't match this room" → reject. We
+    // don't want to silently fall through to keyless because it'd hide
+    // wrong-room redirects from the client.
+    const consumed = deps.accessKeys.consume(hello.accessKey);
+    if (!consumed || consumed.roomCode !== room.code) {
+      reject(ws, ErrorCode.AccessDenied, 'invalid access key');
+      return;
+    }
+  }
+
   const reservation = room.reserveSlot();
   if (!reservation.ok) {
     ws.send(ErrorMsg.encode({ code: reservation.code, message: 'room full' }), { binary: true });
@@ -58,8 +107,13 @@ async function bootstrap(ws: WebSocket, manager: RoomManager): Promise<void> {
     return;
   }
 
+  // From here on the join is committed. Decrement the invite's usesRemaining
+  // — burning it earlier would let a click that never finishes the handshake
+  // consume a use.
+  if (consumedInvite) deps.invites.markUsed(consumedInvite);
+
   const conn = new Connection(reservation.playerId, ws, (c, decoded) =>
-    handleConnectionMessage(c, decoded, room, manager),
+    handleConnectionMessage(c, decoded, room, deps.manager),
   );
 
   // If the socket dies before we commit, undo nothing — we never registered.
@@ -68,6 +122,15 @@ async function bootstrap(ws: WebSocket, manager: RoomManager): Promise<void> {
   });
 
   room.commitJoin(conn);
+}
+
+function reject(ws: WebSocket, code: number, message: string): void {
+  try {
+    ws.send(ErrorMsg.encode({ code, message }), { binary: true });
+  } catch {}
+  try {
+    ws.close(1008, message);
+  } catch {}
 }
 
 function handleConnectionMessage(

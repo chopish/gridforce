@@ -41,6 +41,7 @@ export interface TestClientOptions {
   url: string;
   roomCode: string;
   name: string;
+  accessKey?: string;
   profile?: NetSimProfile;
   // What input pattern this client drives. Default: walks in a slow circle.
   drive?: (tick: number) => { mx: number; my: number; dash: boolean };
@@ -84,6 +85,7 @@ export class TestClient {
         schemaVersion: SCHEMA_VERSION,
         roomCode: this.opts.roomCode,
         name: this.opts.name,
+        accessKey: this.opts.accessKey ?? '',
       });
       try {
         ws.send(hello);
