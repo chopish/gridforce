@@ -225,6 +225,33 @@ export class PredictedWorld {
       this.predictedTick = snap.tick + this.targetLead;
       this.pending = [];
     } else if (this.predictedTick < snap.tick + this.targetLead) {
+      // Lead grew (RTT rose). Bump predictedTick up to targetLead. CRUCIAL:
+      // advance the local player's stepPlayer state for the skipped ticks
+      // with idle input so dashRemainingS / dashCooldownS / movement-state
+      // stay consistent with the new predictedTick. Server treated these
+      // ticks as idle (we never sent inputs for them) so client must too.
+      // Without this, dash/cooldown timers freeze for the skip duration
+      // and cause visible dash-state desync on each catch-up under jitter.
+      const skip = snap.tick + this.targetLead - this.predictedTick;
+      const localCur = this.players.get(this.localPlayerId);
+      if (localCur) {
+        let advanced = localCur;
+        for (let i = 0; i < skip; i++) {
+          advanced = stepPlayer(
+            advanced,
+            {
+              tick: this.predictedTick + i + 1,
+              clientTimeMs: 0,
+              mx: 0,
+              my: 0,
+              dash: false,
+            },
+            SERVER_TICK_DT_S,
+            this.grid,
+          );
+        }
+        this.players.set(this.localPlayerId, advanced);
+      }
       this.predictedTick = snap.tick + this.targetLead;
     }
 

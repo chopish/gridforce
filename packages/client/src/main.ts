@@ -144,15 +144,16 @@ async function bootstrap(): Promise<void> {
 
       // Adaptive input lead: scales with measured RTT so high-latency
       // connections don't have their inputs land in the server's past.
-      // The +4 safety margin covers per-direction jitter up to ~120 ms
-      // (much more than even the "bad" profile's 60 ms). Without enough
+      // The +6 safety margin covers per-direction jitter up to ~200 ms,
+      // enough headroom for the "bad" profile's ±60 ms one-way jitter
+      // even when EWMA lags individual high samples. Without enough
       // jitter headroom, individual late packets cause the server to
       // idle for that tick, producing ~7 px/tick divergence that the
       // smooth-correction system can't fully decay between snapshots.
       const rtt = socket.status().rttMs;
       if (rtt > 0) {
         const oneWayTicks = Math.ceil(rtt / 2 / SERVER_TICK_DT_MS);
-        world.setTargetLead(oneWayTicks + 4);
+        world.setTargetLead(oneWayTicks + 6);
       }
 
       // Render players: local from prediction, remotes from interpolator.

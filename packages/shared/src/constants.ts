@@ -38,7 +38,12 @@ export const WORLD_WIDTH = PANEL_SIZE * GRID_COLS;
 export const WORLD_HEIGHT = PANEL_SIZE * GRID_ROWS;
 
 // Reconciliation
-export const PREDICTION_THRESHOLD_PX = 3;
+// Below threshold: no smooth correction is set; the rebase shifts the visual
+// by at most ~5 px which is imperceptible at 60 fps. Set too low (e.g. 3) and
+// every snapshot under jittery profiles fires a smooth correction whose
+// 150 ms blend overlaps with the next, producing constant low-amplitude
+// pulling that the HUD shows as `recon smooth=many` with `corr` ~1-2 px.
+export const PREDICTION_THRESHOLD_PX = 5;
 export const PREDICTION_HARD_SNAP_PX = 30;
 export const PREDICTION_BLEND_MS = 150;
 
