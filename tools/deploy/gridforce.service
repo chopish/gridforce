@@ -1,0 +1,24 @@
+[Unit]
+Description=GridForce game server
+After=network.target
+
+[Service]
+Type=simple
+User=gridforce
+Group=gridforce
+WorkingDirectory=/opt/gridforce
+Environment=NODE_ENV=production
+Environment=PORT=8080
+ExecStart=/usr/bin/npm start --silent -w @gridforce/server
+Restart=on-failure
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

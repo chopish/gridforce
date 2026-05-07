@@ -1,0 +1,3 @@
+# Install at /etc/sudoers.d/gridforce (mode 0440, owner root:root)
+# Allows the gridforce service user to restart its own unit during deploy.
+gridforce ALL=(root) NOPASSWD: /bin/systemctl restart gridforce, /bin/systemctl restart gridforce.service

@@ -1,0 +1,23 @@
+[Unit]
+Description=GridForce GitHub webhook receiver
+After=network.target
+
+[Service]
+Type=simple
+User=gridforce
+Group=gridforce
+WorkingDirectory=/opt/gridforce
+EnvironmentFile=/etc/gridforce/webhook.env
+ExecStart=/usr/bin/node tools/deploy/webhook-server.mjs
+Restart=on-failure
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

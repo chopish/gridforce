@@ -1,0 +1,15 @@
+node_modules/
+dist/
+build/
+
+.claude/settings.local.json
+.cache/
+.vite/
+*.log
+.env
+.env.local
+.DS_Store
+Thumbs.db
+coverage/
+.tsbuildinfo
+*.tsbuildinfo
