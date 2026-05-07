@@ -36,4 +36,20 @@ npm run build
 echo "==> restarting $SERVICE"
 sudo systemctl restart "$SERVICE"
 
-echo "==> deploy completed at $(date -Iseconds)"
+# Verify the service actually came back up. systemctl restart returns 0 as
+# soon as the start was *initiated*, even if the new process subsequently
+# crashes — which previously left the old code running and produced silent
+# version-skew bugs (client+server on different wire formats).
+echo "==> verifying $SERVICE is active"
+for i in 1 2 3 4 5; do
+  if systemctl is-active --quiet "$SERVICE"; then
+    echo "==> $SERVICE active"
+    echo "==> deploy completed at $(date -Iseconds)"
+    exit 0
+  fi
+  sleep 1
+done
+
+echo "!! $SERVICE is not active after restart; recent logs:" >&2
+journalctl -u "$SERVICE" -n 30 --no-pager >&2 || true
+exit 1

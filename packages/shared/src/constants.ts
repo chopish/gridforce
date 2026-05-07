@@ -1,4 +1,11 @@
-export const SCHEMA_VERSION = 1;
+// Bump on ANY wire-format-incompatible change so a stale client can't
+// silently misdecode a fresh server's snapshots (and vice versa). The Hello
+// handshake compares this and emits an Error if they don't match.
+//
+// History:
+//   v1: initial binary protocol
+//   v2: PlayerEncoder gained dashCooldownS + dashRemainingS u8 quantized
+export const SCHEMA_VERSION = 2;
 
 // Tick rates
 export const SERVER_TICK_HZ = 30;

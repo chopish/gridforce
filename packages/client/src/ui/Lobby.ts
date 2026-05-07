@@ -22,13 +22,21 @@ export class Lobby {
 
   show(): Promise<LobbyResult> {
     this.renderPicker();
+    if (!this.root.parentElement) document.body.appendChild(this.root);
+    this.root.style.display = '';
     return new Promise<LobbyResult>((resolve) => {
       this.resolveFn = resolve;
     });
   }
 
   hide(): void {
-    this.root.remove();
+    this.root.style.display = 'none';
+  }
+
+  private setFormDisabled(disabled: boolean): void {
+    this.root.querySelectorAll('button, input').forEach((el) => {
+      (el as HTMLButtonElement | HTMLInputElement).disabled = disabled;
+    });
   }
 
   private renderPicker(): void {
@@ -114,16 +122,23 @@ export class Lobby {
     if (err) err.textContent = message;
   }
 
+  // Re-show the lobby after a connection failed mid-handshake. Re-enables
+  // the form so the user can pick a different room or retry.
   reset(): void {
     this.renderPicker();
-    document.body.appendChild(this.root);
+    if (!this.root.parentElement) document.body.appendChild(this.root);
+    this.root.style.display = '';
+    this.setFormDisabled(false);
   }
 
   private finish(r: LobbyResult): void {
     if (!this.resolveFn) return;
     const fn = this.resolveFn;
     this.resolveFn = null;
-    this.hide();
+    // Disable the form but keep it visible — main.ts will hide it when the
+    // server confirms the connection (Welcome). If we hid it here and the
+    // connection silently dropped, the user would be stuck on a blank page.
+    this.setFormDisabled(true);
     fn(r);
   }
 }

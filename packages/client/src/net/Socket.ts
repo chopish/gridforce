@@ -29,6 +29,7 @@ const RTT_EWMA_ALPHA = 0.2;
 export class Socket {
   private ws: WebSocket | null = null;
   private listeners = new Set<MessageListener>();
+  private closeListeners = new Set<() => void>();
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private nextNonce = 1;
   private pendingPings = new Map<number, number>(); // nonce -> clientTimeMs
@@ -83,6 +84,13 @@ export class Socket {
     ws.onclose = () => {
       this.state = 'closed';
       this.stopPings();
+      for (const cb of this.closeListeners) {
+        try {
+          cb();
+        } catch (err) {
+          console.warn('[socket] close listener threw:', err);
+        }
+      }
     };
     ws.onerror = () => {
       this.state = 'error';
@@ -94,6 +102,11 @@ export class Socket {
   addListener(l: MessageListener): () => void {
     this.listeners.add(l);
     return () => this.listeners.delete(l);
+  }
+
+  onClose(cb: () => void): () => void {
+    this.closeListeners.add(cb);
+    return () => this.closeListeners.delete(cb);
   }
 
   sendInput(input: PlayerInput): void {

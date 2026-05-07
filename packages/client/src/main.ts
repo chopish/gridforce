@@ -35,9 +35,13 @@ async function bootstrap(): Promise<void> {
 
   socket.connect({ roomCode, name });
 
+  let welcomeReceived = false;
+
   const off = socket.addListener((m) => {
     switch (m.type) {
       case MessageType.Welcome:
+        welcomeReceived = true;
+        lobby.hide();
         world.initFromWelcome(m.payload);
         renderer
           .init(appHost, m.payload.grid)
@@ -68,6 +72,19 @@ async function bootstrap(): Promise<void> {
       default:
         break;
     }
+  });
+
+  // If the socket dies before Welcome arrives we'd otherwise be stuck on a
+  // blank page (lobby disabled, no game ever loads). Surface a clear error
+  // and re-enable the form so the user can retry. This is the user-visible
+  // signal for "version mismatch" or "server isn't running new code yet."
+  socket.onClose(() => {
+    if (welcomeReceived) return;
+    if (codeBanner) codeBanner.remove();
+    lobby.reset();
+    lobby.showError(
+      'connection closed before joining — server may be down or running a different version. try again in a moment',
+    );
   });
 
   // Cycle the network simulator profile with F. Used during manual playtest.
