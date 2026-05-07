@@ -15,7 +15,11 @@ RestartSec=3
 StandardOutput=journal
 StandardError=journal
 
-NoNewPrivileges=true
+# NOTE: NoNewPrivileges is deliberately NOT set. The deploy script needs to
+# escalate via sudo to run `systemctl restart gridforce` (allowed via
+# /etc/sudoers.d/gridforce). NoNewPrivileges blocks setuid binaries like
+# sudo from elevating, even when sudoers permits the command — leaving it
+# on causes deploy.sh to fail at the restart step with "no new privileges".
 ProtectSystem=full
 PrivateTmp=true
 
