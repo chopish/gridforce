@@ -1,9 +1,15 @@
 // Captures keyboard + gamepad and exposes a snapshot the prediction loop can
 // sample once per tick. WASD / arrow keys map to mx/my; space is dash.
 //
-// Dash is rising-edge: latched on press until consumed by the next sampled
-// tick. This avoids the double-fire / miss problems that happen when input
-// rate doesn't match sim rate.
+// Dash is rising-edge: a press flags the next several sampled ticks as
+// dash=true. Sending the dash flag for multiple consecutive ticks survives
+// individual packet loss — the server only honours the first one (cooldown
+// gates the rest), so duplicate dashes are not a concern.
+
+// How many ticks to keep dash=true after a press. At 5% loss, 1 tick has 5%
+// miss rate; 3 ticks drops it to 0.0125%. Tradeoff: extra latency-of-dash if
+// user spams, but cooldown gating means at most one dash per cooldown.
+const DASH_PRESS_TICKS = 3;
 
 export interface InputSnapshot {
   mx: number;
@@ -16,7 +22,7 @@ export class InputCapture {
   private down = false;
   private left = false;
   private right = false;
-  private dashLatched = false;
+  private dashTicksRemaining = 0;
 
   private readonly onKey: (e: KeyboardEvent) => void;
   private readonly onBlur: () => void;
@@ -42,7 +48,7 @@ export class InputCapture {
           this.right = pressed;
           break;
         case 'Space':
-          if (pressed) this.dashLatched = true;
+          if (pressed) this.dashTicksRemaining = DASH_PRESS_TICKS;
           break;
         default:
           return;
@@ -75,7 +81,7 @@ export class InputCapture {
         my = ay;
       }
       if ((pad.buttons[0]?.pressed ?? false) || (pad.buttons[7]?.pressed ?? false)) {
-        this.dashLatched = true;
+        this.dashTicksRemaining = DASH_PRESS_TICKS;
       }
     }
 
@@ -86,14 +92,14 @@ export class InputCapture {
       my /= mag;
     }
 
-    const dash = this.dashLatched;
-    this.dashLatched = false;
+    const dash = this.dashTicksRemaining > 0;
+    if (this.dashTicksRemaining > 0) this.dashTicksRemaining--;
     return { mx, my, dash };
   }
 
   clear(): void {
     this.up = this.down = this.left = this.right = false;
-    this.dashLatched = false;
+    this.dashTicksRemaining = 0;
   }
 
   dispose(): void {

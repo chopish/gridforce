@@ -90,6 +90,9 @@ export class PredictedWorld {
     this.diagnostics.correctionMagnitudePx = 0;
     this.diagnostics.correctionEwmaPx = 0;
     this.diagnostics.recentMaxErrorPx = 0;
+    this.diagnostics.smoothCorrections = 0;
+    this.diagnostics.hardSnaps = 0;
+    this.diagnostics.lastReplayInputs = 0;
   }
 
   // Last-rendered visual position + the alpha used. Lets applySnapshot
@@ -264,37 +267,28 @@ export class PredictedWorld {
     const oldPrev = this.prevPlayers.get(this.localPlayerId);
     this.players.set(this.localPlayerId, rebased);
 
-    // Visual continuity. Compute the correction that, applied to the next
-    // render frame, keeps the on-screen position exactly where it just was —
-    // regardless of how much the rebase moved the simulated position. The
-    // correction then bleeds to zero over PREDICTION_BLEND_MS, smoothly
-    // pulling the visual to the true simulated position.
-    if (oldPrev) {
+    // Visual continuity. When divergence is real (>= threshold), compute a
+    // correction that keeps the on-screen position exactly where it just was
+    // and let it bleed to zero over PREDICTION_BLEND_MS. Below threshold, do
+    // nothing — the sub-threshold rebase shifts the visual by at most
+    // (alpha * err) ≈ <3 px, which is imperceptible, and resetting the
+    // correction every snapshot was preventing the existing correction from
+    // ever decaying (sustained ~7 px pull at 20 Hz snapshot rate vs 150 ms
+    // blend = correction can never reach below ~2/3 of its peak).
+    if (oldPrev && err >= PREDICTION_THRESHOLD_PX && err < PREDICTION_HARD_SNAP_PX) {
       const expectedNextLerpX = oldPrev.x + this.lastRenderAlpha * (rebased.x - oldPrev.x);
       const expectedNextLerpY = oldPrev.y + this.lastRenderAlpha * (rebased.y - oldPrev.y);
-      const visCorrX = this.lastVisualX - expectedNextLerpX;
-      const visCorrY = this.lastVisualY - expectedNextLerpY;
-      // Only ADD this on top of the existing decaying correction if the
-      // divergence actually exceeded the threshold; otherwise small (sub-px)
-      // visual continuity errors decay naturally without us adding to them.
-      if (err >= PREDICTION_THRESHOLD_PX && err < PREDICTION_HARD_SNAP_PX) {
-        this.correctionX = visCorrX;
-        this.correctionY = visCorrY;
-        this.diagnostics.smoothCorrections++;
-        this.diagnostics.lastSnapAtTick = snap.tick;
-      } else if (err >= PREDICTION_HARD_SNAP_PX) {
-        // Hard snap — wipe correction so visual moves to rebased immediately.
-        this.correctionX = 0;
-        this.correctionY = 0;
-        this.diagnostics.hardSnaps++;
-        this.diagnostics.lastSnapAtTick = snap.tick;
-        console.warn(`[reconcile] hard snap ${err.toFixed(1)}px at tick ${snap.tick}`);
-      } else {
-        // err < threshold: also adjust correction to preserve continuity but
-        // by a tiny amount that decays in a frame or two.
-        this.correctionX = visCorrX;
-        this.correctionY = visCorrY;
-      }
+      this.correctionX = this.lastVisualX - expectedNextLerpX;
+      this.correctionY = this.lastVisualY - expectedNextLerpY;
+      this.diagnostics.smoothCorrections++;
+      this.diagnostics.lastSnapAtTick = snap.tick;
+    } else if (err >= PREDICTION_HARD_SNAP_PX) {
+      // Hard snap — wipe correction so visual moves to rebased immediately.
+      this.correctionX = 0;
+      this.correctionY = 0;
+      this.diagnostics.hardSnaps++;
+      this.diagnostics.lastSnapAtTick = snap.tick;
+      console.warn(`[reconcile] hard snap ${err.toFixed(1)}px at tick ${snap.tick}`);
     }
 
     if (err > this.diagnostics.recentMaxErrorPx) this.diagnostics.recentMaxErrorPx = err;
