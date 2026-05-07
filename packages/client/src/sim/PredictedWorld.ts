@@ -110,6 +110,14 @@ export class PredictedWorld {
       rngState: this.state.rngState,
     };
 
+    // Cap replay length. If pending grew beyond this (sustained network or
+    // server lag), replaying every snapshot would saturate CPU and worsen the
+    // stutter. Drop the oldest pending and accept a one-time visible snap.
+    const MAX_REPLAY = 90;
+    if (this.pendingInputs.length > MAX_REPLAY) {
+      this.pendingInputs.splice(0, this.pendingInputs.length - MAX_REPLAY);
+    }
+
     const replayInputs = this.pendingInputs;
     this.lastReconcileRewindTicks = replayInputs.length;
     for (const inp of replayInputs) {

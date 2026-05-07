@@ -32,7 +32,9 @@ export class Room {
   private lastActivityAt = Date.now();
   private onDisposed: () => void;
   // Maximum sub-ticks per real-time frame when catching up from a stall.
-  private static readonly MAX_CATCHUP = 3;
+  // Generous so transient client bursts (browser frame stalls produce 3-6
+  // inputs in a single rAF) drain in one server tick instead of accumulating.
+  private static readonly MAX_CATCHUP = 8;
 
   constructor(code: string, onDisposed: () => void) {
     this.code = code;

@@ -35,8 +35,11 @@ export class Connection {
     this.inputBuffer.set(input.tick, input);
     if (input.tick > this.latestInputTick) this.latestInputTick = input.tick;
 
-    // Bound the buffer; never let it grow unbounded if a client misbehaves
-    if (this.inputBuffer.size > 256) {
+    // Cap is generous — at 60 Hz this allows ~17 s of buffered inputs before
+    // we start dropping oldest. Dropping oldest causes the server to skip
+    // applying that input, which desyncs the player from client prediction.
+    // We'd rather buffer more and let catch-up drain it.
+    if (this.inputBuffer.size > 1024) {
       const oldestTick = Math.min(...this.inputBuffer.keys());
       this.inputBuffer.delete(oldestTick);
     }

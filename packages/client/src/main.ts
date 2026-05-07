@@ -92,7 +92,10 @@ async function runGame(socket: GameSocket, welcome: ServerWelcome): Promise<void
     const now = performance.now();
     let dt = (now - lastFrame) / 1000;
     lastFrame = now;
-    if (dt > 0.1) dt = 0.1; // clamp pathological frame stalls
+    // Clamp pathological frame stalls. Tight enough that a stuttering frame
+    // can't dump 6+ inputs into the network at once (which then takes the
+    // server multiple ticks to drain and desyncs prediction).
+    if (dt > 0.05) dt = 0.05;
 
     accumulator += dt;
     while (accumulator >= TICK_DT_S) {

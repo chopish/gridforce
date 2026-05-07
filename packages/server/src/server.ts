@@ -36,9 +36,21 @@ app.get('/api/rooms/:code', (req, res) => {
 });
 
 const httpServer = http.createServer(app);
-const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
+const wss = new WebSocketServer({
+  server: httpServer,
+  path: '/ws',
+  // Real-time small-message stream — compression hurts more than it helps
+  // and adds CPU + latency per frame.
+  perMessageDeflate: false,
+});
 
 wss.on('connection', (socket, req) => {
+  // Disable Nagle's algorithm. With ~60 small messages/sec each way, Nagle's
+  // 40 ms coalescing window holds inputs and snapshots that should ship now.
+  const underlying = (socket as unknown as { _socket?: { setNoDelay?: (v: boolean) => void } })._socket;
+  if (underlying && typeof underlying.setNoDelay === 'function') {
+    underlying.setNoDelay(true);
+  }
   handleWsConnection(socket, req, rooms);
 });
 
