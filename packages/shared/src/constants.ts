@@ -6,7 +6,10 @@
 //   v1: initial binary protocol
 //   v2: PlayerEncoder gained dashCooldownS + dashRemainingS u8 quantized
 //   v3: Hello carries accessKey for private-room invite redemption
-export const SCHEMA_VERSION = 3;
+//   v4: pre-game lobby phase — Snapshot/Welcome carry phase+hostId,
+//       PlayerEncoder gained name string + READY flag bit, new SetReady
+//       and StartGame client→server messages
+export const SCHEMA_VERSION = 4;
 
 // Tick rates
 export const SERVER_TICK_HZ = 30;

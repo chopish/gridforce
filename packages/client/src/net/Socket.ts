@@ -7,6 +7,8 @@ import {
   PingMsg,
   RTT_OUTLIER_MS,
   SCHEMA_VERSION,
+  SetReadyMsg,
+  StartGameMsg,
   decodeMessage,
   type DecodedMessage,
   type NetSimProfile,
@@ -115,6 +117,14 @@ export class Socket {
 
   sendInput(input: PlayerInput): void {
     this.send(InputMsg.encode(input));
+  }
+
+  sendSetReady(ready: boolean): void {
+    this.send(SetReadyMsg.encode({ ready }));
+  }
+
+  sendStartGame(): void {
+    this.send(StartGameMsg.encode({}));
   }
 
   // Send any pre-encoded message (e.g. AddBot). Exposed so callers don't have

@@ -17,6 +17,8 @@ export const enum MessageType {
   Input = 0x0002,
   Ping = 0x0003,
   AddBot = 0x0004,
+  SetReady = 0x0005,
+  StartGame = 0x0006,
   // Server -> Client
   Welcome = 0x0081,
   Snapshot = 0x0082,

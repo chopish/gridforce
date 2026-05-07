@@ -3,7 +3,8 @@ import { BinaryReader, BinaryWriter, EntityType } from '../wire.js';
 
 // Player flags packed into one byte, header for forward extension.
 export const PLAYER_FLAG_DASHING = 1 << 0;
-// bits 1..6 reserved
+export const PLAYER_FLAG_READY = 1 << 1;
+// bits 2..6 reserved
 // bit 7 reserved as "delta-from-baseline" marker for future delta encoding.
 
 const TWO_PI = Math.PI * 2;
@@ -19,15 +20,17 @@ function unquantizeFacing(q: number): number {
   return (q / 256) * TWO_PI;
 }
 
-// One player entity = 17 bytes:
+// One player entity (variable, ~17 + name bytes):
 //   u8  id              (1)
 //   f32 x               (4)
 //   f32 y               (4)
 //   u8  facingQ         (1)
-//   u8  flags           (1)
+//   u8  flags           (1)   bit0=DASHING, bit1=READY
 //   u8  dashCooldownQ   (1)   seconds × 255, saturating at 1.0s
 //   u8  dashRemainingQ  (1)   seconds × 255, saturating at 1.0s
 //   u32 stateSeq        (4)
+//   string name         (varint length + utf8 bytes; capped to 24 chars on the
+//                        write side via Hello validation, so worst-case ~26 B)
 //
 // The two timers MUST be on the wire. Without them, every snapshot resets
 // the client's view of cooldown/remaining to zero, which lets the client
@@ -59,10 +62,12 @@ export const PlayerEncoder: EntityEncoder<PlayerState> = {
     w.u8(quantizeFacing(p.facing));
     let flags = 0;
     if (p.dashRemainingS > 0) flags |= PLAYER_FLAG_DASHING;
+    if (p.ready) flags |= PLAYER_FLAG_READY;
     w.u8(flags);
     w.u8(quantizeTimer(p.dashCooldownS));
     w.u8(quantizeTimer(p.dashRemainingS));
     w.u32(p.stateSeq >>> 0);
+    w.string(p.name);
   },
   decode(r) {
     const id = r.u8();
@@ -73,10 +78,11 @@ export const PlayerEncoder: EntityEncoder<PlayerState> = {
     const dashCooldownS = unquantizeTimer(r.u8());
     const dashRemainingS = unquantizeTimer(r.u8());
     const stateSeq = r.u32();
+    const name = r.string();
     // The DASHING flag is redundant with dashRemainingS > 0; we keep it for
     // forward extensibility (other state bits can ride along) and so the
     // renderer can do a one-byte check without unquantizing the timer.
-    void flags;
-    return { id, x, y, facing, dashCooldownS, dashRemainingS, stateSeq };
+    const ready = (flags & PLAYER_FLAG_READY) !== 0;
+    return { id, x, y, facing, dashCooldownS, dashRemainingS, stateSeq, name, ready };
   },
 };

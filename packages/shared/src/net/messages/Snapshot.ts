@@ -12,6 +12,8 @@ void registerEntityEncoder;
 //   f64 serverTimeMs
 //   i32 ackInputTick
 //   u32 inputAckBitmask
+//   u8  phase                (0=lobby, 1=playing)
+//   u8  hostId               (0xff if no human host)
 //   u8  groupCount
 //   for each group:
 //     u8 entityType
@@ -24,6 +26,8 @@ export function encode(p: SnapshotPayload): Uint8Array {
   w.f64(p.serverTimeMs);
   w.i32(p.ackInputTick | 0);
   w.u32(p.inputAckBitmask >>> 0);
+  w.u8(p.phase === 'playing' ? 1 : 0);
+  w.u8(p.hostId & 0xff);
 
   // Phase 0: just the player group.
   w.u8(1);
@@ -41,6 +45,8 @@ export function decode(r: BinaryReader): SnapshotPayload {
   const serverTimeMs = r.f64();
   const ackInputTick = r.i32();
   const inputAckBitmask = r.u32();
+  const phase: 'lobby' | 'playing' = r.u8() === 1 ? 'playing' : 'lobby';
+  const hostId = r.u8();
 
   const groupCount = r.u8();
   const players: PlayerState[] = [];
@@ -61,5 +67,5 @@ export function decode(r: BinaryReader): SnapshotPayload {
     }
   }
 
-  return { tick, serverTimeMs, ackInputTick, inputAckBitmask, players };
+  return { tick, serverTimeMs, ackInputTick, inputAckBitmask, phase, hostId, players };
 }

@@ -16,6 +16,12 @@ export interface PlayerState {
   dashCooldownS: number;
   dashRemainingS: number;
   stateSeq: number;
+  // Roster metadata. Lives on PlayerState for wire-format simplicity in
+  // Phase 0 — stepPlayer treats them as opaque pass-through. When the
+  // entity registry grows beyond Player we can split sim state from
+  // roster meta into separate snapshot groups.
+  name: string;
+  ready: boolean;
 }
 
 export interface GridDef {
@@ -29,11 +35,25 @@ export interface WorldState {
   players: PlayerState[];
 }
 
+// Room phase. 'lobby' = pre-game ready-up; 'playing' = sim runs.
+// Wire encoding: u8 with values matching RoomPhaseValue below.
+export type RoomPhase = 'lobby' | 'playing';
+export const RoomPhaseValue = {
+  Lobby: 0,
+  Playing: 1,
+} as const;
+
 export interface SnapshotPayload {
   tick: number;
   serverTimeMs: number;
   ackInputTick: number;
   inputAckBitmask: number;
+  // u8 over the wire; the client mirrors this into UI state and gates
+  // input capture / movement on transitions.
+  phase: RoomPhase;
+  // PlayerId of the host, or 0xff if no human host yet (room is empty or
+  // only contains bots — bots never become host).
+  hostId: PlayerId;
   players: PlayerState[];
 }
 
@@ -42,8 +62,25 @@ export interface WelcomePayload {
   grid: GridDef;
   startTick: number;
   serverTimeMs: number;
+  phase: RoomPhase;
+  hostId: PlayerId;
   players: PlayerState[];
 }
+
+// Lobby controls. Sent by the client.
+//
+// SetReady toggles the joiner's ready flag in the room's roster.
+// StartGame is host-only; server validates and rejects if the sender isn't
+// the current host. Both messages have empty payloads (the sender's id is
+// known from the connection).
+export interface SetReadyPayload {
+  ready: boolean;
+}
+
+// Empty payload — host gating is enforced server-side from the connection's
+// playerId, not from any field the client could spoof.
+// eslint-disable-next-line @typescript-eslint/no-empty-interface
+export interface StartGamePayload {}
 
 export interface HelloPayload {
   schemaVersion: number;

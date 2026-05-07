@@ -13,7 +13,7 @@ export function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
 }
 
-export function newPlayerState(id: number, x: number, y: number): PlayerState {
+export function newPlayerState(id: number, x: number, y: number, name = ''): PlayerState {
   return {
     id,
     x,
@@ -22,6 +22,8 @@ export function newPlayerState(id: number, x: number, y: number): PlayerState {
     dashCooldownS: 0,
     dashRemainingS: 0,
     stateSeq: 0,
+    name,
+    ready: false,
   };
 }
 
@@ -90,7 +92,18 @@ export function stepPlayer(
   x = clamp(x, minX, maxX);
   y = clamp(y, minY, maxY);
 
-  return { id: state.id, x, y, facing, dashCooldownS, dashRemainingS, stateSeq };
+  return {
+    id: state.id,
+    x,
+    y,
+    facing,
+    dashCooldownS,
+    dashRemainingS,
+    stateSeq,
+    // Roster metadata is opaque to the sim — pass through unchanged.
+    name: state.name,
+    ready: state.ready,
+  };
 }
 
 export function isDashing(state: PlayerState): boolean {

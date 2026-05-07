@@ -42,6 +42,11 @@ export interface PredictionDiagnostics {
 export class PredictedWorld {
   grid: GridDef = { cols: 1, rows: 1, panelSize: 1 };
   localPlayerId: PlayerId = -1;
+  // Mirrored from snapshot/Welcome. UI gates ready toggles + start button on
+  // these. Defaults to 'lobby' so a stale-state glance during connect doesn't
+  // show the playfield as live before we've actually heard from the server.
+  phase: 'lobby' | 'playing' = 'lobby';
+  hostId: PlayerId = 0xff;
 
   // The player states we've simulated forward to predictedTick. For remote
   // players these get overwritten each snapshot; we don't predict them here
@@ -134,6 +139,8 @@ export class PredictedWorld {
   initFromWelcome(w: WelcomePayload): void {
     this.grid = w.grid;
     this.localPlayerId = w.yourPlayerId;
+    this.phase = w.phase;
+    this.hostId = w.hostId;
     // Lead the server tick from the start: by the time our first input
     // reaches the server, the server has already advanced past startTick by
     // ~RTT/2 ticks. Tagging from (startTick + lead) ensures the input lands
@@ -200,6 +207,8 @@ export class PredictedWorld {
     if (snap.tick < this.serverTick) return; // stale (out of order)
     this.serverTick = snap.tick;
     this.diagnostics.serverTick = snap.tick;
+    this.phase = snap.phase;
+    this.hostId = snap.hostId;
 
     // Lead maintenance. Two regimes:
     //   1. predictedTick has fallen below MIN_SAFE_LEAD (or even past the

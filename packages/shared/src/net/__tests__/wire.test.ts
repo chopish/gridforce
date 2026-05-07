@@ -14,7 +14,9 @@ import {
   PlayerLeftMsg,
   PongMsg,
   SchemaMismatchError,
+  SetReadyMsg,
   SnapshotMsg,
+  StartGameMsg,
   WelcomeMsg,
   decodeMessage,
 } from '../index.js';
@@ -66,9 +68,11 @@ test('Welcome round-trip', () => {
     grid: { cols: 18, rows: 12, panelSize: 64 },
     startTick: 1234,
     serverTimeMs: 1700000000123.5,
+    phase: 'lobby' as const,
+    hostId: 0,
     players: [
-      { ...newPlayerState(0, 100, 100), facing: 1.234, stateSeq: 7 },
-      { ...newPlayerState(3, 200, 250), facing: -0.5, stateSeq: 9 },
+      { ...newPlayerState(0, 100, 100, 'alice'), facing: 1.234, stateSeq: 7 },
+      { ...newPlayerState(3, 200, 250, 'bob'), facing: -0.5, stateSeq: 9, ready: true },
     ],
   };
   const decoded = decodeMessage(WelcomeMsg.encode(payload));
@@ -78,7 +82,13 @@ test('Welcome round-trip', () => {
   assert.deepEqual(w.grid, payload.grid);
   assert.equal(w.startTick, 1234);
   assert.equal(w.serverTimeMs, 1700000000123.5);
+  assert.equal(w.phase, 'lobby');
+  assert.equal(w.hostId, 0);
   assert.equal(w.players.length, 2);
+  assert.equal(w.players[0]!.name, 'alice');
+  assert.equal(w.players[0]!.ready, false);
+  assert.equal(w.players[1]!.name, 'bob');
+  assert.equal(w.players[1]!.ready, true);
   for (let i = 0; i < 2; i++) {
     const a = w.players[i]!;
     const b = payload.players[i]!;
@@ -127,6 +137,8 @@ test('Snapshot round-trip with multiple players, ack bitmask, dash timers', () =
     serverTimeMs: 1700000000500,
     ackInputTick: 9990,
     inputAckBitmask: 0b1010_1100,
+    phase: 'playing' as const,
+    hostId: 0,
     players,
   };
   const dec = decodeMessage(SnapshotMsg.encode(payload));
@@ -136,6 +148,8 @@ test('Snapshot round-trip with multiple players, ack bitmask, dash timers', () =
   assert.equal(s.serverTimeMs, payload.serverTimeMs);
   assert.equal(s.ackInputTick, payload.ackInputTick);
   assert.equal(s.inputAckBitmask, payload.inputAckBitmask);
+  assert.equal(s.phase, 'playing');
+  assert.equal(s.hostId, 0);
   assert.equal(s.players.length, players.length);
   // Idle player: both timers 0.
   assert.equal(s.players[0]!.dashCooldownS, 0);
@@ -155,6 +169,8 @@ test('Snapshot handles zero players', () => {
       serverTimeMs: 0,
       ackInputTick: -1,
       inputAckBitmask: 0,
+      phase: 'lobby',
+      hostId: 0xff,
       players: [],
     }),
   );
@@ -162,6 +178,22 @@ test('Snapshot handles zero players', () => {
   const s = dec.payload as ReturnType<typeof SnapshotMsg.decode>;
   assert.equal(s.players.length, 0);
   assert.equal(s.ackInputTick, -1);
+  assert.equal(s.phase, 'lobby');
+  assert.equal(s.hostId, 0xff);
+});
+
+test('SetReady / StartGame round-trip', () => {
+  const r = decodeMessage(SetReadyMsg.encode({ ready: true }));
+  assert.equal(r.type, MessageType.SetReady);
+  assert.deepEqual(r.payload, { ready: true });
+
+  const r0 = decodeMessage(SetReadyMsg.encode({ ready: false }));
+  assert.equal(r0.type, MessageType.SetReady);
+  assert.deepEqual(r0.payload, { ready: false });
+
+  const sg = decodeMessage(StartGameMsg.encode({}));
+  assert.equal(sg.type, MessageType.StartGame);
+  assert.deepEqual(sg.payload, {});
 });
 
 test('Ping/Pong round-trip preserves nonces and times', () => {

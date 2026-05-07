@@ -21,6 +21,7 @@ export type ConnectionMessageHandler = (
 export class Connection implements Pilot {
   readonly isBot = false;
   ackInputTick = -1;
+  ready = false;
 
   private inputs = new Map<number, PlayerInput>();
   private appliedTicks = new Set<number>();
@@ -28,6 +29,7 @@ export class Connection implements Pilot {
 
   constructor(
     public readonly playerId: PlayerId,
+    public readonly name: string,
     private readonly ws: WebSocket,
     private readonly onMessage: ConnectionMessageHandler,
   ) {

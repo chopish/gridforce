@@ -11,8 +11,8 @@ export class WanderBot extends Bot {
   private my = 0;
   private nextChangeTick = 0;
 
-  constructor(playerId: PlayerId, seed = playerId * 0x9e3779b1) {
-    super(playerId);
+  constructor(playerId: PlayerId, seed = playerId * 0x9e3779b1, name = `bot-${playerId}`) {
+    super(playerId, name);
     this.rng = mulberry32(seed);
   }
 

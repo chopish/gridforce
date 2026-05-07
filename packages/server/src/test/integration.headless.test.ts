@@ -100,7 +100,11 @@ async function runProfile(
 ): Promise<RunResult> {
   // Each profile gets its own room so they're independent. Rooms must be
   // explicitly created post-RoomManager-refactor — auto-create-on-WS is gone.
-  const roomCode = manager.createRoom({ visibility: 'unlisted' }).code;
+  // Skip the lobby phase so test clients can move immediately; we're not
+  // exercising lobby behavior here.
+  const room = manager.createRoom({ visibility: 'unlisted' });
+  room.phase = 'playing';
+  const roomCode = room.code;
   const clients: TestClient[] = [];
   for (let i = 0; i < CLIENT_COUNT; i++) {
     const c = new TestClient({
@@ -232,7 +236,9 @@ test('headless integration: 4 clients × network profiles', { timeout: TEST_TIME
 test('late-joining client can actually move', { timeout: 15_000 }, async () => {
   const { url, manager, shutdown } = await startServerOnEphemeralPort();
   try {
-    const roomCode = manager.createRoom({ visibility: 'unlisted' }).code;
+    const room = manager.createRoom({ visibility: 'unlisted' });
+    room.phase = 'playing';
+    const roomCode = room.code;
     // First, join a "warm-up" client just to let the room tick for a while.
     const warmup = new TestClient({
       url,

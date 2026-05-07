@@ -8,7 +8,12 @@ import type { PlayerId, PlayerInput } from '@gridforce/shared';
 export interface Pilot {
   readonly playerId: PlayerId;
   readonly isBot: boolean;
+  readonly name: string;
   ackInputTick: number;
+  // Lobby-phase ready flag. Bots default to true (always-ready); humans
+  // toggle via SetReady. Mirrored into PlayerState.ready on each snapshot
+  // so the client can render the roster panel from snapshot alone.
+  ready: boolean;
 
   // Pulls the input that should drive this player's tick T (or null for "no
   // input arrived"). Has the side effect of marking T as processed for the

@@ -11,8 +11,10 @@ import type { Pilot } from '../Pilot.js';
 export abstract class Bot implements Pilot {
   readonly isBot = true;
   ackInputTick = -1;
+  // Bots never block a round-start — they're "ready" by definition.
+  ready = true;
 
-  constructor(public readonly playerId: PlayerId) {}
+  constructor(public readonly playerId: PlayerId, public readonly name: string = '') {}
 
   protected abstract inputForTick(tick: number): PlayerInput | null;
 

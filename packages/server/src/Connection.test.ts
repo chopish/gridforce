@@ -34,7 +34,7 @@ function input(tick: number) {
 
 test('consumeInputForTick returns null when no input present, advances ack', () => {
   const ws = fakeWs();
-  const c = new Connection(0, ws as never, () => {});
+  const c = new Connection(0, '', ws as never, () => {});
   const r = c.consumeInputForTick(5);
   assert.equal(r, null);
   assert.equal(c.ackInputTick, 5);
@@ -44,7 +44,7 @@ test('consumeInputForTick returns null when no input present, advances ack', () 
 
 test('ackInputTick advances monotonically; bitmask reflects which prior ticks had inputs', () => {
   const ws = fakeWs();
-  const c = new Connection(0, ws as never, () => {});
+  const c = new Connection(0, '', ws as never, () => {});
   // Synthetically buffer inputs by going through the public buffering door.
   // We have to invoke the private `bufferInput` indirectly via a fake decoded
   // message — simpler: poke at the inputs map via a back door isn't allowed
@@ -80,7 +80,7 @@ test('ackInputTick advances monotonically; bitmask reflects which prior ticks ha
 
 test('inputs older than ackInputTick are dropped on receipt', () => {
   const ws = fakeWs();
-  const c = new Connection(0, ws as never, () => {});
+  const c = new Connection(0, '', ws as never, () => {});
   c.consumeInputForTick(20); // ack=20, no input
   const priv = c as unknown as { bufferInput(i: ReturnType<typeof input>): void };
   priv.bufferInput(input(15)); // stale
@@ -90,7 +90,7 @@ test('inputs older than ackInputTick are dropped on receipt', () => {
 
 test('input buffer caps to MAX_INPUT_BUFFER, dropping oldest', () => {
   const ws = fakeWs();
-  const c = new Connection(0, ws as never, () => {});
+  const c = new Connection(0, '', ws as never, () => {});
   const priv = c as unknown as { bufferInput(i: ReturnType<typeof input>): void };
   // Buffer way more than the cap
   for (let t = 1; t <= 500; t++) priv.bufferInput(input(t));

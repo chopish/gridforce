@@ -16,7 +16,9 @@ import * as PingMsg from './messages/Ping.js';
 import * as PlayerJoinedMsg from './messages/PlayerJoined.js';
 import * as PlayerLeftMsg from './messages/PlayerLeft.js';
 import * as PongMsg from './messages/Pong.js';
+import * as SetReadyMsg from './messages/SetReady.js';
 import * as SnapshotMsg from './messages/Snapshot.js';
+import * as StartGameMsg from './messages/StartGame.js';
 import * as WelcomeMsg from './messages/Welcome.js';
 import { BinaryReader, MessageType, readHeader } from './wire.js';
 
@@ -42,7 +44,9 @@ export {
   PlayerJoinedMsg,
   PlayerLeftMsg,
   PongMsg,
+  SetReadyMsg,
   SnapshotMsg,
+  StartGameMsg,
   WelcomeMsg,
 };
 
@@ -51,6 +55,8 @@ export type DecodedMessage =
   | { type: MessageType.Input; payload: ReturnType<typeof InputMsg.decode> }
   | { type: MessageType.Ping; payload: ReturnType<typeof PingMsg.decode> }
   | { type: MessageType.AddBot; payload: ReturnType<typeof AddBotMsg.decode> }
+  | { type: MessageType.SetReady; payload: ReturnType<typeof SetReadyMsg.decode> }
+  | { type: MessageType.StartGame; payload: ReturnType<typeof StartGameMsg.decode> }
   | { type: MessageType.Welcome; payload: ReturnType<typeof WelcomeMsg.decode> }
   | { type: MessageType.Snapshot; payload: ReturnType<typeof SnapshotMsg.decode> }
   | { type: MessageType.Pong; payload: ReturnType<typeof PongMsg.decode> }
@@ -87,6 +93,10 @@ export function decodeMessage(bytes: Uint8Array | ArrayBuffer): DecodedMessage {
       return { type: header.type, payload: PingMsg.decode(r) };
     case MessageType.AddBot:
       return { type: header.type, payload: AddBotMsg.decode() };
+    case MessageType.SetReady:
+      return { type: header.type, payload: SetReadyMsg.decode(r) };
+    case MessageType.StartGame:
+      return { type: header.type, payload: StartGameMsg.decode(r) };
     case MessageType.Welcome:
       return { type: header.type, payload: WelcomeMsg.decode(r) };
     case MessageType.Snapshot:

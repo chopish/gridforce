@@ -15,6 +15,7 @@ import { Renderer } from './render/Renderer.js';
 import { PredictedWorld } from './sim/PredictedWorld.js';
 import { DebugHud } from './ui/DebugHud.js';
 import { Lobby } from './ui/Lobby.js';
+import { LobbyOverlay } from './ui/LobbyOverlay.js';
 
 bootstrap().catch((err) => {
   console.error('[gridforce] fatal:', err);
@@ -52,6 +53,10 @@ async function bootstrap(): Promise<void> {
   const renderer = new Renderer();
   let hud: DebugHud | null = null;
   let codeBanner: HTMLElement | null = null;
+  const lobbyOverlay = new LobbyOverlay({
+    onToggleReady: (next) => socket.sendSetReady(next),
+    onStartGame: () => socket.sendStartGame(),
+  });
 
   socket.connect({ roomCode, name, accessKey });
 
@@ -160,7 +165,15 @@ async function bootstrap(): Promise<void> {
 
       accumulator += dt * 1000;
       while (accumulator >= SERVER_TICK_DT_MS) {
-        const sample = inputs.sample();
+        // In lobby phase, ignore the keyboard so the player doesn't visibly
+        // try to walk while the server's holding them at spawn — the
+        // resulting reconciliation tug-of-war would look like input lag.
+        // We still tick the predictor (with idle input) so input lead
+        // bookkeeping advances and a clean transition into 'playing' has
+        // accurate predictedTick.
+        const raw = inputs.sample();
+        const sample =
+          world.phase === 'lobby' ? { mx: 0, my: 0, dash: false } : raw;
         const inp = world.step({ ...sample, clientTimeMs: now });
         socket.sendInput(inp);
         accumulator -= SERVER_TICK_DT_MS;
@@ -204,6 +217,16 @@ async function bootstrap(): Promise<void> {
       const resyncing = status.state === 'open' && status.rttMs === 0;
       if (resyncEl) resyncEl.classList.toggle('visible', resyncing);
 
+      // Pre-game lobby panel. Updates only when its signature changes, so
+      // calling every frame is cheap.
+      lobbyOverlay.update({
+        phase: world.phase,
+        hostId: world.hostId,
+        localPlayerId: world.localPlayerId,
+        roomCode,
+        players: Array.from(world.players.values()),
+      });
+
       // FPS sample
       frameSamples++;
       if (now - frameSampleStart >= 500) {
@@ -233,6 +256,7 @@ async function bootstrap(): Promise<void> {
     socket.close();
     inputs.dispose();
     renderer.destroy();
+    lobbyOverlay.destroy();
   });
 
   // Set initial netsim profile to "off" so HUD has something to display.

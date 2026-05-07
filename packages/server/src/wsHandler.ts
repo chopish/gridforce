@@ -112,7 +112,11 @@ async function bootstrap(ws: WebSocket, deps: WsDeps): Promise<void> {
   // consume a use.
   if (consumedInvite) deps.invites.markUsed(consumedInvite);
 
-  const conn = new Connection(reservation.playerId, ws, (c, decoded) =>
+  // Sanitize name early so it's safe to put in PlayerState (which goes to all
+  // clients). 24 chars is the lobby UI's input limit; mirror it server-side.
+  const safeName = (hello.name ?? '').replace(/[\x00-\x1f]/g, '').slice(0, 24);
+
+  const conn = new Connection(reservation.playerId, safeName, ws, (c, decoded) =>
     handleConnectionMessage(c, decoded, room, deps.manager),
   );
 
@@ -152,6 +156,14 @@ function handleConnectionMessage(
     }
     case MessageType.AddBot: {
       room.addBot();
+      return;
+    }
+    case MessageType.SetReady: {
+      room.setReady(conn.playerId, decoded.payload.ready);
+      return;
+    }
+    case MessageType.StartGame: {
+      room.startGame(conn.playerId);
       return;
     }
     default:

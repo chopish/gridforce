@@ -17,6 +17,7 @@ import {
   type GridDef,
   type PlayerId,
   type PlayerState,
+  type RoomPhase,
 } from '@gridforce/shared';
 
 import type { Connection } from './Connection.js';
@@ -25,6 +26,7 @@ import { WanderBot } from './bots/WanderBot.js';
 
 const MAX_CATCHUP_PHYSICS_TICKS = 8;
 const SCHEDULER_GRANULARITY_MS = 4; // never sleep finer than this
+const NO_HOST: PlayerId = 0xff;
 
 // Place new players around the centre, spread on a circle so they don't spawn on top of each other.
 function spawnPosition(grid: GridDef, slot: number): { x: number; y: number } {
@@ -57,6 +59,15 @@ export class Room {
   readonly visibility: RoomVisibility;
   readonly maxPlayers: number;
   readonly createdAtMs = performance.now();
+
+  // 'lobby' on creation. Host transitions to 'playing' via StartGame, after
+  // which physics steps run. New rooms always start in lobby — Phase 0 has
+  // no concept of "rejoining a game in progress with no waiting room".
+  phase: RoomPhase = 'lobby';
+  // PlayerId of the human host, or NO_HOST (0xff) if there's no human in
+  // the room. Bots cannot be host. Promotion happens automatically: first
+  // human to join becomes host; on host leave the next human is promoted.
+  hostId: PlayerId = NO_HOST;
 
   tick = 0;
   private nextPlayerId: PlayerId = 0;
@@ -121,7 +132,8 @@ export class Room {
 
   commitJoin(conn: Connection): void {
     const id = conn.playerId;
-    this.attach(id, conn, this.makeSpawnState(id));
+    this.attach(id, conn, this.makeSpawnState(id, conn.name));
+    if (this.hostId === NO_HOST) this.hostId = id;
     this.broadcastExcept(id, PlayerJoinedMsg.encode({ player: this.states.get(id)! }));
     this.sendWelcome(conn);
   }
@@ -132,7 +144,7 @@ export class Room {
     }
     const id = this.allocPlayerId();
     const bot = new WanderBot(id);
-    this.attach(id, bot, this.makeSpawnState(id));
+    this.attach(id, bot, this.makeSpawnState(id, bot.name));
     this.broadcastAll(PlayerJoinedMsg.encode({ player: this.states.get(id)! }));
     return { ok: true, playerId: id };
   }
@@ -143,8 +155,30 @@ export class Room {
     pilot.dispose();
     this.pilots.delete(playerId);
     this.states.delete(playerId);
+    if (this.hostId === playerId) this.hostId = this.pickNewHost();
     this.broadcastAll(PlayerLeftMsg.encode({ playerId }));
     if (!this.isEmpty) this.lastNonEmptyAtMs = performance.now();
+  }
+
+  // Toggle a pilot's ready flag. The change shows up in the next snapshot.
+  // Bots are always-ready and silently ignore the call.
+  setReady(playerId: PlayerId, ready: boolean): void {
+    const pilot = this.pilots.get(playerId);
+    if (!pilot || pilot.isBot) return;
+    pilot.ready = ready;
+    const state = this.states.get(playerId);
+    if (state) this.states.set(playerId, { ...state, ready });
+  }
+
+  // Host-only: transition the room into 'playing' phase. Idempotent — calling
+  // again while already playing is a no-op. We don't require all humans ready
+  // (host may want to start with some still flipping the toggle); the host
+  // has the final word.
+  startGame(playerId: PlayerId): boolean {
+    if (this.phase === 'playing') return false;
+    if (playerId !== this.hostId) return false;
+    this.phase = 'playing';
+    return true;
   }
 
   rejectJoin(conn: Connection, code: number, message: string): void {
@@ -158,22 +192,33 @@ export class Room {
     if (!this.isEmpty) this.lastNonEmptyAtMs = performance.now();
   }
 
+  private pickNewHost(): PlayerId {
+    // Lowest-id human wins. Deterministic and simple — by the time host left,
+    // someone else has presumably been here a while.
+    let best: PlayerId = NO_HOST;
+    for (const [id, p] of this.pilots) {
+      if (p.isBot) continue;
+      if (best === NO_HOST || id < best) best = id;
+    }
+    return best;
+  }
+
   private allocPlayerId(): PlayerId {
-    // 0..255; reuse freed slots
-    for (let i = 0; i < 256; i++) {
-      const candidate = (this.nextPlayerId + i) & 0xff;
+    // 0..254; reuse freed slots. 0xff is reserved as the NO_HOST sentinel.
+    for (let i = 0; i < 255; i++) {
+      const candidate = (this.nextPlayerId + i) & 0xfe;
       if (!this.pilots.has(candidate)) {
-        this.nextPlayerId = (candidate + 1) & 0xff;
+        this.nextPlayerId = (candidate + 1) & 0xfe;
         return candidate;
       }
     }
     throw new Error('No player id slot available');
   }
 
-  private makeSpawnState(id: PlayerId): PlayerState {
+  private makeSpawnState(id: PlayerId, name: string): PlayerState {
     const slot = this.pilots.size;
     const { x, y } = spawnPosition(this.grid, slot);
-    return newPlayerState(id, x, y);
+    return newPlayerState(id, x, y, name);
   }
 
   private sendWelcome(conn: Connection): void {
@@ -183,6 +228,8 @@ export class Room {
         grid: this.grid,
         startTick: this.tick,
         serverTimeMs: Date.now(),
+        phase: this.phase,
+        hostId: this.hostId,
         players: Array.from(this.states.values()),
       }),
     );
@@ -216,11 +263,16 @@ export class Room {
     const now = performance.now();
 
     // Catch up physics with a hard cap (anti-spiral).
+    // In lobby phase we skip the actual sim step but still advance tick
+    // counters — clients use predictedTick for input lead even in lobby
+    // (so dash-on-start-frame doesn't get mis-targeted), and ackInputTick
+    // bookkeeping needs to keep moving.
     let catchups = 0;
     while (now - this.lastPhysicsAtMs >= SERVER_TICK_DT_MS && catchups < MAX_CATCHUP_PHYSICS_TICKS) {
       this.lastPhysicsAtMs += SERVER_TICK_DT_MS;
       this.tick++;
-      this.physicsStep();
+      if (this.phase === 'playing') this.physicsStep();
+      else this.lobbyStep();
       catchups++;
     }
     if (now - this.lastPhysicsAtMs > SERVER_TICK_DT_MS) {
@@ -250,6 +302,15 @@ export class Room {
     }
   }
 
+  // Lobby tick: drain inputs to keep ackInputTick advancing (so client-side
+  // RTT bookkeeping doesn't stall) but never advance the sim. Players sit
+  // at their spawn until phase flips to 'playing'.
+  private lobbyStep(): void {
+    for (const pilot of this.pilots.values()) {
+      pilot.consumeInputForTick(this.tick);
+    }
+  }
+
   private broadcastSnapshot(): void {
     const players = Array.from(this.states.values());
     const serverTimeMs = Date.now();
@@ -262,6 +323,8 @@ export class Room {
         serverTimeMs,
         ackInputTick: pilot.ackInputTick,
         inputAckBitmask: pilot.computeAckBitmask(),
+        phase: this.phase,
+        hostId: this.hostId,
         players: visible,
       });
       pilot.send(bytes);
