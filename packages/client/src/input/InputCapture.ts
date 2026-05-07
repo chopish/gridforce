@@ -30,6 +30,14 @@ export class InputCapture {
     };
   }
 
+  // Forget all currently-held keys and any latched dash. Called when the window
+  // loses focus or the tab is hidden — keyup events are unreliable across those
+  // transitions, so the safe default is "no input."
+  clear(): void {
+    this.down.clear();
+    this.dashLatched = false;
+  }
+
   sample(tick: number): PlayerInput {
     let mx = 0;
     let my = 0;

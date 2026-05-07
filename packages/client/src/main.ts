@@ -71,12 +71,27 @@ async function runGame(socket: GameSocket, welcome: ServerWelcome): Promise<void
   let lastFrame = performance.now();
   let stopped = false;
 
+  // Reset timing on tab return so the catchup loop doesn't simulate held
+  // inputs across the missed frames. Also clear pressed keys defensively —
+  // some keyup events get dropped while the window is unfocused.
+  const resetTiming = () => {
+    lastFrame = performance.now();
+    accumulator = 0;
+    input.clear();
+  };
+  const onVisibility = () => {
+    if (!document.hidden) resetTiming();
+  };
+  document.addEventListener('visibilitychange', onVisibility);
+  window.addEventListener('focus', resetTiming);
+  window.addEventListener('blur', () => input.clear());
+
   const tick = () => {
     if (stopped) return;
     const now = performance.now();
     let dt = (now - lastFrame) / 1000;
     lastFrame = now;
-    if (dt > 0.25) dt = 0.25; // clamp huge dt (tab away)
+    if (dt > 0.1) dt = 0.1; // clamp pathological frame stalls
 
     accumulator += dt;
     while (accumulator >= TICK_DT_S) {
@@ -91,10 +106,18 @@ async function runGame(socket: GameSocket, welcome: ServerWelcome): Promise<void
       socket.sendInput(sentInput);
     }
 
-    // Render
+    // Render — use sub-tick velocity extrapolation so visual motion is
+    // continuous at the refresh rate instead of stair-stepping at 30 Hz.
     const localPlayer = predicted.getLocalPlayer();
+    const renderedLocal = localPlayer
+      ? {
+          ...localPlayer,
+          x: localPlayer.x + localPlayer.vx * accumulator,
+          y: localPlayer.y + localPlayer.vy * accumulator,
+        }
+      : undefined;
     const remotes = interpolator.interpolate(welcome.playerId);
-    playerRenderer.render(localPlayer, remotes);
+    playerRenderer.render(renderedLocal, remotes);
 
     hud.tick();
     hud.update({
@@ -112,6 +135,8 @@ async function runGame(socket: GameSocket, welcome: ServerWelcome): Promise<void
   socket.onClose(() => {
     stopped = true;
     detachInput();
+    document.removeEventListener('visibilitychange', onVisibility);
+    window.removeEventListener('focus', resetTiming);
     renderer.destroy();
     hud.hide();
     showDisconnected();
