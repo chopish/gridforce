@@ -3,6 +3,8 @@ import { createServer } from 'node:http';
 import cors from 'cors';
 import express from 'express';
 
+import { SCHEMA_VERSION } from '@gridforce/shared';
+
 import { AccessKeyStore } from './AccessKeyStore.js';
 import { InviteStore } from './InviteStore.js';
 import { RoomManager } from './RoomManager.js';
@@ -14,7 +16,7 @@ const PORT = Number(process.env.PORT ?? 8080);
 const app = express();
 app.use(cors());
 app.get('/healthz', (_req, res) => {
-  res.json({ ok: true, rooms: manager.roomCount });
+  res.json({ ok: true, rooms: manager.roomCount, schemaVersion: SCHEMA_VERSION });
 });
 
 const manager = new RoomManager();
