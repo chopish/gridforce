@@ -2,7 +2,10 @@ import { Container, Graphics, Text } from 'pixi.js';
 import { PLAYER_RADIUS, type Player } from '@gridforce/shared';
 
 interface PlayerVisual {
+  // Root translates with the player; does NOT rotate.
   container: Container;
+  // Inner sub-container that DOES rotate to face movement direction.
+  bodyRoot: Container;
   body: Graphics;
   label: Text;
 }
@@ -32,7 +35,7 @@ export class PlayerRenderer {
       const v = this.getOrCreate(p, i);
       v.container.x = p.x;
       v.container.y = p.y;
-      v.container.rotation = p.facing;
+      v.bodyRoot.rotation = p.facing;
 
       // Tint dimmer if dashing for a quick visual cue
       if (p.dashTimer > 0) {
@@ -58,6 +61,7 @@ export class PlayerRenderer {
     if (v) return v;
 
     const container = new Container();
+    const bodyRoot = new Container();
     const body = new Graphics();
     const color = p.isBot ? BOT_COLOR : COLORS[index % COLORS.length]!;
     const isLocal = p.id === this.localPlayerId;
@@ -81,7 +85,8 @@ export class PlayerRenderer {
         .stroke({ color: 0xffffff, width: 1, alpha: 0.6 });
     }
 
-    container.addChild(body);
+    bodyRoot.addChild(body);
+    container.addChild(bodyRoot);
 
     const label = new Text({
       text: p.name,
@@ -98,7 +103,7 @@ export class PlayerRenderer {
     container.addChild(label);
 
     this.view.addChild(container);
-    v = { container, body, label };
+    v = { container, bodyRoot, body, label };
     this.visuals.set(p.id, v);
     return v;
   }

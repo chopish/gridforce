@@ -4,8 +4,8 @@
 
 import WebSocket from 'ws';
 
-const HTTP = 'http://localhost:8080';
-const WS = 'ws://localhost:8080';
+const HTTP = process.env.HTTP_URL ?? 'http://localhost:8080';
+const WS = process.env.WS_URL ?? 'ws://localhost:8080';
 
 type AnyMsg = { type: string; [k: string]: unknown };
 
