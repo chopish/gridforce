@@ -124,6 +124,14 @@ async function bootstrap(): Promise<void> {
     let accumulator = 0;
     let frameSamples = 0;
     let frameSampleStart = last;
+    // "resyncing…" banner is shown while rtt EWMA is unpopulated (=0). This
+    // happens at startup before the first pong and again after visibility
+    // restore (resetRttForVisibilityRestore zeros it). On bad-profile
+    // connections the recovery window is 300+ ms and the input lead hasn't
+    // adapted yet, so the user sees jank without context — the banner gives
+    // them an explicit signal that the game is reconnecting, not broken.
+    const resyncEl = document.getElementById('resync');
+    let resyncClearAt = 0;
 
     const onFrame = () => {
       const now = performance.now();
@@ -170,6 +178,14 @@ async function bootstrap(): Promise<void> {
         const cur = world.players.get(id);
         return { ...sample, dashing: !!cur && cur.dashRemainingS > 0 };
       });
+
+      // Resync banner. Show whenever rtt is unpopulated; hold for ~300 ms
+      // after it repopulates so a single outlier-filtered pong doesn't make
+      // the banner flash off-on-off in quick succession.
+      const status = socket.status();
+      const resyncing = status.state === 'open' && status.rttMs === 0;
+      if (resyncing) resyncClearAt = now + 300;
+      if (resyncEl) resyncEl.classList.toggle('visible', resyncing || now < resyncClearAt);
 
       // FPS sample
       frameSamples++;
