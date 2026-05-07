@@ -23,16 +23,18 @@ export class DebugHud {
   }
 
   update(f: HudFrame): void {
+    const lead = f.prediction.predictedTick - f.prediction.serverTick;
     const lines = [
-      `fps    ${f.fps.toFixed(0)}`,
-      `state  ${f.socket.state}`,
-      `rtt    ${f.socket.rttMs.toFixed(0)} ms`,
-      `tick   pred=${f.prediction.predictedTick}  srv=${f.prediction.serverTick}`,
-      `pend   ${f.prediction.pendingInputs}`,
-      `replay ${f.prediction.lastReplayInputs}`,
-      `err    ${f.prediction.lastPredictionErrorPx.toFixed(1)} px`,
-      `snaps  hard=${f.prediction.hardSnaps}`,
-      `interp ${f.remoteDelayMs.toFixed(0)} ms`,
+      `fps     ${f.fps.toFixed(0)}`,
+      `state   ${f.socket.state}`,
+      `rtt     ${f.socket.rttMs.toFixed(0)} ms`,
+      `tick    pred=${f.prediction.predictedTick}  srv=${f.prediction.serverTick}  lead=${lead}`,
+      `pend    ${f.prediction.pendingInputs}`,
+      `replay  ${f.prediction.lastReplayInputs}`,
+      `err     last=${f.prediction.lastPredictionErrorPx.toFixed(1)} px  max=${f.prediction.recentMaxErrorPx.toFixed(1)} px`,
+      `corr    ${f.prediction.correctionMagnitudePx.toFixed(1)} px (avg ${f.prediction.correctionEwmaPx.toFixed(1)})`,
+      `recon   smooth=${f.prediction.smoothCorrections}  hard=${f.prediction.hardSnaps}`,
+      `interp  ${f.remoteDelayMs.toFixed(0)} ms`,
     ];
     this.root.textContent = lines.join('\n');
     if (this.netSimEl) {

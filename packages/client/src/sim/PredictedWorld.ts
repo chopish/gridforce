@@ -23,8 +23,19 @@ export interface PredictionDiagnostics {
   pendingInputs: number;
   lastReplayInputs: number;
   lastPredictionErrorPx: number;
-  lastSnapAtTick: number;
+  /** Rolling max prediction error over the last ~3s. Lets the HUD show
+   *  worst-case divergence instead of just the latest sample. */
+  recentMaxErrorPx: number;
+  /** Magnitude of the visual correction currently being blended out. If this
+   *  is consistently nonzero during normal play, reconciliation is firing
+   *  every snapshot and the player is being visibly pulled around. */
+  correctionMagnitudePx: number;
+  /** EWMA of |correction| sampled each frame. Catches sustained correction
+   *  even if it's small per-frame. */
+  correctionEwmaPx: number;
+  smoothCorrections: number;
   hardSnaps: number;
+  lastSnapAtTick: number;
 }
 
 export class PredictedWorld {
@@ -60,9 +71,16 @@ export class PredictedWorld {
     pendingInputs: 0,
     lastReplayInputs: 0,
     lastPredictionErrorPx: 0,
-    lastSnapAtTick: -1,
+    recentMaxErrorPx: 0,
+    correctionMagnitudePx: 0,
+    correctionEwmaPx: 0,
+    smoothCorrections: 0,
     hardSnaps: 0,
+    lastSnapAtTick: -1,
   };
+  // Rolling-window max for recentMaxErrorPx; decays to current sample over
+  // ~3s of frames so spikes are visible briefly then fade.
+  private maxErrorDecayK = 0.005;
 
   initFromWelcome(w: WelcomePayload): void {
     this.grid = w.grid;
@@ -197,6 +215,7 @@ export class PredictedWorld {
       // visible offset (correctionX/Y) bleeds to zero over PREDICTION_BLEND_MS.
       this.correctionX += dx;
       this.correctionY += dy;
+      this.diagnostics.smoothCorrections++;
       this.diagnostics.lastSnapAtTick = snap.tick;
     } else {
       // Hard snap — likely a real bug or extreme packet loss. Log it.
@@ -206,6 +225,8 @@ export class PredictedWorld {
       this.diagnostics.lastSnapAtTick = snap.tick;
       console.warn(`[reconcile] hard snap ${err.toFixed(1)}px at tick ${snap.tick}`);
     }
+
+    if (err > this.diagnostics.recentMaxErrorPx) this.diagnostics.recentMaxErrorPx = err;
 
     this.players.set(this.localPlayerId, rebased);
     // Also reset prev for local so the next render frame interpolates from
@@ -218,14 +239,24 @@ export class PredictedWorld {
 
   // Each render frame, decay the visual correction toward zero.
   decayCorrection(dtMs: number): void {
-    if (this.correctionX === 0 && this.correctionY === 0) return;
-    const k = Math.min(1, dtMs / PREDICTION_BLEND_MS);
-    this.correctionX *= 1 - k;
-    this.correctionY *= 1 - k;
-    if (Math.abs(this.correctionX) < 0.05 && Math.abs(this.correctionY) < 0.05) {
-      this.correctionX = 0;
-      this.correctionY = 0;
+    if (this.correctionX !== 0 || this.correctionY !== 0) {
+      const k = Math.min(1, dtMs / PREDICTION_BLEND_MS);
+      this.correctionX *= 1 - k;
+      this.correctionY *= 1 - k;
+      if (Math.abs(this.correctionX) < 0.05 && Math.abs(this.correctionY) < 0.05) {
+        this.correctionX = 0;
+        this.correctionY = 0;
+      }
     }
+    const mag = Math.hypot(this.correctionX, this.correctionY);
+    this.diagnostics.correctionMagnitudePx = mag;
+    // EWMA over ~0.5s at 60fps so the HUD shows sustained pull-back even when
+    // each frame's correction is small.
+    const alpha = Math.min(1, dtMs / 500);
+    this.diagnostics.correctionEwmaPx =
+      this.diagnostics.correctionEwmaPx * (1 - alpha) + mag * alpha;
+    // Slow decay of recentMaxErrorPx so a spike fades in a few seconds.
+    this.diagnostics.recentMaxErrorPx *= 1 - this.maxErrorDecayK;
   }
 
   // Visual position of the local player given an interpolation alpha
