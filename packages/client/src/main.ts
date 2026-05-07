@@ -131,7 +131,6 @@ async function bootstrap(): Promise<void> {
     // adapted yet, so the user sees jank without context — the banner gives
     // them an explicit signal that the game is reconnecting, not broken.
     const resyncEl = document.getElementById('resync');
-    let resyncClearAt = 0;
 
     const onFrame = () => {
       const now = performance.now();
@@ -179,13 +178,11 @@ async function bootstrap(): Promise<void> {
         return { ...sample, dashing: !!cur && cur.dashRemainingS > 0 };
       });
 
-      // Resync banner. Show whenever rtt is unpopulated; hold for ~300 ms
-      // after it repopulates so a single outlier-filtered pong doesn't make
-      // the banner flash off-on-off in quick succession.
+      // Resync banner. Show whenever rtt is unpopulated, hide the moment
+      // a valid pong repopulates it — instant on/off, no fade, no hold.
       const status = socket.status();
       const resyncing = status.state === 'open' && status.rttMs === 0;
-      if (resyncing) resyncClearAt = now + 300;
-      if (resyncEl) resyncEl.classList.toggle('visible', resyncing || now < resyncClearAt);
+      if (resyncEl) resyncEl.classList.toggle('visible', resyncing);
 
       // FPS sample
       frameSamples++;
