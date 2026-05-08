@@ -7,6 +7,7 @@ import type { Channel, Transport, TransportKind, TransportState } from './Transp
 
 export class MultiTransport implements Transport {
   private msgHandlers = new Set<(bytes: Uint8Array) => void>();
+  private msgSourceHandlers = new Set<(bytes: Uint8Array, source: TransportKind) => void>();
   private openHandlers = new Set<() => void>();
   private closeHandlers = new Set<() => void>();
   private dataTransport: Transport | null = null;
@@ -26,6 +27,7 @@ export class MultiTransport implements Transport {
     });
     controlTransport.onMessage((b) => {
       for (const h of this.msgHandlers) h(b);
+      for (const h of this.msgSourceHandlers) h(b, controlTransport.kind);
     });
     controlTransport.onClose(() => {
       this.closed = true;
@@ -59,6 +61,7 @@ export class MultiTransport implements Transport {
     this.dataTransport = t;
     this.dataMessageUnsub = t.onMessage((b) => {
       for (const h of this.msgHandlers) h(b);
+      for (const h of this.msgSourceHandlers) h(b, t.kind);
     });
     this.dataCloseUnsub = t.onClose(() => {
       this.detachDataTransport();
@@ -102,6 +105,16 @@ export class MultiTransport implements Transport {
   onMessage(handler: (bytes: Uint8Array) => void): () => void {
     this.msgHandlers.add(handler);
     return () => this.msgHandlers.delete(handler);
+  }
+
+  // Like onMessage, but the handler also receives the kind of the
+  // underlying transport that delivered the bytes. Used by NetSim to
+  // apply transport-aware impairment (TCP-HOL on WS, UDP on RTC).
+  onMessageWithSource(
+    handler: (bytes: Uint8Array, source: TransportKind) => void,
+  ): () => void {
+    this.msgSourceHandlers.add(handler);
+    return () => this.msgSourceHandlers.delete(handler);
   }
 
   onClose(handler: () => void): () => void {

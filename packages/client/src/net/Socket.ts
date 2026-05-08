@@ -67,8 +67,14 @@ export class Socket {
   private pendingPings = new Map<number, number>(); // nonce -> clientTimeMs
   private rttMs = 0;
   private serverTimeOffsetMs = 0;
-  private outSim: NetSim | null = null;
-  private inSim: NetSim | null = null;
+  // NetSim is split per (direction × transport) so impairment is
+  // transport-aware. Reliable always uses WS (tcp-hol). Unreliable uses
+  // RTC (udp) when the data channel is open, else WS (tcp-hol). Lets us
+  // measure WebRTC's HOL-blocking advantage in the dev simulator.
+  private outSimWs: NetSim | null = null;
+  private outSimRtc: NetSim | null = null;
+  private inSimWs: NetSim | null = null;
+  private inSimRtc: NetSim | null = null;
   private simName = 'off';
   private state: SocketStatus['state'] = 'closed';
   private name = '';
@@ -112,7 +118,7 @@ export class Socket {
       this.outboxBeforeOpen = [];
       this.startPings();
     });
-    mux.onMessage((bytes) => this.deliverIncoming(bytes));
+    mux.onMessageWithSource((bytes, source) => this.deliverIncoming(bytes, source));
     mux.onClose(() => {
       this.state = 'closed';
       this.stopPings();
@@ -172,12 +178,16 @@ export class Socket {
   setNetSimProfile(name: string, profile: NetSimProfile): void {
     this.simName = name;
     if (profile.owDelayMs === 0 && profile.jitterMs === 0 && profile.lossPct === 0) {
-      this.outSim = null;
-      this.inSim = null;
+      this.outSimWs = null;
+      this.outSimRtc = null;
+      this.inSimWs = null;
+      this.inSimRtc = null;
       return;
     }
-    this.outSim = new NetSim(profile);
-    this.inSim = new NetSim(profile);
+    this.outSimWs = new NetSim(profile, 'tcp-hol');
+    this.outSimRtc = new NetSim(profile, 'udp');
+    this.inSimWs = new NetSim(profile, 'tcp-hol');
+    this.inSimRtc = new NetSim(profile, 'udp');
   }
 
   cycleNetSimProfile(): string {
@@ -230,20 +240,25 @@ export class Socket {
       this.outboxBeforeOpen.push({ bytes, channel });
       return;
     }
-    if (this.outSim) {
-      this.outSim.passThrough(bytes, (b) => this.transport!.send(b, channel));
+    // Outbound NetSim mirrors the routing inside MultiTransport: unreliable
+    // takes RTC when the data channel is open, otherwise falls back to WS.
+    const usingRtc = channel === 'unreliable' && this.transport.kind === 'webrtc';
+    const sim = usingRtc ? this.outSimRtc : this.outSimWs;
+    if (sim) {
+      sim.passThrough(bytes, (b) => this.transport!.send(b, channel));
     } else {
       this.transport.send(bytes, channel);
     }
   }
 
-  private deliverIncoming(bytes: Uint8Array): void {
+  private deliverIncoming(bytes: Uint8Array, source: TransportKind): void {
     // Welcome / Error bypass NetSim. Tag is the first byte of the LE u16 header.
     const isHandshake =
       bytes.byteLength >= 2 &&
       (bytes[0] === MessageType.Welcome || bytes[0] === MessageType.Error);
-    if (this.inSim && !isHandshake) {
-      this.inSim.passThrough(bytes, (b) => this.dispatch(b));
+    const sim = source === 'webrtc' ? this.inSimRtc : this.inSimWs;
+    if (sim && !isHandshake) {
+      sim.passThrough(bytes, (b) => this.dispatch(b));
     } else {
       this.dispatch(bytes);
     }
