@@ -15,8 +15,6 @@ export interface CreateRoomBody {
   name?: string;
   visibility: 'public' | 'unlisted' | 'private';
   maxPlayers?: number;
-  inviteMaxUses?: number;
-  inviteTtlMs?: number;
 }
 
 export interface CreateRoomResult {
@@ -24,7 +22,16 @@ export interface CreateRoomResult {
   name: string;
   visibility: 'public' | 'unlisted' | 'private';
   maxPlayers: number;
-  invite: { token: string; maxUses: number; expiresAtMs: number } | null;
+  // Present only for private rooms — single-use access key the host uses to
+  // join the room they just created without redeeming an invite they don't
+  // have yet.
+  hostAccessKey: string | null;
+}
+
+export interface InviteResult {
+  token: string;
+  maxUses: number;
+  expiresAtMs: number;
 }
 
 export interface AccessResult {
@@ -43,11 +50,16 @@ export class LobbyApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${SERVER_HTTP}${path}`, {
-    ...init,
-    headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) },
-  });
+async function request<T>(
+  path: string,
+  init?: RequestInit & { bearer?: string },
+): Promise<T> {
+  const headers: Record<string, string> = {
+    'content-type': 'application/json',
+    ...(init?.headers as Record<string, string> | undefined),
+  };
+  if (init?.bearer) headers.authorization = `Bearer ${init.bearer}`;
+  const res = await fetch(`${SERVER_HTTP}${path}`, { ...init, headers });
   if (!res.ok) {
     let code = `http_${res.status}`;
     try {
@@ -73,4 +85,17 @@ export function requestAccess(code: string): Promise<AccessResult> {
 
 export function redeemInvite(token: string): Promise<AccessResult> {
   return request(`/invites/${encodeURIComponent(token)}/redeem`, { method: 'POST' });
+}
+
+// Host-gated. Pass the bearer sessionKey (received in Welcome).
+export function createInvite(
+  code: string,
+  bearer: string,
+  body: { maxUses?: number; ttlMs?: number } = {},
+): Promise<InviteResult> {
+  return request(`/rooms/${encodeURIComponent(code)}/invites`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+    bearer,
+  });
 }

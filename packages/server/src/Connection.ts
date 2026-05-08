@@ -30,6 +30,7 @@ export class Connection implements Pilot {
   constructor(
     public readonly playerId: PlayerId,
     public readonly name: string,
+    public readonly sessionKey: string,
     private readonly ws: WebSocket,
     private readonly onMessage: ConnectionMessageHandler,
   ) {

@@ -65,6 +65,11 @@ export interface WelcomePayload {
   phase: RoomPhase;
   hostId: PlayerId;
   players: PlayerState[];
+  // Per-connection bearer token. The client stores it and sends as
+  // `Authorization: Bearer <sessionKey>` on host-gated HTTP endpoints
+  // (invite creation, future room settings). Sent only inside this
+  // player's Welcome — never broadcast to others.
+  sessionKey: string;
 }
 
 // Lobby controls. Sent by the client.

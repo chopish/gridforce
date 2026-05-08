@@ -8,6 +8,7 @@ import { SCHEMA_VERSION } from '@gridforce/shared';
 import { AccessKeyStore } from './AccessKeyStore.js';
 import { InviteStore } from './InviteStore.js';
 import { RoomManager } from './RoomManager.js';
+import { SessionStore } from './SessionStore.js';
 import { attachHttpRoutes } from './httpRoutes.js';
 import { attachWsHandler } from './wsHandler.js';
 
@@ -22,14 +23,15 @@ app.get('/healthz', (_req, res) => {
 const manager = new RoomManager();
 const invites = new InviteStore();
 const accessKeys = new AccessKeyStore();
+const sessions = new SessionStore();
 manager.start();
 invites.start();
 accessKeys.start();
 
-attachHttpRoutes(app, { manager, invites, accessKeys });
+attachHttpRoutes(app, { manager, invites, accessKeys, sessions });
 
 const httpServer = createServer(app);
-attachWsHandler(httpServer, { manager, invites, accessKeys });
+attachWsHandler(httpServer, { manager, invites, accessKeys, sessions });
 
 httpServer.listen(PORT, () => {
   console.log(`[gridforce] http+ws on :${PORT} (ws path /ws)`);

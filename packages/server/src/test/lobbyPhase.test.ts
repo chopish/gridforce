@@ -8,6 +8,7 @@ import express from 'express';
 import { AccessKeyStore } from '../AccessKeyStore.js';
 import { InviteStore } from '../InviteStore.js';
 import { RoomManager } from '../RoomManager.js';
+import { SessionStore } from '../SessionStore.js';
 import { attachHttpRoutes } from '../httpRoutes.js';
 import { attachWsHandler } from '../wsHandler.js';
 import { TestClient } from './TestClient.js';
@@ -24,12 +25,13 @@ async function startHarness(): Promise<Harness> {
   const manager = new RoomManager();
   const invites = new InviteStore();
   const accessKeys = new AccessKeyStore();
+  const sessions = new SessionStore();
   manager.start();
   invites.start();
   accessKeys.start();
-  attachHttpRoutes(app, { manager, invites, accessKeys });
+  attachHttpRoutes(app, { manager, invites, accessKeys, sessions });
   const httpServer: HttpServer = createServer(app);
-  attachWsHandler(httpServer, { manager, invites, accessKeys });
+  attachWsHandler(httpServer, { manager, invites, accessKeys, sessions });
   await new Promise<void>((r) => httpServer.listen(0, () => r()));
   const port = (httpServer.address() as AddressInfo).port;
   return {

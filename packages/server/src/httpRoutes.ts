@@ -4,7 +4,8 @@ import express from 'express';
 import type { AccessKeyStore } from './AccessKeyStore.js';
 import type { InviteStore } from './InviteStore.js';
 import type { RoomManager } from './RoomManager.js';
-import type { RoomVisibility } from './Room.js';
+import type { Room, RoomVisibility } from './Room.js';
+import type { SessionStore } from './SessionStore.js';
 
 // HTTP surface for lobby management, mounted under /api so it sits cleanly
 // behind the same nginx /api/ proxy block as everything else dynamic.
@@ -13,16 +14,19 @@ import type { RoomVisibility } from './Room.js';
 //   POST /api/rooms                         create a new room
 //   GET  /api/rooms/:code                   peek at an existing room (visibility-aware)
 //   POST /api/rooms/:code/access            issue an access key for a public/unlisted room
+//   POST /api/rooms/:code/invites           HOST-ONLY: create a fresh invite token
 //   POST /api/invites/:token/redeem         redeem an invite, get back room code + access key
 //
 // Access keys are short-lived bearer tokens consumed by the WS handshake.
-// Anything written here is intentionally minimal — auth lands in a later
-// pass when accounts ship.
+// Session keys (issued at WS commitJoin, returned in Welcome) authenticate
+// host-gated endpoints via Authorization: Bearer <sessionKey>. There is no
+// account auth yet — the (sessionKey, room.hostId) pair is the only check.
 
 export interface HttpDeps {
   manager: RoomManager;
   invites: InviteStore;
   accessKeys: AccessKeyStore;
+  sessions: SessionStore;
 }
 
 const VALID_VISIBILITIES: ReadonlySet<RoomVisibility> = new Set([
@@ -38,8 +42,39 @@ export function attachHttpRoutes(app: Express, deps: HttpDeps): void {
   app.use('/api', router);
 }
 
-function attachLobbyRoutes(app: express.Router, deps: HttpDeps): void {
+// Pull a session record from the Authorization header, validating that it
+// resolves to a real session for the room being targeted. Returns null and
+// writes the appropriate 401/403 on mismatch — caller should just `return`
+// after a null result.
+function requireHostSession(
+  req: Request,
+  res: Response,
+  deps: HttpDeps,
+  room: Room,
+): { ok: true } | { ok: false } {
+  const auth = req.header('authorization') ?? '';
+  const m = /^Bearer\s+(.+)$/i.exec(auth);
+  if (!m) {
+    res.status(401).json({ error: 'unauthenticated' });
+    return { ok: false };
+  }
+  const session = deps.sessions.get(m[1]!);
+  if (!session) {
+    res.status(401).json({ error: 'session_invalid' });
+    return { ok: false };
+  }
+  if (session.roomCode !== room.code) {
+    res.status(403).json({ error: 'wrong_room' });
+    return { ok: false };
+  }
+  if (session.playerId !== room.hostId) {
+    res.status(403).json({ error: 'host_only' });
+    return { ok: false };
+  }
+  return { ok: true };
+}
 
+function attachLobbyRoutes(app: express.Router, deps: HttpDeps): void {
   app.get('/rooms', (_req, res) => {
     res.json({ rooms: deps.manager.listPublic() });
   });
@@ -53,10 +88,6 @@ function attachLobbyRoutes(app: express.Router, deps: HttpDeps): void {
     const name = typeof body.name === 'string' ? body.name.slice(0, 32) : '';
     const maxPlayers =
       typeof body.maxPlayers === 'number' ? Math.floor(body.maxPlayers) : undefined;
-    const inviteMaxUses =
-      typeof body.inviteMaxUses === 'number' ? Math.floor(body.inviteMaxUses) : undefined;
-    const inviteTtlMs =
-      typeof body.inviteTtlMs === 'number' ? Math.floor(body.inviteTtlMs) : undefined;
 
     const createOpts: { name: string; visibility: RoomVisibility; maxPlayers?: number } = {
       name,
@@ -64,35 +95,28 @@ function attachLobbyRoutes(app: express.Router, deps: HttpDeps): void {
     };
     if (maxPlayers !== undefined) createOpts.maxPlayers = maxPlayers;
     const room = deps.manager.createRoom(createOpts);
-    let invite: { token: string; maxUses: number; expiresAtMs: number } | null = null;
+
+    // For private rooms, hand the creator a one-shot access key so they can
+    // walk through the WS handshake without needing to redeem an invite they
+    // haven't generated yet. Guest invites are created later from inside the
+    // lobby via POST /api/rooms/:code/invites once the host is connected.
+    let hostAccessKey: string | null = null;
     if (visibility === 'private') {
-      const inviteOpts: { roomCode: string; maxUses?: number; ttlMs?: number } = {
-        roomCode: room.code,
-      };
-      if (inviteMaxUses !== undefined) inviteOpts.maxUses = inviteMaxUses;
-      if (inviteTtlMs !== undefined) inviteOpts.ttlMs = inviteTtlMs;
-      const rec = deps.invites.create(inviteOpts);
-      invite = {
-        token: rec.token,
-        maxUses: rec.maxUses,
-        expiresAtMs: rec.expiresAtMs,
-      };
+      hostAccessKey = deps.accessKeys.issue({ roomCode: room.code });
     }
+
     res.json({
       code: room.code,
       name: room.name,
       visibility: room.visibility,
       maxPlayers: room.maxPlayers,
-      invite,
+      hostAccessKey,
     });
   });
 
   app.get('/rooms/:code', (req, res) => {
     const room = deps.manager.findRoom(req.params.code);
     if (!room) return res.status(404).json({ error: 'not_found' });
-    // Don't expose private rooms by code lookup at all — they should appear
-    // not-found to anyone without an invite token. Unlisted is fine to peek
-    // at if you guessed the code (its whole purpose).
     if (room.visibility === 'private') return res.status(404).json({ error: 'not_found' });
     return res.json({
       code: room.code,
@@ -107,7 +131,6 @@ function attachLobbyRoutes(app: express.Router, deps: HttpDeps): void {
     const room = deps.manager.findRoom(req.params.code);
     if (!room) return res.status(404).json({ error: 'not_found' });
     if (room.visibility === 'private') {
-      // Private rooms must come through /invites/:token/redeem instead.
       return res.status(403).json({ error: 'requires_invite' });
     }
     if (room.playerCount >= room.maxPlayers) {
@@ -115,6 +138,32 @@ function attachLobbyRoutes(app: express.Router, deps: HttpDeps): void {
     }
     const accessKey = deps.accessKeys.issue({ roomCode: room.code });
     return res.json({ code: room.code, accessKey });
+  });
+
+  // Host-gated invite creation. The host generates fresh invite links from
+  // inside the lobby — no longer baked into room creation. Each call mints
+  // a brand-new token; defaults are sane for a single friend (1 use, 7d).
+  app.post('/rooms/:code/invites', (req, res) => {
+    const room = deps.manager.findRoom(req.params.code);
+    if (!room) return res.status(404).json({ error: 'not_found' });
+    const auth = requireHostSession(req, res, deps, room);
+    if (!auth.ok) return undefined;
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const maxUses =
+      typeof body.maxUses === 'number' ? Math.floor(body.maxUses) : undefined;
+    const ttlMs = typeof body.ttlMs === 'number' ? Math.floor(body.ttlMs) : undefined;
+    const opts: { roomCode: string; maxUses?: number; ttlMs?: number } = {
+      roomCode: room.code,
+    };
+    if (maxUses !== undefined) opts.maxUses = maxUses;
+    if (ttlMs !== undefined) opts.ttlMs = ttlMs;
+    const rec = deps.invites.create(opts);
+    return res.json({
+      token: rec.token,
+      maxUses: rec.maxUses,
+      expiresAtMs: rec.expiresAtMs,
+    });
   });
 
   app.post('/invites/:token/redeem', (req: Request, res: Response) => {

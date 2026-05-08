@@ -10,7 +10,6 @@
 import {
   createRoom,
   listPublicRooms,
-  redeemInvite,
   requestAccess,
   LobbyApiError,
   type AccessResult,
@@ -289,66 +288,20 @@ export class Lobby {
       if (roomName) body.name = roomName;
       createRoom(body)
         .then((room) => {
-          if (room.invite) {
-            this.renderInviteShare(room.code, room.invite.token, room.name);
-          } else {
-            return this.beginJoin(room.code);
+          // For private rooms the server hands back a one-shot host access
+          // key inline so we can walk straight into the lobby. Guest invites
+          // are minted later from inside the LobbyOverlay (host-only).
+          if (room.visibility === 'private' && room.hostAccessKey) {
+            this.completeJoin({ code: room.code, accessKey: room.hostAccessKey });
+            return;
           }
-          return undefined;
+          return this.beginJoin(room.code);
         })
         .catch((e: unknown) => {
           this.setFormDisabled(false);
           err.textContent = describeError(e);
         });
     };
-  }
-
-  // After creating a private room, show the invite URL the host can share,
-  // plus an "Enter room" button so the host can join immediately.
-  private renderInviteShare(code: string, token: string, roomName: string): void {
-    this.resetRoot();
-    this.title('Room created');
-
-    const sub = document.createElement('div');
-    sub.style.opacity = '0.7';
-    sub.style.textAlign = 'center';
-    sub.textContent = roomName ? `${roomName} (${code})` : `code: ${code}`;
-    this.root.appendChild(sub);
-
-    const inviteUrl = `${window.location.origin}${window.location.pathname}?inv=${token}`;
-    const urlBox = document.createElement('input');
-    urlBox.value = inviteUrl;
-    urlBox.readOnly = true;
-    urlBox.style.minWidth = '24rem';
-    urlBox.style.fontFamily = "'SF Mono', Consolas, monospace";
-    urlBox.style.fontSize = '0.85rem';
-    urlBox.onclick = () => urlBox.select();
-    this.root.appendChild(urlBox);
-
-    const copyBtn = this.button('Copy invite link', () => {
-      void navigator.clipboard?.writeText(inviteUrl);
-      copyBtn.textContent = 'Copied!';
-      setTimeout(() => (copyBtn.textContent = 'Copy invite link'), 1200);
-    });
-    this.root.appendChild(copyBtn);
-
-    const err = this.errLine();
-    this.root.appendChild(err);
-
-    // Host enters via /access (private rooms accept the host through the same
-    // /invites/:token/redeem path as everyone else — burns one use).
-    this.root.appendChild(
-      this.button('Enter room', () => {
-        err.textContent = '';
-        this.setFormDisabled(true);
-        redeemInvite(token)
-          .then((access) => this.completeJoin(access))
-          .catch((e: unknown) => {
-            this.setFormDisabled(false);
-            err.textContent = describeError(e);
-          });
-      }),
-    );
   }
 
   // Auto-join landing when the page is opened with ?inv=<token>.

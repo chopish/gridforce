@@ -230,6 +230,7 @@ export class Room {
         serverTimeMs: Date.now(),
         phase: this.phase,
         hostId: this.hostId,
+        sessionKey: conn.sessionKey,
         players: Array.from(this.states.values()),
       }),
     );

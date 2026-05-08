@@ -8,6 +8,7 @@ import express from 'express';
 import { AccessKeyStore } from '../AccessKeyStore.js';
 import { InviteStore } from '../InviteStore.js';
 import { RoomManager } from '../RoomManager.js';
+import { SessionStore } from '../SessionStore.js';
 import { attachHttpRoutes } from '../httpRoutes.js';
 import { attachWsHandler } from '../wsHandler.js';
 import { TestClient } from './TestClient.js';
@@ -26,12 +27,13 @@ async function startHarness(): Promise<Harness> {
   const manager = new RoomManager();
   const invites = new InviteStore();
   const accessKeys = new AccessKeyStore();
+  const sessions = new SessionStore();
   manager.start();
   invites.start();
   accessKeys.start();
-  attachHttpRoutes(app, { manager, invites, accessKeys });
+  attachHttpRoutes(app, { manager, invites, accessKeys, sessions });
   const httpServer: HttpServer = createServer(app);
-  attachWsHandler(httpServer, { manager, invites, accessKeys });
+  attachWsHandler(httpServer, { manager, invites, accessKeys, sessions });
   await new Promise<void>((r) => httpServer.listen(0, () => r()));
   const port = (httpServer.address() as AddressInfo).port;
   return {
@@ -49,14 +51,39 @@ async function startHarness(): Promise<Harness> {
   };
 }
 
-async function postJson<T>(url: string, body?: unknown): Promise<{ status: number; body: T }> {
-  const init: RequestInit = {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-  };
+async function postJson<T>(
+  url: string,
+  body?: unknown,
+  bearer?: string,
+): Promise<{ status: number; body: T }> {
+  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  if (bearer) headers.authorization = `Bearer ${bearer}`;
+  const init: RequestInit = { method: 'POST', headers };
   if (body !== undefined) init.body = JSON.stringify(body);
   const res = await fetch(url, init);
   return { status: res.status, body: (await res.json().catch(() => ({}))) as T };
+}
+
+// Create a private room, connect a host TestClient (using the inline host
+// access key), and return everything tests need to drive invite operations.
+async function startHostedPrivateRoom(h: Harness, roomName = 'host-room'): Promise<{
+  code: string;
+  host: TestClient;
+}> {
+  const { body: created } = await postJson<{ code: string; hostAccessKey: string }>(
+    `${h.url}/api/rooms`,
+    { visibility: 'private', name: roomName },
+  );
+  const host = new TestClient({
+    url: h.wsUrl,
+    roomCode: created.code,
+    name: 'host',
+    accessKey: created.hostAccessKey,
+    drive: () => ({ mx: 0, my: 0, dash: false }),
+  });
+  await host.connect();
+  // Welcome has been processed by now, so sessionKey is populated.
+  return { code: created.code, host };
 }
 
 async function getJson<T>(url: string): Promise<{ status: number; body: T }> {
@@ -111,66 +138,153 @@ test('access endpoint refuses private rooms', async () => {
   }
 });
 
-test('invite redemption issues a one-shot access key', async () => {
+test('host can create invites from inside the lobby', async () => {
   const h = await startHarness();
+  let host: TestClient | null = null;
   try {
-    const { body: created } = await postJson<{
-      code: string;
-      invite: { token: string };
-    }>(`${h.url}/api/rooms`, { visibility: 'private', inviteMaxUses: 2 });
+    const seat = await startHostedPrivateRoom(h);
+    host = seat.host;
+    assert.ok(seat.host.sessionKey, 'host received a session key from Welcome');
 
-    const first = await postJson<{ code: string; accessKey: string }>(
-      `${h.url}/api/invites/${created.invite.token}/redeem`,
+    const inv = await postJson<{ token: string; maxUses: number }>(
+      `${h.url}/api/rooms/${seat.code}/invites`,
+      { maxUses: 2 },
+      seat.host.sessionKey,
     );
-    assert.equal(first.status, 200);
-    assert.equal(first.body.code, created.code);
-    assert.ok(first.body.accessKey);
+    assert.equal(inv.status, 200);
+    assert.ok(inv.body.token);
+    assert.equal(inv.body.maxUses, 2);
 
-    // Second redemption while invite still has uses left should also work,
-    // but the first key cannot be reused.
-    const second = await postJson<{ accessKey: string }>(
-      `${h.url}/api/invites/${created.invite.token}/redeem`,
+    // Each call mints a fresh token.
+    const inv2 = await postJson<{ token: string }>(
+      `${h.url}/api/rooms/${seat.code}/invites`,
+      {},
+      seat.host.sessionKey,
     );
-    assert.equal(second.status, 200);
-    assert.notEqual(first.body.accessKey, second.body.accessKey);
+    assert.equal(inv2.status, 200);
+    assert.notEqual(inv.body.token, inv2.body.token);
   } finally {
+    host?.stop();
+    await h.shutdown();
+  }
+});
+
+test('non-host session cannot create invites', async () => {
+  const h = await startHarness();
+  let host: TestClient | null = null;
+  let guest: TestClient | null = null;
+  try {
+    const seat = await startHostedPrivateRoom(h);
+    host = seat.host;
+
+    // Have the host mint a guest invite, then redeem + connect a guest.
+    const inv = await postJson<{ token: string }>(
+      `${h.url}/api/rooms/${seat.code}/invites`,
+      { maxUses: 1 },
+      seat.host.sessionKey,
+    );
+    const redeemed = await postJson<{ accessKey: string; code: string }>(
+      `${h.url}/api/invites/${inv.body.token}/redeem`,
+    );
+    guest = new TestClient({
+      url: h.wsUrl,
+      roomCode: redeemed.body.code,
+      name: 'guest',
+      accessKey: redeemed.body.accessKey,
+      drive: () => ({ mx: 0, my: 0, dash: false }),
+    });
+    await guest.connect();
+    assert.ok(guest.sessionKey);
+    assert.notEqual(guest.sessionKey, seat.host.sessionKey);
+
+    // Guest tries to mint an invite — should be rejected as not-host.
+    const denied = await postJson<{ error: string }>(
+      `${h.url}/api/rooms/${seat.code}/invites`,
+      {},
+      guest.sessionKey,
+    );
+    assert.equal(denied.status, 403);
+    assert.equal(denied.body.error, 'host_only');
+
+    // Anonymous (no Authorization header) is unauthenticated.
+    const anon = await postJson<{ error: string }>(
+      `${h.url}/api/rooms/${seat.code}/invites`,
+      {},
+    );
+    assert.equal(anon.status, 401);
+  } finally {
+    guest?.stop();
+    host?.stop();
+    await h.shutdown();
+  }
+});
+
+test('a session key for one room cannot mint invites for another', async () => {
+  const h = await startHarness();
+  let hostA: TestClient | null = null;
+  try {
+    const seatA = await startHostedPrivateRoom(h, 'A');
+    hostA = seatA.host;
+    // A second private room — owned by no one yet from a session standpoint.
+    const { body: roomB } = await postJson<{ code: string }>(
+      `${h.url}/api/rooms`,
+      { visibility: 'private', name: 'B' },
+    );
+    const cross = await postJson<{ error: string }>(
+      `${h.url}/api/rooms/${roomB.code}/invites`,
+      {},
+      seatA.host.sessionKey,
+    );
+    assert.equal(cross.status, 403);
+    assert.equal(cross.body.error, 'wrong_room');
+  } finally {
+    hostA?.stop();
     await h.shutdown();
   }
 });
 
 test('invite usesRemaining decrements on actual WS join', async () => {
   const h = await startHarness();
+  let host: TestClient | null = null;
+  let guest: TestClient | null = null;
   try {
-    const { body: created } = await postJson<{
-      code: string;
-      invite: { token: string };
-    }>(`${h.url}/api/rooms`, { visibility: 'private', inviteMaxUses: 1 });
+    const seat = await startHostedPrivateRoom(h);
+    host = seat.host;
+
+    const inv = await postJson<{ token: string }>(
+      `${h.url}/api/rooms/${seat.code}/invites`,
+      { maxUses: 1 },
+      seat.host.sessionKey,
+    );
 
     // Redeem once: produces key, but invite hasn't been "burned" yet.
-    const first = await postJson<{ code: string; accessKey: string }>(
-      `${h.url}/api/invites/${created.invite.token}/redeem`,
+    const redeemed = await postJson<{ code: string; accessKey: string }>(
+      `${h.url}/api/invites/${inv.body.token}/redeem`,
     );
-    assert.equal(first.status, 200);
+    assert.equal(redeemed.status, 200);
 
     // Connect with that key — this is where the invite use is committed.
-    const client = new TestClient({
+    guest = new TestClient({
       url: h.wsUrl,
-      roomCode: first.body.code,
-      name: 'a',
-      accessKey: first.body.accessKey,
+      roomCode: redeemed.body.code,
+      name: 'guest',
+      accessKey: redeemed.body.accessKey,
       drive: () => ({ mx: 0, my: 0, dash: false }),
     });
-    await client.connect();
-    client.start();
+    await guest.connect();
+    guest.start();
     await new Promise<void>((r) => setTimeout(r, 200));
-    client.stop();
+    guest.stop();
+    guest = null;
 
     // Now another redemption attempt should fail — invite was consumed.
     const second = await postJson<{ error: string }>(
-      `${h.url}/api/invites/${created.invite.token}/redeem`,
+      `${h.url}/api/invites/${inv.body.token}/redeem`,
     );
     assert.equal(second.status, 404);
   } finally {
+    guest?.stop();
+    host?.stop();
     await h.shutdown();
   }
 });

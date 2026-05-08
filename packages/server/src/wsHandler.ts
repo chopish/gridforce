@@ -17,6 +17,7 @@ import { Connection } from './Connection.js';
 import type { InviteStore } from './InviteStore.js';
 import type { RoomManager } from './RoomManager.js';
 import type { Room } from './Room.js';
+import type { SessionStore } from './SessionStore.js';
 
 const HELLO_TIMEOUT_MS = 5_000;
 
@@ -24,6 +25,7 @@ export interface WsDeps {
   manager: RoomManager;
   invites: InviteStore;
   accessKeys: AccessKeyStore;
+  sessions: SessionStore;
 }
 
 export function attachWsHandler(server: HttpServer, deps: WsDeps): WebSocketServer {
@@ -116,12 +118,22 @@ async function bootstrap(ws: WebSocket, deps: WsDeps): Promise<void> {
   // clients). 24 chars is the lobby UI's input limit; mirror it server-side.
   const safeName = (hello.name ?? '').replace(/[\x00-\x1f]/g, '').slice(0, 24);
 
-  const conn = new Connection(reservation.playerId, safeName, ws, (c, decoded) =>
+  // Issue a per-connection session key. The Welcome carries it, and the
+  // client uses it to authenticate host-gated HTTP calls (invite creation,
+  // future room settings) so we can verify "is this caller actually the
+  // host of room X?" without an account system.
+  const sessionKey = deps.sessions.issue({
+    roomCode: room.code,
+    playerId: reservation.playerId,
+  });
+
+  const conn = new Connection(reservation.playerId, safeName, sessionKey, ws, (c, decoded) =>
     handleConnectionMessage(c, decoded, room, deps.manager),
   );
 
   // If the socket dies before we commit, undo nothing — we never registered.
   ws.on('close', () => {
+    deps.sessions.revoke(sessionKey);
     room.remove(reservation.playerId);
   });
 

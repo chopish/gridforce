@@ -24,6 +24,9 @@ export interface SocketStatus {
   rttMs: number;
   serverTimeOffsetMs: number; // EWMA of (serverTime - clientTime - owDelay)
   lastSimProfileName: string;
+  // Set when Welcome lands. Used by the LobbyOverlay to authenticate
+  // host-gated HTTP calls (invite creation).
+  sessionKey: string;
 }
 
 const PING_INTERVAL_MS = 1000;
@@ -45,6 +48,7 @@ export class Socket {
   private name = '';
   private roomCode = '';
   private accessKey = '';
+  private sessionKey = '';
   private outboxBeforeOpen: Uint8Array[] = [];
 
   connect(opts: { roomCode: string; name: string; accessKey?: string }): void {
@@ -158,6 +162,7 @@ export class Socket {
       rttMs: this.rttMs,
       serverTimeOffsetMs: this.serverTimeOffsetMs,
       lastSimProfileName: this.simName,
+      sessionKey: this.sessionKey,
     };
   }
 
@@ -227,6 +232,9 @@ export class Socket {
     } catch (err) {
       console.warn('[socket] decode error:', err);
       return;
+    }
+    if (decoded.type === MessageType.Welcome) {
+      this.sessionKey = decoded.payload.sessionKey;
     }
     if (decoded.type === MessageType.Pong) {
       const sent = this.pendingPings.get(decoded.payload.nonce);

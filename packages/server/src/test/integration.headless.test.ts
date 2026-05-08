@@ -16,6 +16,7 @@ import {
 import { AccessKeyStore } from '../AccessKeyStore.js';
 import { InviteStore } from '../InviteStore.js';
 import { RoomManager } from '../RoomManager.js';
+import { SessionStore } from '../SessionStore.js';
 import { attachWsHandler } from '../wsHandler.js';
 import { TestClient } from './TestClient.js';
 
@@ -71,10 +72,11 @@ async function startServerOnEphemeralPort(): Promise<{
   const manager = new RoomManager();
   const invites = new InviteStore();
   const accessKeys = new AccessKeyStore();
+  const sessions = new SessionStore();
   manager.start();
   invites.start();
   accessKeys.start();
-  attachWsHandler(httpServer, { manager, invites, accessKeys });
+  attachWsHandler(httpServer, { manager, invites, accessKeys, sessions });
 
   await new Promise<void>((resolve) => httpServer.listen(0, () => resolve()));
   const addr = httpServer.address() as AddressInfo;

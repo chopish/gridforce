@@ -9,7 +9,9 @@
 //   v4: pre-game lobby phase — Snapshot/Welcome carry phase+hostId,
 //       PlayerEncoder gained name string + READY flag bit, new SetReady
 //       and StartGame client→server messages
-export const SCHEMA_VERSION = 4;
+//   v5: Welcome carries sessionKey so the host's client can authenticate
+//       /api/rooms/:code/invites and other host-gated endpoints
+export const SCHEMA_VERSION = 5;
 
 // Tick rates
 export const SERVER_TICK_HZ = 30;

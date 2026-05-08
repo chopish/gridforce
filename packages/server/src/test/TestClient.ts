@@ -59,6 +59,9 @@ export class TestClient {
   private inSim: NetSim | null = null;
   private interval: ReturnType<typeof setInterval> | null = null;
   private welcomeWaiters: ((ok: boolean) => void)[] = [];
+  // Captured from Welcome. Tests use this to authenticate host-gated
+  // HTTP calls (invite creation).
+  sessionKey = '';
   private stats: TestClientStats = {
     bytesReceived: 0,
     snapshotsReceived: 0,
@@ -174,6 +177,7 @@ export class TestClient {
       case MessageType.Welcome: {
         this.localId = m.payload.yourPlayerId;
         this.grid = m.payload.grid;
+        this.sessionKey = m.payload.sessionKey;
         // Match the browser client: predict ahead of server so inputs land
         // in the future at the server.
         this.predictedTick = m.payload.startTick + INPUT_LEAD_TICKS;

@@ -8,7 +8,7 @@ import {
   type PlayerState,
 } from '@gridforce/shared';
 
-import { redeemInvite } from './api.js';
+import { createInvite, redeemInvite, LobbyApiError } from './api.js';
 import { InputCapture } from './input/InputCapture.js';
 import { Socket } from './net/Socket.js';
 import { Renderer } from './render/Renderer.js';
@@ -56,6 +56,20 @@ async function bootstrap(): Promise<void> {
   const lobbyOverlay = new LobbyOverlay({
     onToggleReady: (next) => socket.sendSetReady(next),
     onStartGame: () => socket.sendStartGame(),
+    onGenerateInvite: async () => {
+      const sessionKey = socket.status().sessionKey;
+      if (!sessionKey) throw new Error('not connected yet');
+      try {
+        const inv = await createInvite(roomCode, sessionKey, { maxUses: 1 });
+        return `${window.location.origin}${window.location.pathname}?inv=${inv.token}`;
+      } catch (e) {
+        if (e instanceof LobbyApiError) {
+          if (e.code === 'host_only') throw new Error('only the host can create invites');
+          throw new Error(`server: ${e.code}`);
+        }
+        throw e;
+      }
+    },
   });
 
   socket.connect({ roomCode, name, accessKey });

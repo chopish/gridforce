@@ -11,6 +11,9 @@ import type { PlayerId, PlayerState } from '@gridforce/shared';
 export interface LobbyOverlayCallbacks {
   onToggleReady(next: boolean): void;
   onStartGame(): void;
+  // Host clicked Generate Invite. Returns the shareable URL so the panel
+  // can show + copy it. Throws on error; caller surfaces the message.
+  onGenerateInvite(): Promise<string>;
 }
 
 export interface LobbyOverlayState {
@@ -27,6 +30,12 @@ export class LobbyOverlay {
   private list: HTMLDivElement;
   private readyBtn: HTMLButtonElement;
   private startBtn: HTMLButtonElement;
+  private inviteBtn: HTMLButtonElement;
+  private invitePanel: HTMLDivElement;
+  private inviteUrlInput: HTMLInputElement;
+  private inviteCopyBtn: HTMLButtonElement;
+  private inviteCloseBtn: HTMLButtonElement;
+  private inviteError: HTMLDivElement;
   private hint: HTMLDivElement;
 
   // Cache last-rendered values so we don't thrash the DOM every frame.
@@ -59,6 +68,37 @@ export class LobbyOverlay {
     this.startBtn.textContent = 'Start Game';
     this.root.appendChild(this.startBtn);
 
+    this.inviteBtn = document.createElement('button');
+    this.inviteBtn.className = 'pl-invite';
+    this.inviteBtn.textContent = 'Generate invite link';
+    this.root.appendChild(this.inviteBtn);
+
+    this.invitePanel = document.createElement('div');
+    this.invitePanel.className = 'pl-invite-panel';
+    this.invitePanel.style.display = 'none';
+    const inviteHelp = document.createElement('div');
+    inviteHelp.className = 'pl-hint';
+    inviteHelp.textContent = 'share this single-use link:';
+    this.invitePanel.appendChild(inviteHelp);
+    this.inviteUrlInput = document.createElement('input');
+    this.inviteUrlInput.readOnly = true;
+    this.inviteUrlInput.className = 'pl-invite-url';
+    this.inviteUrlInput.onclick = () => this.inviteUrlInput.select();
+    this.invitePanel.appendChild(this.inviteUrlInput);
+    const inviteRow = document.createElement('div');
+    inviteRow.className = 'pl-invite-row';
+    this.inviteCopyBtn = document.createElement('button');
+    this.inviteCopyBtn.textContent = 'Copy';
+    this.inviteCloseBtn = document.createElement('button');
+    this.inviteCloseBtn.textContent = 'Close';
+    inviteRow.appendChild(this.inviteCopyBtn);
+    inviteRow.appendChild(this.inviteCloseBtn);
+    this.invitePanel.appendChild(inviteRow);
+    this.inviteError = document.createElement('div');
+    this.inviteError.className = 'pl-err';
+    this.invitePanel.appendChild(this.inviteError);
+    this.root.appendChild(this.invitePanel);
+
     document.body.appendChild(this.root);
     this.root.style.display = 'none';
 
@@ -71,6 +111,34 @@ export class LobbyOverlay {
     });
     this.startBtn.addEventListener('click', () => {
       this.cb.onStartGame();
+    });
+    this.inviteBtn.addEventListener('click', () => {
+      this.inviteError.textContent = '';
+      this.inviteUrlInput.value = 'generating…';
+      this.invitePanel.style.display = '';
+      this.inviteCopyBtn.disabled = true;
+      this.cb
+        .onGenerateInvite()
+        .then((url) => {
+          this.inviteUrlInput.value = url;
+          this.inviteCopyBtn.disabled = false;
+          this.inviteUrlInput.focus();
+          this.inviteUrlInput.select();
+        })
+        .catch((e: unknown) => {
+          this.inviteUrlInput.value = '';
+          this.inviteError.textContent = e instanceof Error ? e.message : String(e);
+        });
+    });
+    this.inviteCopyBtn.addEventListener('click', () => {
+      const url = this.inviteUrlInput.value;
+      if (!url) return;
+      void navigator.clipboard?.writeText(url);
+      this.inviteCopyBtn.textContent = 'Copied!';
+      setTimeout(() => (this.inviteCopyBtn.textContent = 'Copy'), 1200);
+    });
+    this.inviteCloseBtn.addEventListener('click', () => {
+      this.invitePanel.style.display = 'none';
     });
   }
 
@@ -125,6 +193,8 @@ export class LobbyOverlay {
     this.readyBtn.dataset.local = localReady ? '1' : '0';
 
     this.startBtn.style.display = isHost ? '' : 'none';
+    this.inviteBtn.style.display = isHost ? '' : 'none';
+    if (!isHost) this.invitePanel.style.display = 'none';
     // Start is enabled when the host is ready themselves AND any non-host
     // human is also ready. With only the host present, we still allow start
     // (solo-co-op lobby of 1) — they're effectively ready-with-themselves.
@@ -217,6 +287,37 @@ export class LobbyOverlay {
       #pregame-lobby .pl-start { color: #ffcc6e; border-color: #6e5326; }
       #pregame-lobby .pl-start:hover:not(:disabled) {
         background: #3a2a1e; border-color: #ffcc6e;
+      }
+      #pregame-lobby .pl-invite { font-size: 0.85rem; color: #cfd6e0; }
+      #pregame-lobby .pl-invite-panel {
+        margin-top: 0.4rem;
+        padding: 0.6rem;
+        border: 1px solid #2a2a40;
+        border-radius: 6px;
+        background: rgba(0, 0, 0, 0.35);
+        display: flex;
+        flex-direction: column;
+        gap: 0.4rem;
+      }
+      #pregame-lobby .pl-invite-url {
+        width: 100%;
+        font-family: 'SF Mono', Consolas, monospace;
+        font-size: 0.8rem;
+        background: #0d0d18;
+        color: #cfd6e0;
+        border: 1px solid #303048;
+        border-radius: 4px;
+        padding: 0.4rem 0.5rem;
+        box-sizing: border-box;
+      }
+      #pregame-lobby .pl-invite-row {
+        display: flex; gap: 0.4rem;
+      }
+      #pregame-lobby .pl-invite-row button { flex: 1; padding: 0.35rem 0.6rem; }
+      #pregame-lobby .pl-err {
+        font-size: 0.8rem;
+        color: #ff6e6e;
+        min-height: 0;
       }
     `;
     document.head.appendChild(style);

@@ -70,6 +70,7 @@ test('Welcome round-trip', () => {
     serverTimeMs: 1700000000123.5,
     phase: 'lobby' as const,
     hostId: 0,
+    sessionKey: 'sess-abc123',
     players: [
       { ...newPlayerState(0, 100, 100, 'alice'), facing: 1.234, stateSeq: 7 },
       { ...newPlayerState(3, 200, 250, 'bob'), facing: -0.5, stateSeq: 9, ready: true },
@@ -84,6 +85,7 @@ test('Welcome round-trip', () => {
   assert.equal(w.serverTimeMs, 1700000000123.5);
   assert.equal(w.phase, 'lobby');
   assert.equal(w.hostId, 0);
+  assert.equal(w.sessionKey, 'sess-abc123');
   assert.equal(w.players.length, 2);
   assert.equal(w.players[0]!.name, 'alice');
   assert.equal(w.players[0]!.ready, false);
