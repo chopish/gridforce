@@ -1,7 +1,8 @@
 import { SCHEMA_VERSION } from '../../constants.js';
 import type { PlayerState, WelcomePayload } from '../../types.js';
 import { PlayerEncoder } from '../entities/PlayerEncoder.js';
-import { BinaryReader, BinaryWriter, MessageType, writeHeader } from '../wire.js';
+import type { BinaryReader } from '../wire.js';
+import { BinaryWriter, MessageType, writeHeader } from '../wire.js';
 
 export function encode(p: WelcomePayload): Uint8Array {
   const w = new BinaryWriter(128);
@@ -38,7 +39,7 @@ export function decode(r: BinaryReader): WelcomePayload {
   const sessionKey = r.string();
   const count = r.varuint();
   const players: PlayerState[] = [];
-  for (let i = 0; i < count; i++) players.push(PlayerEncoder.decode(r) as PlayerState);
+  for (let i = 0; i < count; i++) players.push(PlayerEncoder.decode(r));
   return {
     yourPlayerId,
     grid: { cols, rows, panelSize },

@@ -81,7 +81,10 @@ export type DecodedMessage =
   | { type: MessageType.PlayerLeft; payload: ReturnType<typeof PlayerLeftMsg.decode> };
 
 export class SchemaMismatchError extends Error {
-  constructor(public readonly expected: number, public readonly got: number) {
+  constructor(
+    public readonly expected: number,
+    public readonly got: number,
+  ) {
     super(`Schema version mismatch: expected ${expected}, got ${got}`);
     this.name = 'SchemaMismatchError';
   }

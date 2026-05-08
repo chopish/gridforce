@@ -1,6 +1,7 @@
 import { SCHEMA_VERSION } from '../../constants.js';
 import type { PingPayload } from '../../types.js';
-import { BinaryReader, BinaryWriter, MessageType, writeHeader } from '../wire.js';
+import type { BinaryReader } from '../wire.js';
+import { BinaryWriter, MessageType, writeHeader } from '../wire.js';
 
 export function encode(p: PingPayload): Uint8Array {
   const w = new BinaryWriter(16);

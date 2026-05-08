@@ -29,11 +29,7 @@ export interface HttpDeps {
   sessions: SessionStore;
 }
 
-const VALID_VISIBILITIES: ReadonlySet<RoomVisibility> = new Set([
-  'public',
-  'unlisted',
-  'private',
-]);
+const VALID_VISIBILITIES: ReadonlySet<RoomVisibility> = new Set(['public', 'unlisted', 'private']);
 
 export function attachHttpRoutes(app: Express, deps: HttpDeps): void {
   const router = express.Router();
@@ -82,7 +78,8 @@ function attachLobbyRoutes(app: express.Router, deps: HttpDeps): void {
   app.post('/rooms', (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const visibility =
-      typeof body.visibility === 'string' && VALID_VISIBILITIES.has(body.visibility as RoomVisibility)
+      typeof body.visibility === 'string' &&
+      VALID_VISIBILITIES.has(body.visibility as RoomVisibility)
         ? (body.visibility as RoomVisibility)
         : 'unlisted';
     const name = typeof body.name === 'string' ? body.name.slice(0, 32) : '';
@@ -150,8 +147,7 @@ function attachLobbyRoutes(app: express.Router, deps: HttpDeps): void {
     if (!auth.ok) return undefined;
 
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const maxUses =
-      typeof body.maxUses === 'number' ? Math.floor(body.maxUses) : undefined;
+    const maxUses = typeof body.maxUses === 'number' ? Math.floor(body.maxUses) : undefined;
     const ttlMs = typeof body.ttlMs === 'number' ? Math.floor(body.ttlMs) : undefined;
     const opts: { roomCode: string; maxUses?: number; ttlMs?: number } = {
       roomCode: room.code,

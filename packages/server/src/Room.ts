@@ -104,7 +104,10 @@ export class Room {
   private running = false;
   private lastNonEmptyAtMs = performance.now();
 
-  constructor(public readonly code: string, opts: RoomOptions = {}) {
+  constructor(
+    public readonly code: string,
+    opts: RoomOptions = {},
+  ) {
     this.name = (opts.name ?? '').slice(0, 32);
     this.visibility = opts.visibility ?? 'unlisted';
     const cap = opts.maxPlayers ?? MAX_PLAYERS_PER_ROOM;
@@ -344,7 +347,10 @@ export class Room {
     // (so dash-on-start-frame doesn't get mis-targeted), and ackInputTick
     // bookkeeping needs to keep moving.
     let catchups = 0;
-    while (now - this.lastPhysicsAtMs >= SERVER_TICK_DT_MS && catchups < MAX_CATCHUP_PHYSICS_TICKS) {
+    while (
+      now - this.lastPhysicsAtMs >= SERVER_TICK_DT_MS &&
+      catchups < MAX_CATCHUP_PHYSICS_TICKS
+    ) {
       this.lastPhysicsAtMs += SERVER_TICK_DT_MS;
       this.tick++;
       if (this.phase === 'playing') this.physicsStep();

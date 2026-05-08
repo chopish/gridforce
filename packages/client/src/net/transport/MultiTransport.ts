@@ -94,7 +94,8 @@ export class MultiTransport implements Transport {
 
   onOpen(handler: () => void): () => void {
     if (this.controlTransport.state === 'open') {
-      Promise.resolve().then(() => {
+      // Microtask-defer so caller can finish subscribing before fire.
+      void Promise.resolve().then(() => {
         if (!this.closed) handler();
       });
     }
@@ -110,9 +111,7 @@ export class MultiTransport implements Transport {
   // Like onMessage, but the handler also receives the kind of the
   // underlying transport that delivered the bytes. Used by NetSim to
   // apply transport-aware impairment (TCP-HOL on WS, UDP on RTC).
-  onMessageWithSource(
-    handler: (bytes: Uint8Array, source: TransportKind) => void,
-  ): () => void {
+  onMessageWithSource(handler: (bytes: Uint8Array, source: TransportKind) => void): () => void {
     this.msgSourceHandlers.add(handler);
     return () => this.msgSourceHandlers.delete(handler);
   }

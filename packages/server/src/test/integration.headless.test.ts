@@ -167,68 +167,72 @@ function makeDrive(seed: number): (tick: number) => { mx: number; my: number; da
   };
 }
 
-test('headless integration: 4 clients × network profiles', { timeout: TEST_TIMEOUT_MS }, async () => {
-  const { url, manager, shutdown } = await startServerOnEphemeralPort();
-  try {
-    const results: RunResult[] = [];
-    for (const { name, profile } of PROFILES) {
-      const r = await runProfile(url, manager, name, profile);
-      results.push(r);
-    }
-
-    // Pretty print results so the test log is useful even when it passes.
-    for (const r of results) {
-      const perClient = r.perClient
-        .map(
-          (c, i) =>
-            `c${i}: ${c.bytesPerSec.toFixed(0)} B/s, ${c.snapshotsReceived} snaps, max-div ${c.maxLocalDivergencePx.toFixed(1)}px`,
-        )
-        .join('\n    ');
-      console.log(`[${r.profileName}] ${r.durationMs.toFixed(0)}ms\n    ${perClient}`);
-    }
-
-    // Hard assertions per profile.
-    //
-    // Divergence semantics: with smooth correction, divergence < HARD_SNAP_PX
-    // (30px) is invisible — it gets blended out over PREDICTION_BLEND_MS.
-    // Above that, the design intentionally hard-snaps as a backstop. On good
-    // networks this should never happen; on bad networks (10% loss, 300ms
-    // RTT) one lost input adds ~7px of compounding divergence so occasional
-    // hard-snap bursts are expected and acceptable. We assert strictly on
-    // good profiles and loosely on bad ones.
-    const STRICT_PROFILES = new Set(['off', 'lan', 'good', 'fair']);
-    const HARD_DEGRADED_BUDGET_PX = 120; // ~16 missed-input ticks; well past any reasonable burst.
-    for (const r of results) {
-      for (const [i, c] of r.perClient.entries()) {
-        assert.ok(
-          c.snapshotsReceived > 0,
-          `[${r.profileName}] client ${i} received no snapshots`,
-        );
+test(
+  'headless integration: 4 clients × network profiles',
+  { timeout: TEST_TIMEOUT_MS },
+  async () => {
+    const { url, manager, shutdown } = await startServerOnEphemeralPort();
+    try {
+      const results: RunResult[] = [];
+      for (const { name, profile } of PROFILES) {
+        const r = await runProfile(url, manager, name, profile);
+        results.push(r);
       }
 
-      const isStrict = STRICT_PROFILES.has(r.profileName);
-      const divBudget = isStrict ? PREDICTION_HARD_SNAP_PX : HARD_DEGRADED_BUDGET_PX;
-      for (const [i, c] of r.perClient.entries()) {
-        assert.ok(
-          c.maxLocalDivergencePx <= divBudget,
-          `[${r.profileName}] client ${i} divergence ${c.maxLocalDivergencePx.toFixed(1)}px exceeds budget ${divBudget}px`,
-        );
+      // Pretty print results so the test log is useful even when it passes.
+      for (const r of results) {
+        const perClient = r.perClient
+          .map(
+            (c, i) =>
+              `c${i}: ${c.bytesPerSec.toFixed(0)} B/s, ${c.snapshotsReceived} snaps, max-div ${c.maxLocalDivergencePx.toFixed(1)}px`,
+          )
+          .join('\n    ');
+        console.log(`[${r.profileName}] ${r.durationMs.toFixed(0)}ms\n    ${perClient}`);
       }
 
-      // Bandwidth budget: 8 KB/s downstream per client. Loosen by 2× on
-      // short tests because per-frame overhead dominates with few snapshots.
-      const budget = LONG ? BANDWIDTH_BUDGET_BYTES_PER_SEC : BANDWIDTH_BUDGET_BYTES_PER_SEC * 2;
-      for (const [i, c] of r.perClient.entries()) {
-        assert.ok(
-          c.bytesPerSec <= budget,
-          `[${r.profileName}] client ${i} bandwidth ${c.bytesPerSec.toFixed(0)} B/s exceeds budget ${budget} B/s`,
-        );
+      // Hard assertions per profile.
+      //
+      // Divergence semantics: with smooth correction, divergence < HARD_SNAP_PX
+      // (30px) is invisible — it gets blended out over PREDICTION_BLEND_MS.
+      // Above that, the design intentionally hard-snaps as a backstop. On good
+      // networks this should never happen; on bad networks (10% loss, 300ms
+      // RTT) one lost input adds ~7px of compounding divergence so occasional
+      // hard-snap bursts are expected and acceptable. We assert strictly on
+      // good profiles and loosely on bad ones.
+      const STRICT_PROFILES = new Set(['off', 'lan', 'good', 'fair']);
+      const HARD_DEGRADED_BUDGET_PX = 120; // ~16 missed-input ticks; well past any reasonable burst.
+      for (const r of results) {
+        for (const [i, c] of r.perClient.entries()) {
+          assert.ok(
+            c.snapshotsReceived > 0,
+            `[${r.profileName}] client ${i} received no snapshots`,
+          );
+        }
+
+        const isStrict = STRICT_PROFILES.has(r.profileName);
+        const divBudget = isStrict ? PREDICTION_HARD_SNAP_PX : HARD_DEGRADED_BUDGET_PX;
+        for (const [i, c] of r.perClient.entries()) {
+          assert.ok(
+            c.maxLocalDivergencePx <= divBudget,
+            `[${r.profileName}] client ${i} divergence ${c.maxLocalDivergencePx.toFixed(1)}px exceeds budget ${divBudget}px`,
+          );
+        }
+
+        // Bandwidth budget: 8 KB/s downstream per client. Loosen by 2× on
+        // short tests because per-frame overhead dominates with few snapshots.
+        const budget = LONG ? BANDWIDTH_BUDGET_BYTES_PER_SEC : BANDWIDTH_BUDGET_BYTES_PER_SEC * 2;
+        for (const [i, c] of r.perClient.entries()) {
+          assert.ok(
+            c.bytesPerSec <= budget,
+            `[${r.profileName}] client ${i} bandwidth ${c.bytesPerSec.toFixed(0)} B/s exceeds budget ${budget} B/s`,
+          );
+        }
       }
+    } finally {
+      await shutdown();
     }
-  } finally {
-    await shutdown();
-  }
-});
+  },
+);
 
 // Regression test for tethered-spawn bug: a client joining a room that has
 // already been ticking for a while must still be able to move. The fix is

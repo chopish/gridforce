@@ -66,7 +66,10 @@ async function postJson<T>(
 
 // Create a private room, connect a host TestClient (using the inline host
 // access key), and return everything tests need to drive invite operations.
-async function startHostedPrivateRoom(h: Harness, roomName = 'host-room'): Promise<{
+async function startHostedPrivateRoom(
+  h: Harness,
+  roomName = 'host-room',
+): Promise<{
   code: string;
   host: TestClient;
 }> {
@@ -207,10 +210,7 @@ test('non-host session cannot create invites', async () => {
     assert.equal(denied.body.error, 'host_only');
 
     // Anonymous (no Authorization header) is unauthenticated.
-    const anon = await postJson<{ error: string }>(
-      `${h.url}/api/rooms/${seat.code}/invites`,
-      {},
-    );
+    const anon = await postJson<{ error: string }>(`${h.url}/api/rooms/${seat.code}/invites`, {});
     assert.equal(anon.status, 401);
   } finally {
     guest?.stop();
@@ -226,10 +226,10 @@ test('a session key for one room cannot mint invites for another', async () => {
     const seatA = await startHostedPrivateRoom(h, 'A');
     hostA = seatA.host;
     // A second private room — owned by no one yet from a session standpoint.
-    const { body: roomB } = await postJson<{ code: string }>(
-      `${h.url}/api/rooms`,
-      { visibility: 'private', name: 'B' },
-    );
+    const { body: roomB } = await postJson<{ code: string }>(`${h.url}/api/rooms`, {
+      visibility: 'private',
+      name: 'B',
+    });
     const cross = await postJson<{ error: string }>(
       `${h.url}/api/rooms/${roomB.code}/invites`,
       {},
@@ -314,7 +314,7 @@ test('private room rejects WS join without access key', async () => {
     client.stop();
     const room = h.manager.findRoom(created.code);
     assert.ok(room);
-    assert.equal(room!.playerCount, 0, 'private room rejected the keyless join');
+    assert.equal(room.playerCount, 0, 'private room rejected the keyless join');
     void connectFailed;
   } finally {
     await h.shutdown();

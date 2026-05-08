@@ -46,11 +46,7 @@ export class InviteStore {
     this.invites.clear();
   }
 
-  create(opts: {
-    roomCode: string;
-    maxUses?: number;
-    ttlMs?: number;
-  }): InviteRecord {
+  create(opts: { roomCode: string; maxUses?: number; ttlMs?: number }): InviteRecord {
     const token = mintToken();
     const maxUses = Math.max(1, opts.maxUses ?? 1);
     const ttl = Math.max(60_000, opts.ttlMs ?? DEFAULT_TTL_MS);

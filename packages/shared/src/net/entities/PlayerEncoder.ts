@@ -1,5 +1,6 @@
 import type { PlayerState } from '../../types.js';
-import { BinaryReader, BinaryWriter, EntityType } from '../wire.js';
+import type { BinaryReader, BinaryWriter } from '../wire.js';
+import { EntityType } from '../wire.js';
 
 // Player flags packed into one byte, header for forward extension.
 export const PLAYER_FLAG_DASHING = 1 << 0;

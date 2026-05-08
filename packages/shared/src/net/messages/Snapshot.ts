@@ -1,7 +1,8 @@
 import { SCHEMA_VERSION } from '../../constants.js';
 import type { NpcState, PlayerState, SnapshotPayload } from '../../types.js';
 import { getEntityEncoder, registerEntityEncoder } from '../entities/registry.js';
-import { BinaryReader, BinaryWriter, EntityType, MessageType, writeHeader } from '../wire.js';
+import type { BinaryReader } from '../wire.js';
+import { BinaryWriter, EntityType, MessageType, writeHeader } from '../wire.js';
 
 // Ensure registry is initialised whenever Snapshot is loaded.
 // (Safe / idempotent — Map.set with same key is a no-op.)
@@ -67,6 +68,9 @@ export function decode(r: BinaryReader): SnapshotPayload {
   const players: PlayerState[] = [];
   const npcs: NpcState[] = [];
   for (let g = 0; g < groupCount; g++) {
+    // u8 is a number on the wire; comparing against the EntityType enum
+    // is safe because the enum is numeric and getEntityEncoder is the
+    // gatekeeper for unknown values.
     const entityType = r.u8();
     const count = r.varuint();
     const enc = getEntityEncoder(entityType);
@@ -76,6 +80,7 @@ export function decode(r: BinaryReader): SnapshotPayload {
       // as a hard error; we'll add a size prefix per group when we add types.
       throw new RangeError(`Unknown entity type ${entityType} in snapshot`);
     }
+    /* eslint-disable @typescript-eslint/no-unsafe-enum-comparison */
     if (entityType === EntityType.Player) {
       for (let i = 0; i < count; i++) players.push(enc.decode(r) as PlayerState);
     } else if (entityType === EntityType.NPC) {
@@ -83,6 +88,7 @@ export function decode(r: BinaryReader): SnapshotPayload {
     } else {
       for (let i = 0; i < count; i++) enc.decode(r);
     }
+    /* eslint-enable @typescript-eslint/no-unsafe-enum-comparison */
   }
 
   return {

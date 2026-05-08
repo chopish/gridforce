@@ -276,9 +276,11 @@ export class Lobby {
     this.root.appendChild(this.button('Back', () => this.renderHome()));
 
     createBtn.onclick = () => {
-      const visibility = (
-        visRow.querySelector('input[name="vis"]:checked') as HTMLInputElement | null
-      )?.value as 'public' | 'unlisted' | 'private' | undefined;
+      const visibility = visRow.querySelector('input[name="vis"]:checked')?.value as
+        | 'public'
+        | 'unlisted'
+        | 'private'
+        | undefined;
       if (!visibility) return;
       const maxPlayers = Math.max(1, Math.min(4, Number(maxInput.value) || 4));
       err.textContent = '';

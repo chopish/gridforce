@@ -81,7 +81,7 @@ test('Welcome round-trip', () => {
   };
   const decoded = decodeMessage(WelcomeMsg.encode(payload));
   assert.equal(decoded.type, MessageType.Welcome);
-  const w = decoded.payload as ReturnType<typeof WelcomeMsg.decode>;
+  const w = decoded.payload;
   assert.equal(w.yourPlayerId, 3);
   assert.deepEqual(w.grid, payload.grid);
   assert.equal(w.startTick, 1234);
@@ -114,7 +114,7 @@ test('Input round-trip with single input', () => {
   const enc = InputMsg.encode([input]);
   const dec = decodeMessage(enc);
   assert.equal(dec.type, MessageType.Input);
-  const list = dec.payload as ReturnType<typeof InputMsg.decode>;
+  const list = dec.payload;
   assert.equal(list.length, 1);
   const p = list[0]!;
   assert.equal(p.tick, input.tick);
@@ -132,7 +132,7 @@ test('Input round-trip with redundancy window (3 ticks)', () => {
   ];
   const dec = decodeMessage(InputMsg.encode(inputs));
   assert.equal(dec.type, MessageType.Input);
-  const list = dec.payload as ReturnType<typeof InputMsg.decode>;
+  const list = dec.payload;
   assert.equal(list.length, 3);
   for (let i = 0; i < 3; i++) {
     assert.equal(list[i]!.tick, inputs[i]!.tick);
@@ -183,7 +183,7 @@ test('Snapshot round-trip with multiple players, ack bitmask, dash timers', () =
   };
   const dec = decodeMessage(SnapshotMsg.encode(payload));
   assert.equal(dec.type, MessageType.Snapshot);
-  const s = dec.payload as ReturnType<typeof SnapshotMsg.decode>;
+  const s = dec.payload;
   assert.equal(s.tick, payload.tick);
   assert.equal(s.serverTimeMs, payload.serverTimeMs);
   assert.equal(s.ackInputTick, payload.ackInputTick);
@@ -220,7 +220,7 @@ test('Snapshot handles zero players', () => {
     }),
   );
   assert.equal(dec.type, MessageType.Snapshot);
-  const s = dec.payload as ReturnType<typeof SnapshotMsg.decode>;
+  const s = dec.payload;
   assert.equal(s.players.length, 0);
   assert.equal(s.npcs.length, 0);
   assert.equal(s.ackInputTick, -1);
@@ -249,7 +249,7 @@ test('Snapshot encodes NPC group when npcs are present', () => {
     }),
   );
   assert.equal(dec.type, MessageType.Snapshot);
-  const s = dec.payload as ReturnType<typeof SnapshotMsg.decode>;
+  const s = dec.payload;
   assert.equal(s.npcs.length, 3);
   for (let i = 0; i < npcs.length; i++) {
     const a = s.npcs[i]!;
@@ -301,7 +301,7 @@ test('PlayerJoined / PlayerLeft round-trip', () => {
   const j = { player: { ...newPlayerState(2, 100, 200), facing: 0.7, stateSeq: 5 } };
   const dj = decodeMessage(PlayerJoinedMsg.encode(j));
   assert.equal(dj.type, MessageType.PlayerJoined);
-  assert.equal((dj.payload as ReturnType<typeof PlayerJoinedMsg.decode>).player.id, 2);
+  assert.equal(dj.payload.player.id, 2);
 
   const l = { playerId: 2 };
   const dl = decodeMessage(PlayerLeftMsg.encode(l));
@@ -317,9 +317,6 @@ test('AddBot round-trip is empty', () => {
 
 test('Schema mismatch is detected via decodeMessage', () => {
   // Hand-craft a header with a bogus schema version.
-  const bad = new Uint8Array([
-    /*type*/ 0x82, 0x00,
-    /*schema*/ 0xff, 0x00,
-  ]);
+  const bad = new Uint8Array([/*type*/ 0x82, 0x00, /*schema*/ 0xff, 0x00]);
   assert.throws(() => decodeMessage(bad), SchemaMismatchError);
 });

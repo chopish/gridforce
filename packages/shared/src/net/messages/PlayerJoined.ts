@@ -1,7 +1,8 @@
 import { SCHEMA_VERSION } from '../../constants.js';
 import type { PlayerJoinedPayload, PlayerState } from '../../types.js';
 import { PlayerEncoder } from '../entities/PlayerEncoder.js';
-import { BinaryReader, BinaryWriter, MessageType, writeHeader } from '../wire.js';
+import type { BinaryReader } from '../wire.js';
+import { BinaryWriter, MessageType, writeHeader } from '../wire.js';
 
 export function encode(p: PlayerJoinedPayload): Uint8Array {
   const w = new BinaryWriter(32);
@@ -11,6 +12,6 @@ export function encode(p: PlayerJoinedPayload): Uint8Array {
 }
 
 export function decode(r: BinaryReader): PlayerJoinedPayload {
-  const player = PlayerEncoder.decode(r) as PlayerState;
+  const player = PlayerEncoder.decode(r);
   return { player };
 }

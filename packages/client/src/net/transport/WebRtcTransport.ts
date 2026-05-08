@@ -46,7 +46,7 @@ export class WebRtcTransport implements Transport {
     dc.onerror = () => {
       this._state = 'error';
     };
-    dc.onmessage = (e) => {
+    dc.onmessage = (e: MessageEvent<ArrayBuffer | string>) => {
       if (this.closed) return;
       const data = e.data;
       if (data instanceof ArrayBuffer) {
@@ -78,7 +78,7 @@ export class WebRtcTransport implements Transport {
   onOpen(handler: () => void): () => void {
     if (this._state === 'open') {
       // Already open — fire on next tick so caller can subscribe normally.
-      Promise.resolve().then(() => {
+      void Promise.resolve().then(() => {
         if (!this.closed) handler();
       });
     }

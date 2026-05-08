@@ -1,9 +1,4 @@
-import {
-  PeerConnection,
-  type DataChannel,
-  type IceServer,
-  type RtcConfig,
-} from 'node-datachannel';
+import { PeerConnection, type DataChannel, type IceServer, type RtcConfig } from 'node-datachannel';
 
 import type { Transport } from './Transport.js';
 import { WebRtcTransport } from './WebRtcTransport.js';

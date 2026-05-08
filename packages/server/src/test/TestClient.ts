@@ -100,7 +100,8 @@ export class TestClient {
     });
     ws.on('message', (data: Buffer | ArrayBuffer | Buffer[]) => {
       let bytes: Uint8Array;
-      if (data instanceof Buffer) bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+      if (data instanceof Buffer)
+        bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
       else if (data instanceof ArrayBuffer) bytes = new Uint8Array(data);
       else if (Array.isArray(data)) {
         const total = data.reduce((n, b) => n + b.byteLength, 0);
@@ -122,7 +123,8 @@ export class TestClient {
       const t = setTimeout(() => reject(new Error('welcome timeout')), 5000);
       this.welcomeWaiters.push((ok) => {
         clearTimeout(t);
-        ok ? resolve() : reject(new Error('welcome failed'));
+        if (ok) resolve();
+        else reject(new Error('welcome failed'));
       });
     });
   }
@@ -161,8 +163,7 @@ export class TestClient {
     // simulator only models in-game gameplay traffic. Welcome's message-type
     // tag is the first byte of the header (little-endian u16).
     const isHandshake =
-      bytes.byteLength >= 2 &&
-      (bytes[0] === MessageType.Welcome || bytes[0] === MessageType.Error);
+      bytes.byteLength >= 2 && (bytes[0] === MessageType.Welcome || bytes[0] === MessageType.Error);
     if (this.inSim && !isHandshake) this.inSim.passThrough(bytes, (b) => this.handle(b));
     else this.handle(bytes);
   }

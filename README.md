@@ -8,15 +8,15 @@ This repo is the foundation; gameplay design lands on top of it.
 
 ## Status
 
-| Layer | State |
-| ----- | ----- |
-| Authoritative server + client prediction + reconciliation | Working |
-| Snapshot interpolation (remotes + NPCs, adaptive jitter buffer) | Working |
-| Binary wire format, schema-versioned | v9 |
-| Transport: WebSocket + WebRTC DataChannel with fallback | Working |
-| Lobby: public / unlisted / private + host-managed invites + ready-up | Working |
-| Wandering NPCs (server-side, for stress tests; not gameplay) | Working |
-| Combat, panels, electrodes, scoring | Not started |
+| Layer                                                                | State       |
+| -------------------------------------------------------------------- | ----------- |
+| Authoritative server + client prediction + reconciliation            | Working     |
+| Snapshot interpolation (remotes + NPCs, adaptive jitter buffer)      | Working     |
+| Binary wire format, schema-versioned                                 | v9          |
+| Transport: WebSocket + WebRTC DataChannel with fallback              | Working     |
+| Lobby: public / unlisted / private + host-managed invites + ready-up | Working     |
+| Wandering NPCs (server-side, for stress tests; not gameplay)         | Working     |
+| Combat, panels, electrodes, scoring                                  | Not started |
 
 ## Quick start
 
@@ -35,12 +35,12 @@ spawn NPCs; `B` adds a bot.
 This is an npm workspaces monorepo. Three packages, each independently
 buildable and testable.
 
-| Package | Role |
-| ------- | ---- |
+| Package           | Role                                                                                                                       |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | `packages/shared` | Pure deterministic game sim, wire format, constants, NetSim. Both server and client depend on this; it depends on nothing. |
-| `packages/server` | Express + ws server. Authoritative tick loop, room manager, lobby/invite stores, transport adapters, integration tests. |
-| `packages/client` | Vite + PixiJS browser client. Prediction, reconciliation, interpolation, render, lobby UI, debug HUD. |
-| `tools/deploy` | Auto-deploy webhook receiver + systemd units + nginx config for the GCP VM. See `tools/deploy/README.md`. |
+| `packages/server` | Express + ws server. Authoritative tick loop, room manager, lobby/invite stores, transport adapters, integration tests.    |
+| `packages/client` | Vite + PixiJS browser client. Prediction, reconciliation, interpolation, render, lobby UI, debug HUD.                      |
+| `tools/deploy`    | Auto-deploy webhook receiver + systemd units + nginx config for the GCP VM. See `tools/deploy/README.md`.                  |
 
 ## Commands
 

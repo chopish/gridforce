@@ -10,7 +10,7 @@ A GridForce server runs an authoritative simulation in fixed-rate ticks.
 Clients run the same simulation locally, predicting forward from the latest
 authoritative state and replaying their own un-acknowledged inputs each
 time a snapshot lands. When server and client disagree past a threshold,
-the simulation rebases hard and the *visual* position smoothly catches
+the simulation rebases hard and the _visual_ position smoothly catches
 up — so prediction errors don't manifest as rubber-banding. Remote
 players and NPCs render on a buffer-and-delay interpolator, not from
 prediction. All wire traffic is binary, schema-versioned, and split
@@ -95,7 +95,7 @@ the input for `Socket.sendInput`.
 1. Drop pending inputs with tick ≤ `ackInputTick`.
 2. Rebase the local player to the server's authoritative position.
 3. Replay the remaining pending inputs.
-4. Compare the rebased simulation position to what we were *displaying*.
+4. Compare the rebased simulation position to what we were _displaying_.
    - delta < `PREDICTION_THRESHOLD_PX` (5 px) → no correction. The rebase
      is invisible.
    - delta < `PREDICTION_HARD_SNAP_PX` (30 px) → the simulated position
@@ -230,7 +230,7 @@ invisible wall"). `StartGame` is host-only and idempotent.
 ## Render
 
 PixiJS. `Renderer` owns three sub-renderers: grid, players, NPCs. Render
-is the only consumer of *visual* positions, and they come from:
+is the only consumer of _visual_ positions, and they come from:
 
 - **Local player**: `world.visualLocalPosition(alpha)` — interpolation
   between the previous and current predicted states, plus the active
@@ -284,31 +284,31 @@ the `Authorization: Bearer <sessionKey>` header, look up
 
 ## Tick rates and timing budget (current values)
 
-| Constant | Value | What |
-| -------- | ----- | ---- |
-| `SERVER_TICK_HZ` | 30 | Physics steps / second |
-| `SERVER_SNAPSHOT_HZ` | 20 | Broadcasts / second |
-| Browser render | vsync | Interpolates between two predicted states |
-| `INPUT_LEAD_TICKS` | 5 | Initial prediction lead |
-| `MAX_INPUT_LEAD_TICKS` | 30 | Hard cap (poison-resistance) |
-| `INPUT_REDUNDANCY` | 3 | Inputs per packet (redundancy window) |
-| `PREDICTION_THRESHOLD_PX` | 5 | Below this → ignore correction |
-| `PREDICTION_HARD_SNAP_PX` | 30 | Above this → hard snap, log it |
-| `PREDICTION_BLEND_MS` | 150 | Smooth-correction duration |
-| `REMOTE_INTERP_DELAY_SEED_MS` | 100 | Initial render-behind delay |
-| `RTT_OUTLIER_MS` | 3000 | Above this RTT → discard sample |
+| Constant                      | Value | What                                      |
+| ----------------------------- | ----- | ----------------------------------------- |
+| `SERVER_TICK_HZ`              | 30    | Physics steps / second                    |
+| `SERVER_SNAPSHOT_HZ`          | 20    | Broadcasts / second                       |
+| Browser render                | vsync | Interpolates between two predicted states |
+| `INPUT_LEAD_TICKS`            | 5     | Initial prediction lead                   |
+| `MAX_INPUT_LEAD_TICKS`        | 30    | Hard cap (poison-resistance)              |
+| `INPUT_REDUNDANCY`            | 3     | Inputs per packet (redundancy window)     |
+| `PREDICTION_THRESHOLD_PX`     | 5     | Below this → ignore correction            |
+| `PREDICTION_HARD_SNAP_PX`     | 30    | Above this → hard snap, log it            |
+| `PREDICTION_BLEND_MS`         | 150   | Smooth-correction duration                |
+| `REMOTE_INTERP_DELAY_SEED_MS` | 100   | Initial render-behind delay               |
+| `RTT_OUTLIER_MS`              | 3000  | Above this RTT → discard sample           |
 
-All are in `shared/src/constants.ts` with commentary on *why* each is
+All are in `shared/src/constants.ts` with commentary on _why_ each is
 what it is. Edit there, not at call sites.
 
 ## Tests
 
-| Suite | Where | What |
-| ----- | ----- | ---- |
-| Wire round-trip | `shared/src/net/__tests__/wire.test.ts` | Every message encodes/decodes |
-| Sim determinism | `shared/src/sim.test.ts` | `stepPlayer` is bit-exact reproducible |
-| Server unit | `server/src/Connection.test.ts` | Input buffer / ack model |
-| Lobby integration | `server/src/test/lobby*.test.ts` | Invites, host gates, visibility |
+| Suite                | Where                                          | What                                                                                                                                    |
+| -------------------- | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Wire round-trip      | `shared/src/net/__tests__/wire.test.ts`        | Every message encodes/decodes                                                                                                           |
+| Sim determinism      | `shared/src/sim.test.ts`                       | `stepPlayer` is bit-exact reproducible                                                                                                  |
+| Server unit          | `server/src/Connection.test.ts`                | Input buffer / ack model                                                                                                                |
+| Lobby integration    | `server/src/test/lobby*.test.ts`               | Invites, host gates, visibility                                                                                                         |
 | Headless integration | `server/src/test/integration.headless.test.ts` | Four `TestClient` bots through the network simulator across the off / good / fair / bad matrix; asserts bandwidth, divergence, ack rate |
 
 `TestClient.ts` is the shape an integration test uses: a real WebSocket

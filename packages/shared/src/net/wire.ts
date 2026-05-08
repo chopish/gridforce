@@ -259,7 +259,7 @@ export function writeHeader(w: BinaryWriter, type: MessageType, schemaVersion: n
 }
 
 export function readHeader(r: BinaryReader): MessageHeader {
-  const type = r.u16() as MessageType;
+  const type = r.u16();
   const schemaVersion = r.u16();
   return { type, schemaVersion };
 }

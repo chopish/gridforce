@@ -254,8 +254,7 @@ export class Socket {
   private deliverIncoming(bytes: Uint8Array, source: TransportKind): void {
     // Welcome / Error bypass NetSim. Tag is the first byte of the LE u16 header.
     const isHandshake =
-      bytes.byteLength >= 2 &&
-      (bytes[0] === MessageType.Welcome || bytes[0] === MessageType.Error);
+      bytes.byteLength >= 2 && (bytes[0] === MessageType.Welcome || bytes[0] === MessageType.Error);
     const sim = source === 'webrtc' ? this.inSimRtc : this.inSimWs;
     if (sim && !isHandshake) {
       sim.passThrough(bytes, (b) => this.dispatch(b));

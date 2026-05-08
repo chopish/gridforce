@@ -38,6 +38,14 @@ jobs:
         # may rewrite package-lock.json on dependency drift.
         run: npm ci
 
+      - name: Format check
+        run: npm run format:check
+
+      - name: Lint
+        # Fails on any error; warnings (e.g. !-assertions) don't gate CI.
+        # Use `npm run lint:fix` locally to auto-fix safe rules.
+        run: npm run lint
+
       - name: Typecheck
         run: npm run typecheck
 

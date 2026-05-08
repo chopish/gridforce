@@ -122,6 +122,8 @@ async function bootstrap(ws: WebSocket, deps: WsDeps): Promise<void> {
 
   // Sanitize name early so it's safe to put in PlayerState (which goes to all
   // clients). 24 chars is the lobby UI's input limit; mirror it server-side.
+  // Stripping control chars is exactly the point — disable the lint here.
+  // eslint-disable-next-line no-control-regex
   const safeName = (hello.name ?? '').replace(/[\x00-\x1f]/g, '').slice(0, 24);
 
   // Issue a per-connection session key. The Welcome carries it, and the
@@ -242,11 +244,7 @@ function handleConnectionMessage(
       return;
     }
     case MessageType.SetLobbySettings: {
-      room.setLobbySettings(
-        conn.playerId,
-        decoded.payload.levelId,
-        decoded.payload.difficulty,
-      );
+      room.setLobbySettings(conn.playerId, decoded.payload.levelId, decoded.payload.difficulty);
       return;
     }
     case MessageType.SetNpcCount: {
@@ -271,11 +269,13 @@ function handleConnectionMessage(
 
 function waitForHello(
   ws: WebSocket,
-): Promise<ReturnType<typeof decodeMessage> extends infer R
-  ? R extends { type: MessageType.Hello; payload: infer P }
-    ? P
+): Promise<
+  ReturnType<typeof decodeMessage> extends infer R
+    ? R extends { type: MessageType.Hello; payload: infer P }
+      ? P
+      : never
     : never
-  : never> {
+> {
   return new Promise((resolve) => {
     let done = false;
     const timeout = setTimeout(() => {
@@ -293,8 +293,12 @@ function waitForHello(
       if (!isBinary) return;
       let bytes: Uint8Array;
       if (data instanceof ArrayBuffer) {
+        // ws's RawData is unknown at the boundary; the instanceof narrow
+        // makes the construction safe but lint can't follow through.
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         bytes = new Uint8Array(data);
       } else if (data instanceof Buffer) {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
       } else if (Array.isArray(data)) {
         const total = (data as Buffer[]).reduce((n, b) => n + b.byteLength, 0);
@@ -331,7 +335,7 @@ function waitForHello(
       done = true;
       clearTimeout(timeout);
       ws.removeListener('message', onMsg);
-      resolve(decoded.payload as never);
+      resolve(decoded.payload);
     };
 
     ws.on('message', onMsg);

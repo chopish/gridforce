@@ -114,8 +114,7 @@ export interface SetReadyPayload {
 
 // Empty payload — host gating is enforced server-side from the connection's
 // playerId, not from any field the client could spoof.
-// eslint-disable-next-line @typescript-eslint/no-empty-interface
-export interface StartGamePayload {}
+export type StartGamePayload = Record<string, never>;
 
 // Host-only mid-lobby tweak. Server validates that the sender is the
 // current hostId, that levelId is in the LEVELS list, and that

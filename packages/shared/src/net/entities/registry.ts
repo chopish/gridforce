@@ -5,7 +5,7 @@ import { EntityType } from '../wire.js';
 const encoders = new Map<number, EntityEncoder<unknown>>();
 
 export function registerEntityEncoder<T>(enc: EntityEncoder<T>): void {
-  encoders.set(enc.type, enc as EntityEncoder<unknown>);
+  encoders.set(enc.type, enc);
 }
 
 export function getEntityEncoder(type: number): EntityEncoder<unknown> | undefined {

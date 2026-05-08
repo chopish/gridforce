@@ -1,5 +1,6 @@
 import type { NpcState } from '../../types.js';
-import { BinaryReader, BinaryWriter, EntityType } from '../wire.js';
+import type { BinaryReader, BinaryWriter } from '../wire.js';
+import { EntityType } from '../wire.js';
 import type { EntityEncoder } from './PlayerEncoder.js';
 
 // One NPC = 8 bytes:

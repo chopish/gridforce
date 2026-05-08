@@ -50,10 +50,7 @@ export class LobbyApiError extends Error {
   }
 }
 
-async function request<T>(
-  path: string,
-  init?: RequestInit & { bearer?: string },
-): Promise<T> {
+async function request<T>(path: string, init?: RequestInit & { bearer?: string }): Promise<T> {
   const headers: Record<string, string> = {
     'content-type': 'application/json',
     ...(init?.headers as Record<string, string> | undefined),

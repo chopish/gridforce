@@ -26,11 +26,10 @@ export class WebSocketTransport implements Transport {
         }
       }
     };
-    ws.onmessage = (e) => {
+    ws.onmessage = (e: MessageEvent<ArrayBuffer | Blob | string>) => {
       const data = e.data;
-      let bytes: Uint8Array;
-      if (data instanceof ArrayBuffer) bytes = new Uint8Array(data);
-      else return;
+      if (!(data instanceof ArrayBuffer)) return;
+      const bytes = new Uint8Array(data);
       for (const h of this.msgHandlers) h(bytes);
     };
     ws.onclose = () => {

@@ -14,7 +14,10 @@ export abstract class Bot implements Pilot {
   // Bots never block a round-start — they're "ready" by definition.
   ready = true;
 
-  constructor(public readonly playerId: PlayerId, public readonly name: string = '') {}
+  constructor(
+    public readonly playerId: PlayerId,
+    public readonly name: string = '',
+  ) {}
 
   protected abstract inputForTick(tick: number): PlayerInput | null;
 

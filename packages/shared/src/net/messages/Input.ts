@@ -1,6 +1,7 @@
 import { INPUT_MSG_MAX_COUNT, SCHEMA_VERSION } from '../../constants.js';
 import type { PlayerInput } from '../../types.js';
-import { BinaryReader, BinaryWriter, MessageType, writeHeader } from '../wire.js';
+import type { BinaryReader } from '../wire.js';
+import { BinaryWriter, MessageType, writeHeader } from '../wire.js';
 
 const BUTTON_DASH = 1 << 0;
 
@@ -44,7 +45,7 @@ export function decode(r: BinaryReader): PlayerInput[] {
   if (count > INPUT_MSG_MAX_COUNT) {
     throw new RangeError(`Input count exceeds cap: ${count}`);
   }
-  const out: PlayerInput[] = new Array(count);
+  const out = new Array<PlayerInput>(count);
   for (let i = 0; i < count; i++) {
     const tick = r.u32();
     const clientTimeMs = r.f64();

@@ -66,8 +66,9 @@ async function bootstrap(): Promise<void> {
         return `${window.location.origin}${window.location.pathname}?inv=${inv.token}`;
       } catch (e) {
         if (e instanceof LobbyApiError) {
-          if (e.code === 'host_only') throw new Error('only the host can create invites');
-          throw new Error(`server: ${e.code}`);
+          if (e.code === 'host_only')
+            throw new Error('only the host can create invites', { cause: e });
+          throw new Error(`server: ${e.code}`, { cause: e });
         }
         throw e;
       }
@@ -200,8 +201,7 @@ async function bootstrap(): Promise<void> {
         // bookkeeping advances and a clean transition into 'playing' has
         // accurate predictedTick.
         const raw = inputs.sample();
-        const sample =
-          world.phase === 'lobby' ? { mx: 0, my: 0, dash: false } : raw;
+        const sample = world.phase === 'lobby' ? { mx: 0, my: 0, dash: false } : raw;
         const inp = world.step({ ...sample, clientTimeMs: now });
         socket.sendInput(inp);
         accumulator -= SERVER_TICK_DT_MS;
@@ -277,8 +277,7 @@ async function bootstrap(): Promise<void> {
             remoteDelayMs: world.remoteInterp.currentDelayMs,
             netSimName: socket.status().lastSimProfileName,
             npcCount: world.npcs.size,
-            isHost:
-              world.localPlayerId !== 0 && world.hostId === world.localPlayerId,
+            isHost: world.localPlayerId !== 0 && world.hostId === world.localPlayerId,
           });
         }
         frameSamples = 0;
@@ -303,4 +302,3 @@ async function bootstrap(): Promise<void> {
   // Set initial netsim profile to "off" so HUD has something to display.
   socket.setNetSimProfile('off', NETSIM_PROFILES.off!);
 }
-
