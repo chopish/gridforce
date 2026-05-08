@@ -5,6 +5,8 @@
 
 import type { PlayerId, PlayerInput } from '@gridforce/shared';
 
+import type { Channel } from './transport/Transport.js';
+
 export interface Pilot {
   readonly playerId: PlayerId;
   readonly isBot: boolean;
@@ -23,7 +25,10 @@ export interface Pilot {
   computeAckBitmask(): number;
 
   // Send a binary frame downstream. Bots ignore.
-  send(bytes: Uint8Array): void;
+  // The channel hint lets the room route loss-tolerant traffic
+  // (snapshots) onto the unreliable channel when the underlying transport
+  // exposes one. Default is reliable for callers that don't care.
+  send(bytes: Uint8Array, channel?: Channel): void;
 
   // Drop any pending state. Called when the player leaves.
   dispose(): void;

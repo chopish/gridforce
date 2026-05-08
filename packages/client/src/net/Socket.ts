@@ -19,6 +19,8 @@ import {
 } from '@gridforce/shared';
 
 import { SERVER_WS } from '../config.js';
+import type { Channel, Transport, TransportKind } from './transport/Transport.js';
+import { WebSocketTransport } from './transport/WebSocketTransport.js';
 
 export type MessageListener = (m: DecodedMessage) => void;
 
@@ -30,13 +32,20 @@ export interface SocketStatus {
   // Set when Welcome lands. Used by the LobbyOverlay to authenticate
   // host-gated HTTP calls (invite creation).
   sessionKey: string;
+  // Which transport is currently carrying the data plane (snapshots/inputs).
+  // 'websocket' until WebRTC negotiates and a DataChannel is open.
+  dataTransport: TransportKind;
 }
 
 const PING_INTERVAL_MS = 1000;
 const RTT_EWMA_ALPHA = 0.2;
 
+// Session-layer wrapper around a Transport. Handles handshake, pings,
+// the redundancy window, NetSim dev simulation, and decode dispatch.
+// The actual byte delivery is a Transport (WebSocket today, WebRTC and
+// WebTransport in upcoming phases).
 export class Socket {
-  private ws: WebSocket | null = null;
+  private transport: Transport | null = null;
   private listeners = new Set<MessageListener>();
   private closeListeners = new Set<() => void>();
   private pingTimer: ReturnType<typeof setInterval> | null = null;
@@ -52,7 +61,7 @@ export class Socket {
   private roomCode = '';
   private accessKey = '';
   private sessionKey = '';
-  private outboxBeforeOpen: Uint8Array[] = [];
+  private outboxBeforeOpen: Array<{ bytes: Uint8Array; channel: Channel }> = [];
   // Sliding window of the last INPUT_REDUNDANCY inputs we've sent. Each
   // sendInput appends, trims to capacity, and re-sends the whole window
   // — a single dropped packet doesn't lose an input as long as the next
@@ -64,42 +73,32 @@ export class Socket {
     this.name = opts.name;
     this.accessKey = opts.accessKey ?? '';
     this.state = 'connecting';
-    this.openSocket();
+    this.openTransport();
   }
 
-  private openSocket(): void {
-    const ws = new WebSocket(SERVER_WS);
-    ws.binaryType = 'arraybuffer';
-    this.ws = ws;
-
-    ws.onopen = () => {
+  private openTransport(): void {
+    const t = new WebSocketTransport(SERVER_WS);
+    this.transport = t;
+    t.onOpen(() => {
       this.state = 'open';
       // Hello bypasses NetSim — handshake is reliable. NetSim simulates
       // in-game gameplay traffic only.
-      this.sendDirect(
+      t.send(
         HelloMsg.encode({
           schemaVersion: SCHEMA_VERSION,
           roomCode: this.roomCode,
           name: this.name,
           accessKey: this.accessKey,
         }),
+        'reliable',
       );
       // Flush anything queued before open.
-      for (const b of this.outboxBeforeOpen) this.send(b);
+      for (const q of this.outboxBeforeOpen) this.send(q.bytes, q.channel);
       this.outboxBeforeOpen = [];
-      // Begin pinging.
       this.startPings();
-    };
-
-    ws.onmessage = (e) => {
-      const data = e.data;
-      let bytes: Uint8Array;
-      if (data instanceof ArrayBuffer) bytes = new Uint8Array(data);
-      else return; // text/blob ignored
-      this.deliverIncoming(bytes);
-    };
-
-    ws.onclose = () => {
+    });
+    t.onMessage((bytes) => this.deliverIncoming(bytes));
+    t.onClose(() => {
       this.state = 'closed';
       this.stopPings();
       for (const cb of this.closeListeners) {
@@ -109,10 +108,7 @@ export class Socket {
           console.warn('[socket] close listener threw:', err);
         }
       }
-    };
-    ws.onerror = () => {
-      this.state = 'error';
-    };
+    });
   }
 
   // Public API ---------------------------------------------------------------
@@ -127,32 +123,34 @@ export class Socket {
     return () => this.closeListeners.delete(cb);
   }
 
+  // Inputs are loss-tolerant (redundancy window covers the gap) and
+  // strictly newer — perfect for the unreliable channel once available.
   sendInput(input: PlayerInput): void {
     this.recentInputs.push(input);
     if (this.recentInputs.length > INPUT_REDUNDANCY) this.recentInputs.shift();
-    this.send(InputMsg.encode(this.recentInputs));
+    this.send(InputMsg.encode(this.recentInputs), 'unreliable');
   }
 
   sendSetReady(ready: boolean): void {
-    this.send(SetReadyMsg.encode({ ready }));
+    this.send(SetReadyMsg.encode({ ready }), 'reliable');
   }
 
   sendStartGame(): void {
-    this.send(StartGameMsg.encode({}));
+    this.send(StartGameMsg.encode({}), 'reliable');
   }
 
   sendLobbySettings(levelId: string, difficulty: number): void {
-    this.send(SetLobbySettingsMsg.encode({ levelId, difficulty }));
+    this.send(SetLobbySettingsMsg.encode({ levelId, difficulty }), 'reliable');
   }
 
   sendSetNpcCount(count: number): void {
-    this.send(SetNpcCountMsg.encode({ count }));
+    this.send(SetNpcCountMsg.encode({ count }), 'reliable');
   }
 
-  // Send any pre-encoded message (e.g. AddBot). Exposed so callers don't have
-  // to know which messages can be queued before open vs not.
+  // Send any pre-encoded message (e.g. AddBot). Defaults to reliable —
+  // callers that know better should use a dedicated method.
   sendRaw(bytes: Uint8Array): void {
-    this.send(bytes);
+    this.send(bytes, 'reliable');
   }
 
   setNetSimProfile(name: string, profile: NetSimProfile): void {
@@ -181,6 +179,7 @@ export class Socket {
       serverTimeOffsetMs: this.serverTimeOffsetMs,
       lastSimProfileName: this.simName,
       sessionKey: this.sessionKey,
+      dataTransport: this.transport?.kind ?? 'websocket',
     };
   }
 
@@ -201,37 +200,24 @@ export class Socket {
 
   close(): void {
     this.stopPings();
-    if (this.ws) {
-      try {
-        this.ws.close();
-      } catch {
-        // ignore
-      }
+    if (this.transport) {
+      this.transport.close();
+      this.transport = null;
     }
-    this.ws = null;
     this.state = 'closed';
   }
 
   // Internal -----------------------------------------------------------------
 
-  private send(bytes: Uint8Array): void {
-    if (this.state !== 'open') {
-      this.outboxBeforeOpen.push(bytes);
+  private send(bytes: Uint8Array, channel: Channel): void {
+    if (this.state !== 'open' || !this.transport) {
+      this.outboxBeforeOpen.push({ bytes, channel });
       return;
     }
     if (this.outSim) {
-      this.outSim.passThrough(bytes, (b) => this.sendDirect(b));
+      this.outSim.passThrough(bytes, (b) => this.transport!.send(b, channel));
     } else {
-      this.sendDirect(bytes);
-    }
-  }
-
-  private sendDirect(bytes: Uint8Array): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    try {
-      this.ws.send(bytes);
-    } catch {
-      // socket gone; ignore
+      this.transport.send(bytes, channel);
     }
   }
 
@@ -267,7 +253,8 @@ export class Socket {
         // because the tab was backgrounded. Folding it into the EWMA poisons
         // the adaptive lead and the RTT readout for many seconds.
         if (rtt < RTT_OUTLIER_MS) {
-          this.rttMs = this.rttMs === 0 ? rtt : this.rttMs * (1 - RTT_EWMA_ALPHA) + rtt * RTT_EWMA_ALPHA;
+          this.rttMs =
+            this.rttMs === 0 ? rtt : this.rttMs * (1 - RTT_EWMA_ALPHA) + rtt * RTT_EWMA_ALPHA;
           const owLatency = this.rttMs / 2;
           const offset = decoded.payload.serverTimeMs - performance.now() - owLatency;
           this.serverTimeOffsetMs =
@@ -292,7 +279,8 @@ export class Socket {
         for (const k of this.pendingPings.keys()) if (k < oldestNonce) oldestNonce = k;
         if (Number.isFinite(oldestNonce)) this.pendingPings.delete(oldestNonce);
       }
-      this.send(PingMsg.encode({ nonce, clientTimeMs }));
+      // Pings are loss-tolerant; the next one will go out a second later.
+      this.send(PingMsg.encode({ nonce, clientTimeMs }), 'unreliable');
     }, PING_INTERVAL_MS);
   }
 

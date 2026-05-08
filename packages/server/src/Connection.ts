@@ -1,5 +1,3 @@
-import type { WebSocket } from 'ws';
-
 import {
   MAX_INPUT_BUFFER,
   type PlayerId,
@@ -9,6 +7,7 @@ import {
 } from '@gridforce/shared';
 
 import type { Pilot } from './Pilot.js';
+import type { Channel, Transport } from './transport/Transport.js';
 
 const INPUT_BUFFER_HARD_CAP = MAX_INPUT_BUFFER;
 const APPLIED_HISTORY = 64;
@@ -31,46 +30,24 @@ export class Connection implements Pilot {
     public readonly playerId: PlayerId,
     public readonly name: string,
     public readonly sessionKey: string,
-    private readonly ws: WebSocket,
+    private readonly transport: Transport,
     private readonly onMessage: ConnectionMessageHandler,
   ) {
-    ws.on('message', this.handleRaw);
-    ws.on('close', () => {
-      this.closed = true;
-    });
-    ws.on('error', () => {
+    transport.onMessage(this.handleBytes);
+    transport.onClose(() => {
       this.closed = true;
     });
   }
 
-  private handleRaw = (data: unknown, isBinary: boolean): void => {
+  private handleBytes = (bytes: Uint8Array): void => {
     if (this.closed) return;
-    if (!isBinary) return; // text frames are ignored
-    let bytes: Uint8Array;
-    if (data instanceof ArrayBuffer) {
-      bytes = new Uint8Array(data);
-    } else if (data instanceof Buffer) {
-      bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
-    } else if (Array.isArray(data)) {
-      // ws's "fragment" array form
-      const total = data.reduce((n, b: Buffer) => n + b.byteLength, 0);
-      bytes = new Uint8Array(total);
-      let off = 0;
-      for (const b of data as Buffer[]) {
-        bytes.set(new Uint8Array(b.buffer, b.byteOffset, b.byteLength), off);
-        off += b.byteLength;
-      }
-    } else {
-      return;
-    }
-
     let decoded: ReturnType<typeof decodeMessage>;
     try {
       decoded = decodeMessage(bytes);
     } catch (err) {
       // Bad frames close the connection — never try to recover from a corrupt stream.
       console.warn(`[conn ${this.playerId}] decode error:`, err);
-      this.ws.close(1003, 'bad frame');
+      this.transport.close(1003, 'bad frame');
       return;
     }
 
@@ -130,23 +107,14 @@ export class Connection implements Pilot {
     return mask >>> 0;
   }
 
-  send(bytes: Uint8Array): void {
+  send(bytes: Uint8Array, channel: Channel = 'reliable'): void {
     if (this.closed) return;
-    if (this.ws.readyState !== this.ws.OPEN) return;
-    try {
-      this.ws.send(bytes, { binary: true });
-    } catch {
-      this.closed = true;
-    }
+    this.transport.send(bytes, channel);
   }
 
   close(code = 1000, reason = ''): void {
     this.closed = true;
-    try {
-      this.ws.close(code, reason);
-    } catch {
-      // already closed
-    }
+    this.transport.close(code, reason);
   }
 
   dispose(): void {

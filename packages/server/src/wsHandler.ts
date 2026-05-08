@@ -18,6 +18,7 @@ import type { InviteStore } from './InviteStore.js';
 import type { RoomManager } from './RoomManager.js';
 import type { Room } from './Room.js';
 import type { SessionStore } from './SessionStore.js';
+import { WebSocketTransport } from './transport/WebSocketTransport.js';
 
 const HELLO_TIMEOUT_MS = 5_000;
 
@@ -127,12 +128,13 @@ async function bootstrap(ws: WebSocket, deps: WsDeps): Promise<void> {
     playerId: reservation.playerId,
   });
 
-  const conn = new Connection(reservation.playerId, safeName, sessionKey, ws, (c, decoded) =>
+  const transport = new WebSocketTransport(ws);
+  const conn = new Connection(reservation.playerId, safeName, sessionKey, transport, (c, decoded) =>
     handleConnectionMessage(c, decoded, room, deps.manager),
   );
 
   // If the socket dies before we commit, undo nothing — we never registered.
-  ws.on('close', () => {
+  transport.onClose(() => {
     deps.sessions.revoke(sessionKey);
     room.remove(reservation.playerId);
   });

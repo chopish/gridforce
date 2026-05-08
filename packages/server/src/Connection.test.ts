@@ -1,31 +1,25 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { EventEmitter } from 'node:events';
 
 import { Connection } from './Connection.js';
+import type { Transport } from './transport/Transport.js';
 
-// Minimal fake WebSocket that satisfies just the surface the Connection class
-// touches at construction. Tests focus on the input-buffer / ack-bitmask
-// logic, which doesn't go anywhere near the wire.
-function fakeWs(): unknown {
-  const ee = new EventEmitter() as EventEmitter & {
-    readyState: number;
-    OPEN: number;
-    sent: Uint8Array[];
-    send(buf: Uint8Array): void;
-    close(): void;
+// Minimal fake Transport that satisfies just the surface Connection touches.
+// Tests focus on input-buffer / ack-bitmask logic — neither the transport
+// internals nor the wire matter here.
+function fakeTransport(): Transport & { sent: Uint8Array[] } {
+  const sent: Uint8Array[] = [];
+  return {
+    kind: 'websocket',
+    state: 'open',
+    sent,
+    send: (bytes) => {
+      sent.push(bytes);
+    },
+    onMessage: () => () => {},
+    onClose: () => () => {},
+    close: () => {},
   };
-  ee.readyState = 1;
-  ee.OPEN = 1;
-  ee.sent = [];
-  ee.send = (buf: Uint8Array) => {
-    ee.sent.push(buf);
-  };
-  ee.close = () => {
-    ee.readyState = 3;
-    ee.emit('close');
-  };
-  return ee;
 }
 
 function input(tick: number) {
@@ -33,8 +27,8 @@ function input(tick: number) {
 }
 
 test('consumeInputForTick returns null when no input present, advances ack', () => {
-  const ws = fakeWs();
-  const c = new Connection(0, '', '', ws as never, () => {});
+  const t = fakeTransport();
+  const c = new Connection(0, '', '', t, () => {});
   const r = c.consumeInputForTick(5);
   assert.equal(r, null);
   assert.equal(c.ackInputTick, 5);
@@ -43,8 +37,8 @@ test('consumeInputForTick returns null when no input present, advances ack', () 
 });
 
 test('ackInputTick advances monotonically; bitmask reflects which prior ticks had inputs', () => {
-  const ws = fakeWs();
-  const c = new Connection(0, '', '', ws as never, () => {});
+  const t = fakeTransport();
+  const c = new Connection(0, '', '', t, () => {});
   // Synthetically buffer inputs by going through the public buffering door.
   // We have to invoke the private `bufferInput` indirectly via a fake decoded
   // message — simpler: poke at the inputs map via a back door isn't allowed
@@ -79,8 +73,8 @@ test('ackInputTick advances monotonically; bitmask reflects which prior ticks ha
 });
 
 test('inputs older than ackInputTick are dropped on receipt', () => {
-  const ws = fakeWs();
-  const c = new Connection(0, '', '', ws as never, () => {});
+  const t = fakeTransport();
+  const c = new Connection(0, '', '', t, () => {});
   c.consumeInputForTick(20); // ack=20, no input
   const priv = c as unknown as { bufferInput(i: ReturnType<typeof input>): void };
   priv.bufferInput(input(15)); // stale
@@ -89,8 +83,8 @@ test('inputs older than ackInputTick are dropped on receipt', () => {
 });
 
 test('input buffer caps to MAX_INPUT_BUFFER, dropping oldest', () => {
-  const ws = fakeWs();
-  const c = new Connection(0, '', '', ws as never, () => {});
+  const t = fakeTransport();
+  const c = new Connection(0, '', '', t, () => {});
   const priv = c as unknown as { bufferInput(i: ReturnType<typeof input>): void };
   // Buffer way more than the cap
   for (let t = 1; t <= 500; t++) priv.bufferInput(input(t));
@@ -109,8 +103,8 @@ test('redundancy: re-buffering the same tick is idempotent (only consumed once)'
   // the server may receive any subset of (tick, tick+1, tick+2, ...) more
   // than once. bufferInput's tick-as-Map-key contract means each tick can
   // only ever be applied once by consumeInputForTick.
-  const ws = fakeWs();
-  const c = new Connection(0, '', '', ws as never, () => {});
+  const t = fakeTransport();
+  const c = new Connection(0, '', '', t, () => {});
   const priv = c as unknown as { bufferInput(i: ReturnType<typeof input>): void };
   priv.bufferInput(input(50));
   priv.bufferInput(input(51));

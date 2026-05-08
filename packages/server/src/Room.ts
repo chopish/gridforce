@@ -412,7 +412,10 @@ export class Room {
         players: visible,
         npcs: npcStates,
       });
-      pilot.send(bytes);
+      // Snapshots are loss-tolerant: a newer one supersedes any in flight.
+      // Route via the unreliable channel so high-latency clients aren't
+      // stuck behind TCP retransmits of stale state when we have RTC up.
+      pilot.send(bytes, 'unreliable');
     }
   }
 

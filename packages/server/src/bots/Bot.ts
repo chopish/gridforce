@@ -27,7 +27,7 @@ export abstract class Bot implements Pilot {
     return 0;
   }
 
-  send(_bytes: Uint8Array): void {
+  send(_bytes: Uint8Array, _channel?: 'reliable' | 'unreliable'): void {
     // bots don't receive snapshots
   }
 
