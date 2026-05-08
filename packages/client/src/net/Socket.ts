@@ -8,6 +8,7 @@ import {
   RTT_OUTLIER_MS,
   SCHEMA_VERSION,
   SetLobbySettingsMsg,
+  SetNpcCountMsg,
   SetReadyMsg,
   StartGameMsg,
   decodeMessage,
@@ -134,6 +135,10 @@ export class Socket {
 
   sendLobbySettings(levelId: string, difficulty: number): void {
     this.send(SetLobbySettingsMsg.encode({ levelId, difficulty }));
+  }
+
+  sendSetNpcCount(count: number): void {
+    this.send(SetNpcCountMsg.encode({ count }));
   }
 
   // Send any pre-encoded message (e.g. AddBot). Exposed so callers don't have

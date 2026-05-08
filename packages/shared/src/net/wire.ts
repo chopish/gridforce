@@ -20,6 +20,7 @@ export const enum MessageType {
   SetReady = 0x0005,
   StartGame = 0x0006,
   SetLobbySettings = 0x0007,
+  SetNpcCount = 0x0008,
   // Server -> Client
   Welcome = 0x0081,
   Snapshot = 0x0082,
@@ -31,8 +32,8 @@ export const enum MessageType {
 
 export const enum EntityType {
   Player = 1,
+  NPC = 2,
   // Reserved for future:
-  // NPC = 2,
   // Electrode = 3,
   // Projectile = 4,
 }

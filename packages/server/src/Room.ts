@@ -20,18 +20,25 @@ import {
   stepPlayer,
   type DifficultyValue,
   type GridDef,
+  type NpcState,
   type PlayerId,
   type PlayerState,
   type RoomPhase,
 } from '@gridforce/shared';
 
 import type { Connection } from './Connection.js';
+import { Npc } from './Npc.js';
 import type { Pilot } from './Pilot.js';
 import { WanderBot } from './bots/WanderBot.js';
 
 const MAX_CATCHUP_PHYSICS_TICKS = 8;
 const SCHEDULER_GRANULARITY_MS = 4; // never sleep finer than this
 const NO_HOST: PlayerId = 0xff;
+// Per-room ceiling on NPC count. Real cap will fall out of AOI + budget
+// numbers later; for stress tests this is plenty headroom past Phase 0
+// targets (300 entities) without letting a stuck client wedge the room
+// into an OOM by spamming SetNpcCount(0xffff).
+const MAX_NPCS_PER_ROOM = 1024;
 
 // Place new players around the centre, spread on a circle so they don't spawn on top of each other.
 function spawnPosition(grid: GridDef, slot: number): { x: number; y: number } {
@@ -77,6 +84,10 @@ export class Room {
   // are the only Phase 0 level + Normal difficulty.
   levelId: string = DEFAULT_LEVEL_ID;
   difficulty: DifficultyValue = DEFAULT_DIFFICULTY;
+  // Wandering NPCs spawned by the host as a netcode stress test. Empty
+  // by default — host opts in via SetNpcCount keybinds.
+  readonly npcs = new Map<number, Npc>();
+  private nextNpcId = 0;
 
   tick = 0;
   private nextPlayerId: PlayerId = 0;
@@ -188,6 +199,32 @@ export class Room {
     if (playerId !== this.hostId) return false;
     this.phase = 'playing';
     return true;
+  }
+
+  // Host-only stress-test command. Spawns or removes NPCs to reach the
+  // target count, clamped to MAX_NPCS_PER_ROOM. Returns the resulting
+  // count.
+  setNpcCount(playerId: PlayerId, target: number): number {
+    if (playerId !== this.hostId) return this.npcs.size;
+    const clamped = Math.max(0, Math.min(MAX_NPCS_PER_ROOM, Math.floor(target)));
+    while (this.npcs.size < clamped) {
+      const id = this.nextNpcId++ & 0xffff;
+      // Skip ids that wrapped onto a still-live NPC (extremely unlikely
+      // at the 1024 cap, but keeps the invariant tight).
+      if (this.npcs.has(id)) continue;
+      const w = this.grid.cols * this.grid.panelSize;
+      const h = this.grid.rows * this.grid.panelSize;
+      const x = Math.random() * w;
+      const y = Math.random() * h;
+      this.npcs.set(id, new Npc(id, x, y));
+    }
+    if (this.npcs.size > clamped) {
+      // Drop the oldest ids first; predictable for tests.
+      const ids = Array.from(this.npcs.keys()).sort((a, b) => a - b);
+      const remove = this.npcs.size - clamped;
+      for (let i = 0; i < remove; i++) this.npcs.delete(ids[i]!);
+    }
+    return this.npcs.size;
   }
 
   // Host-only: update level + difficulty selection. Both are validated
@@ -333,6 +370,11 @@ export class Room {
       const next = stepPlayer(state, input, SERVER_TICK_DT_S, this.grid);
       this.states.set(id, next);
     }
+    if (this.npcs.size > 0) {
+      for (const npc of this.npcs.values()) {
+        npc.step(SERVER_TICK_DT_S, this.tick, this.grid);
+      }
+    }
   }
 
   // Lobby tick: drain inputs to keep ackInputTick advancing (so client-side
@@ -346,6 +388,13 @@ export class Room {
 
   private broadcastSnapshot(): void {
     const players = Array.from(this.states.values());
+    // Encoder reads .state directly off each Npc instance, so building a
+    // fresh array of refs is one allocation per snapshot regardless of
+    // count. We avoid copying NpcState objects.
+    const npcStates: NpcState[] = [];
+    if (this.npcs.size > 0) {
+      for (const npc of this.npcs.values()) npcStates.push(npc.state);
+    }
     const serverTimeMs = Date.now();
     for (const pilot of this.pilots.values()) {
       // AOI hook (Phase 0: identity). When per-client culling ships, this
@@ -361,6 +410,7 @@ export class Room {
         difficulty: this.difficulty,
         levelId: this.levelId,
         players: visible,
+        npcs: npcStates,
       });
       pilot.send(bytes);
     }

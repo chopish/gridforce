@@ -8,6 +8,19 @@ export interface PlayerInput {
   dash: boolean;
 }
 
+// Wandering NPC. Phase 0 has no combat or pathing — these are bouncing
+// walkers used to stress the netcode (300+ entities sharing snapshot
+// bandwidth + tick budget). When the actual game ships they'll grow
+// state for AI mode, target, hp, etc.; the encoder is laid out with
+// spare flag bits so we can extend without another schema bump.
+export interface NpcState {
+  id: number;
+  x: number;
+  y: number;
+  facing: number;
+  flags: number;
+}
+
 export interface PlayerState {
   id: PlayerId;
   x: number;
@@ -60,6 +73,12 @@ export interface SnapshotPayload {
   difficulty: number; // DifficultyValue
   levelId: string;
   players: PlayerState[];
+  // Wandering NPCs (entity stress / forward-design slot for game NPCs).
+  // Empty when none are spawned. Per-NPC cost on the wire is ~8 bytes,
+  // so 100 NPCs ≈ 16 KB/s downstream — over the 8 KB/s Phase 0 budget,
+  // but the budget is for the empty-room case; entity load is the lever
+  // AOI will eventually claw back.
+  npcs: NpcState[];
 }
 
 export interface WelcomePayload {
@@ -104,6 +123,12 @@ export interface StartGamePayload {}
 export interface SetLobbySettingsPayload {
   levelId: string;
   difficulty: number;
+}
+
+// Host-only stress-test command. Server adjusts the room's NPC count
+// up or down to match `count`, clamping to a reasonable cap.
+export interface SetNpcCountPayload {
+  count: number;
 }
 
 export interface HelloPayload {

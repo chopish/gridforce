@@ -17,6 +17,7 @@ import * as PlayerJoinedMsg from './messages/PlayerJoined.js';
 import * as PlayerLeftMsg from './messages/PlayerLeft.js';
 import * as PongMsg from './messages/Pong.js';
 import * as SetLobbySettingsMsg from './messages/SetLobbySettings.js';
+import * as SetNpcCountMsg from './messages/SetNpcCount.js';
 import * as SetReadyMsg from './messages/SetReady.js';
 import * as SnapshotMsg from './messages/Snapshot.js';
 import * as StartGameMsg from './messages/StartGame.js';
@@ -35,6 +36,7 @@ export {
   writeHeader,
 } from './wire.js';
 export { PlayerEncoder, PLAYER_FLAG_DASHING } from './entities/PlayerEncoder.js';
+export { NpcEncoder } from './entities/NpcEncoder.js';
 export type { EntityEncoder } from './entities/PlayerEncoder.js';
 export {
   AddBotMsg,
@@ -46,6 +48,7 @@ export {
   PlayerLeftMsg,
   PongMsg,
   SetLobbySettingsMsg,
+  SetNpcCountMsg,
   SetReadyMsg,
   SnapshotMsg,
   StartGameMsg,
@@ -60,6 +63,7 @@ export type DecodedMessage =
   | { type: MessageType.SetReady; payload: ReturnType<typeof SetReadyMsg.decode> }
   | { type: MessageType.StartGame; payload: ReturnType<typeof StartGameMsg.decode> }
   | { type: MessageType.SetLobbySettings; payload: ReturnType<typeof SetLobbySettingsMsg.decode> }
+  | { type: MessageType.SetNpcCount; payload: ReturnType<typeof SetNpcCountMsg.decode> }
   | { type: MessageType.Welcome; payload: ReturnType<typeof WelcomeMsg.decode> }
   | { type: MessageType.Snapshot; payload: ReturnType<typeof SnapshotMsg.decode> }
   | { type: MessageType.Pong; payload: ReturnType<typeof PongMsg.decode> }
@@ -102,6 +106,8 @@ export function decodeMessage(bytes: Uint8Array | ArrayBuffer): DecodedMessage {
       return { type: header.type, payload: StartGameMsg.decode(r) };
     case MessageType.SetLobbySettings:
       return { type: header.type, payload: SetLobbySettingsMsg.decode(r) };
+    case MessageType.SetNpcCount:
+      return { type: header.type, payload: SetNpcCountMsg.decode(r) };
     case MessageType.Welcome:
       return { type: header.type, payload: WelcomeMsg.decode(r) };
     case MessageType.Snapshot:

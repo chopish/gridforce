@@ -1,5 +1,5 @@
 import { SCHEMA_VERSION } from '../../constants.js';
-import type { PlayerState, SnapshotPayload } from '../../types.js';
+import type { NpcState, PlayerState, SnapshotPayload } from '../../types.js';
 import { getEntityEncoder, registerEntityEncoder } from '../entities/registry.js';
 import { BinaryReader, BinaryWriter, EntityType, MessageType, writeHeader } from '../wire.js';
 
@@ -33,13 +33,22 @@ export function encode(p: SnapshotPayload): Uint8Array {
   w.u8(p.difficulty & 0xff);
   w.string(p.levelId);
 
-  // Phase 0: just the player group.
-  w.u8(1);
+  // Group count is dynamic — Player is always present, NPC only when any
+  // NPCs are spawned (saves the 2-byte group header in the empty case).
+  const hasNpcs = p.npcs.length > 0;
+  w.u8(hasNpcs ? 2 : 1);
   w.u8(EntityType.Player);
   w.varuint(p.players.length);
-  const enc = getEntityEncoder(EntityType.Player);
-  if (!enc) throw new Error('Player encoder not registered');
-  for (const pl of p.players) enc.encode(w, pl);
+  const playerEnc = getEntityEncoder(EntityType.Player);
+  if (!playerEnc) throw new Error('Player encoder not registered');
+  for (const pl of p.players) playerEnc.encode(w, pl);
+  if (hasNpcs) {
+    w.u8(EntityType.NPC);
+    w.varuint(p.npcs.length);
+    const npcEnc = getEntityEncoder(EntityType.NPC);
+    if (!npcEnc) throw new Error('NPC encoder not registered');
+    for (const n of p.npcs) npcEnc.encode(w, n);
+  }
 
   return w.finish();
 }
@@ -56,6 +65,7 @@ export function decode(r: BinaryReader): SnapshotPayload {
 
   const groupCount = r.u8();
   const players: PlayerState[] = [];
+  const npcs: NpcState[] = [];
   for (let g = 0; g < groupCount; g++) {
     const entityType = r.u8();
     const count = r.varuint();
@@ -68,6 +78,8 @@ export function decode(r: BinaryReader): SnapshotPayload {
     }
     if (entityType === EntityType.Player) {
       for (let i = 0; i < count; i++) players.push(enc.decode(r) as PlayerState);
+    } else if (entityType === EntityType.NPC) {
+      for (let i = 0; i < count; i++) npcs.push(enc.decode(r) as NpcState);
     } else {
       for (let i = 0; i < count; i++) enc.decode(r);
     }
@@ -83,5 +95,6 @@ export function decode(r: BinaryReader): SnapshotPayload {
     difficulty,
     levelId,
     players,
+    npcs,
   };
 }

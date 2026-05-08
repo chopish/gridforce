@@ -149,6 +149,7 @@ test('Snapshot round-trip with multiple players, ack bitmask, dash timers', () =
     difficulty: 2,
     levelId: 'test-grid',
     players,
+    npcs: [],
   };
   const dec = decodeMessage(SnapshotMsg.encode(payload));
   assert.equal(dec.type, MessageType.Snapshot);
@@ -185,14 +186,52 @@ test('Snapshot handles zero players', () => {
       difficulty: 1,
       levelId: 'test-grid',
       players: [],
+      npcs: [],
     }),
   );
   assert.equal(dec.type, MessageType.Snapshot);
   const s = dec.payload as ReturnType<typeof SnapshotMsg.decode>;
   assert.equal(s.players.length, 0);
+  assert.equal(s.npcs.length, 0);
   assert.equal(s.ackInputTick, -1);
   assert.equal(s.phase, 'lobby');
   assert.equal(s.hostId, 0xff);
+});
+
+test('Snapshot encodes NPC group when npcs are present', () => {
+  const npcs = [
+    { id: 0, x: 100, y: 200, facing: 0, flags: 0 },
+    { id: 1, x: 320, y: 50, facing: Math.PI, flags: 0 },
+    { id: 65535, x: -10, y: -10, facing: -Math.PI / 2, flags: 0 },
+  ];
+  const dec = decodeMessage(
+    SnapshotMsg.encode({
+      tick: 1,
+      serverTimeMs: 0,
+      ackInputTick: -1,
+      inputAckBitmask: 0,
+      phase: 'playing',
+      hostId: 0,
+      difficulty: 1,
+      levelId: 'test-grid',
+      players: [],
+      npcs,
+    }),
+  );
+  assert.equal(dec.type, MessageType.Snapshot);
+  const s = dec.payload as ReturnType<typeof SnapshotMsg.decode>;
+  assert.equal(s.npcs.length, 3);
+  for (let i = 0; i < npcs.length; i++) {
+    const a = s.npcs[i]!;
+    const b = npcs[i]!;
+    assert.equal(a.id, b.id);
+    // i16 px precision: round-trip is integer-equal after encoder rounding.
+    assert.equal(a.x, Math.round(b.x));
+    assert.equal(a.y, Math.round(b.y));
+    // facing quantized to 8 bits → ~0.025 rad precision
+    const facingDiff = Math.abs(((a.facing - b.facing + Math.PI) % (Math.PI * 2)) - Math.PI);
+    assert.ok(facingDiff < 0.05, `npc facing within 0.05 rad (got ${facingDiff})`);
+  }
 });
 
 test('SetReady / StartGame round-trip', () => {

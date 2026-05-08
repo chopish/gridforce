@@ -7,6 +7,7 @@ export interface HudFrame {
   prediction: PredictionDiagnostics;
   remoteDelayMs: number;
   netSimName: string;
+  npcCount: number;
 }
 
 export class DebugHud {
@@ -35,6 +36,7 @@ export class DebugHud {
       `corr    ${f.prediction.correctionMagnitudePx.toFixed(1)} px (avg ${f.prediction.correctionEwmaPx.toFixed(1)})`,
       `recon   smooth=${f.prediction.smoothCorrections}  hard=${f.prediction.hardSnaps}`,
       `interp  ${f.remoteDelayMs.toFixed(0)} ms`,
+      `npcs    ${f.npcCount} (N +20  J +100  K clear)`,
     ];
     this.root.textContent = lines.join('\n');
     if (this.netSimEl) {

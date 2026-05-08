@@ -3,16 +3,18 @@ import { Application, Container } from 'pixi.js';
 import type { GridDef } from '@gridforce/shared';
 
 import { GridRenderer } from './GridRenderer.js';
+import { NpcRenderer } from './NpcRenderer.js';
 import { PlayerRenderer } from './PlayerRenderer.js';
 
-// Owns the PixiJS Application and the scene root. Two child renderers do the
-// actual drawing: GridRenderer for the static playfield, PlayerRenderer for
-// the active entities. Future entity layers (NPCs, electrodes, etc.) get
-// their own Renderer alongside.
+// Owns the PixiJS Application and the scene root. Three child renderers do
+// the actual drawing: GridRenderer for the static playfield, NpcRenderer
+// for hostile entities (drawn under players so a dense NPC swarm doesn't
+// hide the local player), PlayerRenderer on top.
 export class Renderer {
   app!: Application;
   worldRoot = new Container();
   gridRenderer!: GridRenderer;
+  npcRenderer!: NpcRenderer;
   playerRenderer!: PlayerRenderer;
 
   async init(parent: HTMLElement, grid: GridDef): Promise<void> {
@@ -28,8 +30,10 @@ export class Renderer {
 
     this.app.stage.addChild(this.worldRoot);
     this.gridRenderer = new GridRenderer(grid);
+    this.npcRenderer = new NpcRenderer();
     this.playerRenderer = new PlayerRenderer();
     this.worldRoot.addChild(this.gridRenderer.root);
+    this.worldRoot.addChild(this.npcRenderer.root);
     this.worldRoot.addChild(this.playerRenderer.root);
 
     // Center the world. Per-player camera ships later; Phase 0 has no camera

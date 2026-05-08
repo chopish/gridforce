@@ -14,7 +14,10 @@
 //   v6: Snapshot + Welcome carry levelId (string) and difficulty (u8); new
 //       SetLobbySettings client→server message lets the host adjust them
 //       in the pre-game lobby
-export const SCHEMA_VERSION = 6;
+//   v7: Snapshot may include an NPC entity group (EntityType.NPC=2); new
+//       SetNpcCount client→server message lets the host spawn / clear
+//       wandering NPCs for stress testing
+export const SCHEMA_VERSION = 7;
 
 // Tick rates
 export const SERVER_TICK_HZ = 30;

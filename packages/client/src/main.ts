@@ -138,6 +138,17 @@ async function bootstrap(): Promise<void> {
       // request another bot in this room
       window.dispatchEvent(new CustomEvent('gridforce:add-bot'));
     }
+    // NPC stress-test keybinds. Server is host-gated, so a non-host
+    // pressing these is a no-op — fine, dev-only affordance.
+    if (e.code === 'KeyN') {
+      socket.sendSetNpcCount(world.npcs.size + 20);
+    }
+    if (e.code === 'KeyJ') {
+      socket.sendSetNpcCount(world.npcs.size + 100);
+    }
+    if (e.code === 'KeyK') {
+      socket.sendSetNpcCount(0);
+    }
   });
   window.addEventListener('gridforce:add-bot', () => {
     socket.sendRaw(AddBotMsg.encode({}));
@@ -212,6 +223,13 @@ async function bootstrap(): Promise<void> {
         world.setTargetLead(oneWayTicks + 6);
       }
 
+      // Render NPCs first so a dense swarm doesn't cover the player avatars.
+      renderer.npcRenderer.beginFrame();
+      world.forEachNpcRender(now, (id, x, y, facing) => {
+        renderer.npcRenderer.draw(id, x, y, facing);
+      });
+      renderer.npcRenderer.endFrame();
+
       // Render players: local from prediction, remotes from interpolator.
       const ids: PlayerId[] = [];
       for (const id of world.players.keys()) ids.push(id);
@@ -257,6 +275,7 @@ async function bootstrap(): Promise<void> {
             prediction: world.diagnostics,
             remoteDelayMs: world.remoteInterp.currentDelayMs,
             netSimName: socket.status().lastSimProfileName,
+            npcCount: world.npcs.size,
           });
         }
         frameSamples = 0;

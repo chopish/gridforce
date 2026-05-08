@@ -296,6 +296,103 @@ test('setLobbySettings: non-host call is rejected', async () => {
   }
 });
 
+test('setNpcCount: host can spawn and clear NPCs', async () => {
+  const h = await startHarness();
+  let c: TestClient | null = null;
+  try {
+    const room = h.manager.createRoom({ visibility: 'unlisted' });
+    c = new TestClient({
+      url: h.wsUrl,
+      roomCode: room.code,
+      name: 'host',
+      drive: () => ({ mx: 0, my: 0, dash: false }),
+    });
+    await c.connect();
+    await new Promise<void>((r) => setTimeout(r, 100));
+    const id = room.hostId;
+    assert.equal(room.npcs.size, 0);
+
+    assert.equal(room.setNpcCount(id, 50), 50);
+    assert.equal(room.npcs.size, 50);
+
+    // Adding more is additive via a higher target.
+    assert.equal(room.setNpcCount(id, 75), 75);
+    assert.equal(room.npcs.size, 75);
+
+    // Reducing trims the oldest ids.
+    assert.equal(room.setNpcCount(id, 10), 10);
+    assert.equal(room.npcs.size, 10);
+
+    // Clear.
+    assert.equal(room.setNpcCount(id, 0), 0);
+    assert.equal(room.npcs.size, 0);
+  } finally {
+    c?.stop();
+    await h.shutdown();
+  }
+});
+
+test('setNpcCount: clamps above MAX_NPCS_PER_ROOM', async () => {
+  const h = await startHarness();
+  let c: TestClient | null = null;
+  try {
+    const room = h.manager.createRoom({ visibility: 'unlisted' });
+    c = new TestClient({
+      url: h.wsUrl,
+      roomCode: room.code,
+      name: 'host',
+      drive: () => ({ mx: 0, my: 0, dash: false }),
+    });
+    await c.connect();
+    await new Promise<void>((r) => setTimeout(r, 100));
+    const id = room.hostId;
+    // Asking for way more than the cap returns the clamped count, NOT the
+    // requested one. 1024 is the in-server cap (private constant — we just
+    // assert the result is not the requested 100k).
+    const got = room.setNpcCount(id, 100_000);
+    assert.ok(got <= 2048, `expected clamping to a sane cap (got ${got})`);
+    assert.equal(room.npcs.size, got);
+  } finally {
+    c?.stop();
+    await h.shutdown();
+  }
+});
+
+test('setNpcCount: non-host call is ignored', async () => {
+  const h = await startHarness();
+  let host: TestClient | null = null;
+  let guest: TestClient | null = null;
+  try {
+    const room = h.manager.createRoom({ visibility: 'unlisted' });
+    host = new TestClient({
+      url: h.wsUrl,
+      roomCode: room.code,
+      name: 'host',
+      drive: () => ({ mx: 0, my: 0, dash: false }),
+    });
+    await host.connect();
+    guest = new TestClient({
+      url: h.wsUrl,
+      roomCode: room.code,
+      name: 'guest',
+      drive: () => ({ mx: 0, my: 0, dash: false }),
+    });
+    await guest.connect();
+    await new Promise<void>((r) => setTimeout(r, 100));
+    const hostId = room.hostId;
+    const nonHostId = Array.from(room.pilots.keys()).find((k) => k !== hostId)!;
+    room.setNpcCount(hostId, 5);
+    assert.equal(room.npcs.size, 5);
+    // Guest tries to clear — ignored.
+    room.setNpcCount(nonHostId, 0);
+    assert.equal(room.npcs.size, 5);
+  } finally {
+    guest?.stop();
+    host?.stop();
+    await h.shutdown();
+  }
+});
+
 test('setLobbySettings: rejected after game has started', async () => {
   const h = await startHarness();
   let c: TestClient | null = null;

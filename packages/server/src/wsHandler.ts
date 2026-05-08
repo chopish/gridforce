@@ -186,6 +186,10 @@ function handleConnectionMessage(
       );
       return;
     }
+    case MessageType.SetNpcCount: {
+      room.setNpcCount(conn.playerId, decoded.payload.count);
+      return;
+    }
     default:
       // Hello mid-stream / unexpected: ignore. Inputs are handled inside Connection itself.
       return;
