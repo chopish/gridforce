@@ -277,6 +277,8 @@ async function bootstrap(): Promise<void> {
             remoteDelayMs: world.remoteInterp.currentDelayMs,
             netSimName: socket.status().lastSimProfileName,
             npcCount: world.npcs.size,
+            isHost:
+              world.localPlayerId !== 0 && world.hostId === world.localPlayerId,
           });
         }
         frameSamples = 0;

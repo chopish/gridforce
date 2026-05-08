@@ -8,6 +8,7 @@ export interface HudFrame {
   remoteDelayMs: number;
   netSimName: string;
   npcCount: number;
+  isHost: boolean;
 }
 
 export class DebugHud {
@@ -37,6 +38,7 @@ export class DebugHud {
       `recon   smooth=${f.prediction.smoothCorrections}  hard=${f.prediction.hardSnaps}`,
       `interp  ${f.remoteDelayMs.toFixed(0)} ms`,
       `xport   ${f.socket.dataTransport}`,
+      `host    ${f.isHost ? 'yes' : 'no (NPC keys ignored)'}`,
       `npcs    ${f.npcCount} (N +20  J +100  K clear)`,
     ];
     this.root.textContent = lines.join('\n');

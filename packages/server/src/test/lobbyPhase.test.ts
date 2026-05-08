@@ -347,10 +347,12 @@ test('setNpcCount: clamps above MAX_NPCS_PER_ROOM', async () => {
     await new Promise<void>((r) => setTimeout(r, 100));
     const id = room.hostId;
     // Asking for way more than the cap returns the clamped count, NOT the
-    // requested one. 1024 is the in-server cap (private constant — we just
-    // assert the result is not the requested 100k).
+    // requested one. The cap is GRIDFORCE_MAX_NPCS-driven (default 8192,
+    // hard ceiling 0xffff); we just assert the result is not the requested
+    // 100k and that the room didn't OOM trying.
     const got = room.setNpcCount(id, 100_000);
-    assert.ok(got <= 2048, `expected clamping to a sane cap (got ${got})`);
+    assert.ok(got < 100_000, `expected clamping below request (got ${got})`);
+    assert.ok(got <= 0xffff, `expected ≤ 0xffff hard ceiling (got ${got})`);
     assert.equal(room.npcs.size, got);
   } finally {
     c?.stop();

@@ -37,8 +37,14 @@ const NO_HOST: PlayerId = 0xff;
 // Per-room ceiling on NPC count. Real cap will fall out of AOI + budget
 // numbers later; for stress tests this is plenty headroom past Phase 0
 // targets (300 entities) without letting a stuck client wedge the room
-// into an OOM by spamming SetNpcCount(0xffff).
-const MAX_NPCS_PER_ROOM = 1024;
+// into an OOM by spamming SetNpcCount(0xffff). Override per-deploy with
+// GRIDFORCE_MAX_NPCS — at 8192, snapshot bandwidth is ~1.6 MB/s/client
+// (10 B/NPC × 8192 × 20 Hz) so anything substantially higher needs
+// AOI/delta encoding before it's safe outside LAN.
+const MAX_NPCS_PER_ROOM = Math.max(
+  1,
+  Math.min(0xffff, Number(process.env.GRIDFORCE_MAX_NPCS) || 8192),
+);
 
 // Place new players around the centre, spread on a circle so they don't spawn on top of each other.
 function spawnPosition(grid: GridDef, slot: number): { x: number; y: number } {
