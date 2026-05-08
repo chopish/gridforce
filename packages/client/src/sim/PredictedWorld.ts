@@ -5,7 +5,6 @@ import {
   PREDICTION_BLEND_MS,
   PREDICTION_HARD_SNAP_PX,
   PREDICTION_THRESHOLD_PX,
-  SERVER_SNAPSHOT_INTERVAL_MS,
   SERVER_TICK_DT_S,
   type GridDef,
   type NpcState,
@@ -18,6 +17,7 @@ import {
   stepPlayer,
 } from '@gridforce/shared';
 
+import { NpcInterpolator } from './NpcInterpolator.js';
 import { RemotePlayerInterpolator } from './RemotePlayerInterpolator.js';
 
 export interface PredictionDiagnostics {
@@ -55,15 +55,13 @@ export class PredictedWorld {
   difficulty = 1;
   maxPlayers = 4;
 
-  // Latest server-known NPC states + the previous snapshot's. The renderer
-  // lerps between them based on time-since-last-snapshot. NPCs are
-  // server-authoritative with no client prediction — much cheaper than
-  // running 300 individual predictors and visually fine because they're
-  // not the local player.
+  // Latest server-known NPC states. The interpolator owns the small
+  // ring buffer + per-arrival jitter tracking that smooths render-time
+  // motion through dropped or delayed snapshots; this map is the
+  // single-snapshot mirror UIs poll for "is there an NPC with id X
+  // anywhere right now" or "how many NPCs are there?".
   readonly npcs = new Map<number, NpcState>();
-  private prevNpcs = new Map<number, NpcState>();
-  private npcSnapAtMs = 0;
-  private npcPrevSnapAtMs = 0;
+  readonly npcInterp = new NpcInterpolator();
 
   // The player states we've simulated forward to predictedTick. For remote
   // players these get overwritten each snapshot; we don't predict them here
@@ -291,19 +289,12 @@ export class PredictedWorld {
       this.pending.shift();
     }
 
-    // Roll NPC snapshot buffers. Anything missing from the new snap (server
-    // removed it) drops from cur; new ids are seeded into prev with the
-    // same position so they don't lerp from origin on first appearance.
-    this.prevNpcs.clear();
-    for (const [id, n] of this.npcs) this.prevNpcs.set(id, n);
+    // NPC roll: hand off to the interpolator (which owns the ring
+    // buffer + jitter-tracked render delay), and refresh the live map
+    // for non-render queries (count, lookup-by-id).
     this.npcs.clear();
-    const nowMs = performance.now();
-    this.npcPrevSnapAtMs = this.npcSnapAtMs || nowMs;
-    this.npcSnapAtMs = nowMs;
-    for (const n of snap.npcs) {
-      this.npcs.set(n.id, n);
-      if (!this.prevNpcs.has(n.id)) this.prevNpcs.set(n.id, n);
-    }
+    for (const n of snap.npcs) this.npcs.set(n.id, n);
+    this.npcInterp.ingest(snap.npcs);
 
     // Update remote players via the interpolator. We never run prediction for
     // remotes; the interpolator buffers ~one snapshot interval and renders
@@ -424,34 +415,13 @@ export class PredictedWorld {
     return { x: this.correctionX, y: this.correctionY };
   }
 
-  // Lerped NPC render states for the current frame. Iterates the live
-  // map and writes into the supplied callback so the renderer can
-  // diff against its existing sprite cache without a transient array
-  // allocation per frame.
+  // Delegate to the interpolator. Kept as a method on PredictedWorld so
+  // the render loop in main.ts has one consistent surface.
   forEachNpcRender(
     nowMs: number,
     fn: (id: number, x: number, y: number, facing: number) => void,
   ): void {
-    if (this.npcs.size === 0) return;
-    // Snapshot interval as observed; fall back to nominal if we've only
-    // seen one snapshot so far.
-    const interval =
-      this.npcSnapAtMs > this.npcPrevSnapAtMs
-        ? this.npcSnapAtMs - this.npcPrevSnapAtMs
-        : SERVER_SNAPSHOT_INTERVAL_MS;
-    const elapsed = nowMs - this.npcSnapAtMs;
-    // Render slightly behind real-time so we always have a known endpoint
-    // ahead of the lerp; alpha walks 0→1 as the next snapshot age elapses.
-    let alpha = elapsed / interval;
-    if (alpha < 0) alpha = 0;
-    else if (alpha > 1.5) alpha = 1; // hard clamp on stalled streams
-    for (const [id, cur] of this.npcs) {
-      const prev = this.prevNpcs.get(id) ?? cur;
-      const x = prev.x + (cur.x - prev.x) * alpha;
-      const y = prev.y + (cur.y - prev.y) * alpha;
-      const facing = lerpAngle(prev.facing, cur.facing, alpha);
-      fn(id, x, y, facing);
-    }
+    this.npcInterp.forEachRender(nowMs, fn);
   }
 }
 

@@ -167,6 +167,7 @@ async function bootstrap(): Promise<void> {
       socket.resetRttForVisibilityRestore();
       world.forceResyncOnVisibilityRestore();
       world.remoteInterp.resetForVisibilityRestore();
+      world.npcInterp.resetForVisibilityRestore();
       inputs.clear();
     }
   });
