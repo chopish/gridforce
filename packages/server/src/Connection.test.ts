@@ -103,3 +103,25 @@ test('input buffer caps to MAX_INPUT_BUFFER, dropping oldest', () => {
   c.consumeInputForTick(1);
   // No assertion needed; the point is: it doesn't crash and doesn't leak unbounded.
 });
+
+test('redundancy: re-buffering the same tick is idempotent (only consumed once)', () => {
+  // The client sends the last N ticks in every Input message; under loss
+  // the server may receive any subset of (tick, tick+1, tick+2, ...) more
+  // than once. bufferInput's tick-as-Map-key contract means each tick can
+  // only ever be applied once by consumeInputForTick.
+  const ws = fakeWs();
+  const c = new Connection(0, '', '', ws as never, () => {});
+  const priv = c as unknown as { bufferInput(i: ReturnType<typeof input>): void };
+  priv.bufferInput(input(50));
+  priv.bufferInput(input(51));
+  priv.bufferInput(input(50)); // duplicate — last write wins, same content
+  priv.bufferInput(input(51));
+  priv.bufferInput(input(52));
+
+  assert.equal(c.consumeInputForTick(50)?.tick, 50);
+  assert.equal(c.consumeInputForTick(51)?.tick, 51);
+  assert.equal(c.consumeInputForTick(52)?.tick, 52);
+  // Re-arrival after consume is dropped — ack moves the wall forward.
+  priv.bufferInput(input(50));
+  assert.equal(c.consumeInputForTick(50), null);
+});

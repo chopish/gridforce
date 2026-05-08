@@ -75,7 +75,10 @@ export class Connection implements Pilot {
     }
 
     if (decoded.type === MessageType.Input) {
-      this.bufferInput(decoded.payload);
+      // Each Input message carries the client's last N inputs (redundancy
+      // window). bufferInput is idempotent w.r.t. tick — duplicates that
+      // were already applied are dropped via the ackInputTick check.
+      for (const inp of decoded.payload) this.bufferInput(inp);
       return;
     }
 

@@ -5,6 +5,7 @@ import { WebSocket } from 'ws';
 import {
   HelloMsg,
   INPUT_LEAD_TICKS,
+  INPUT_REDUNDANCY,
   InputMsg,
   MAX_REPLAY_INPUTS,
   MessageType,
@@ -55,6 +56,7 @@ export class TestClient {
   private serverTick = 0;
   private localState: PlayerState | null = null;
   private pending: PlayerInput[] = [];
+  private recentInputs: PlayerInput[] = [];
   private outSim: NetSim | null = null;
   private inSim: NetSim | null = null;
   private interval: ReturnType<typeof setInterval> | null = null;
@@ -239,7 +241,11 @@ export class TestClient {
     this.localState = stepPlayer(this.localState, input, SERVER_TICK_DT_S, this.grid);
     this.pending.push(input);
     if (this.pending.length > MAX_REPLAY_INPUTS) this.pending.shift();
-    this.sendBytes(InputMsg.encode(input));
+    // Mirror the production client's redundancy window so integration tests
+    // exercise the realistic upstream pattern (last N inputs every frame).
+    this.recentInputs.push(input);
+    if (this.recentInputs.length > INPUT_REDUNDANCY) this.recentInputs.shift();
+    this.sendBytes(InputMsg.encode(this.recentInputs));
   }
 
   private sendBytes(bytes: Uint8Array): void {

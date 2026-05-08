@@ -109,17 +109,47 @@ test('Welcome round-trip', () => {
   }
 });
 
-test('Input round-trip including button clamping behavior', () => {
-  const payload = { tick: 12345, clientTimeMs: 1700000000.25, mx: -0.5, my: 0.7, dash: true };
-  const enc = InputMsg.encode(payload);
+test('Input round-trip with single input', () => {
+  const input = { tick: 12345, clientTimeMs: 1700000000.25, mx: -0.5, my: 0.7, dash: true };
+  const enc = InputMsg.encode([input]);
   const dec = decodeMessage(enc);
   assert.equal(dec.type, MessageType.Input);
-  const p = dec.payload as ReturnType<typeof InputMsg.decode>;
-  assert.equal(p.tick, payload.tick);
-  assert.equal(p.clientTimeMs, payload.clientTimeMs);
-  assert.ok(Math.abs(p.mx - payload.mx) < 1e-6);
-  assert.ok(Math.abs(p.my - payload.my) < 1e-6);
-  assert.equal(p.dash, payload.dash);
+  const list = dec.payload as ReturnType<typeof InputMsg.decode>;
+  assert.equal(list.length, 1);
+  const p = list[0]!;
+  assert.equal(p.tick, input.tick);
+  assert.equal(p.clientTimeMs, input.clientTimeMs);
+  assert.ok(Math.abs(p.mx - input.mx) < 1e-6);
+  assert.ok(Math.abs(p.my - input.my) < 1e-6);
+  assert.equal(p.dash, input.dash);
+});
+
+test('Input round-trip with redundancy window (3 ticks)', () => {
+  const inputs = [
+    { tick: 100, clientTimeMs: 1.0, mx: 1, my: 0, dash: false },
+    { tick: 101, clientTimeMs: 2.0, mx: 0.5, my: 0.5, dash: true },
+    { tick: 102, clientTimeMs: 3.0, mx: 0, my: -1, dash: false },
+  ];
+  const dec = decodeMessage(InputMsg.encode(inputs));
+  assert.equal(dec.type, MessageType.Input);
+  const list = dec.payload as ReturnType<typeof InputMsg.decode>;
+  assert.equal(list.length, 3);
+  for (let i = 0; i < 3; i++) {
+    assert.equal(list[i]!.tick, inputs[i]!.tick);
+    assert.equal(list[i]!.dash, inputs[i]!.dash);
+  }
+});
+
+test('Input encoding rejects empty + over-cap counts', () => {
+  assert.throws(() => InputMsg.encode([]), /out of range/);
+  const tooMany = new Array(64).fill(0).map((_, i) => ({
+    tick: i,
+    clientTimeMs: 0,
+    mx: 0,
+    my: 0,
+    dash: false,
+  }));
+  assert.throws(() => InputMsg.encode(tooMany), /out of range/);
 });
 
 test('Snapshot round-trip with multiple players, ack bitmask, dash timers', () => {

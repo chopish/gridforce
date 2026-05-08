@@ -1,5 +1,6 @@
 import {
   HelloMsg,
+  INPUT_REDUNDANCY,
   InputMsg,
   MessageType,
   NetSim,
@@ -52,6 +53,11 @@ export class Socket {
   private accessKey = '';
   private sessionKey = '';
   private outboxBeforeOpen: Uint8Array[] = [];
+  // Sliding window of the last INPUT_REDUNDANCY inputs we've sent. Each
+  // sendInput appends, trims to capacity, and re-sends the whole window
+  // — a single dropped packet doesn't lose an input as long as the next
+  // one gets through. Server dedupes via tick.
+  private recentInputs: PlayerInput[] = [];
 
   connect(opts: { roomCode: string; name: string; accessKey?: string }): void {
     this.roomCode = opts.roomCode;
@@ -122,7 +128,9 @@ export class Socket {
   }
 
   sendInput(input: PlayerInput): void {
-    this.send(InputMsg.encode(input));
+    this.recentInputs.push(input);
+    if (this.recentInputs.length > INPUT_REDUNDANCY) this.recentInputs.shift();
+    this.send(InputMsg.encode(this.recentInputs));
   }
 
   sendSetReady(ready: boolean): void {
@@ -185,6 +193,10 @@ export class Socket {
     this.pendingPings.clear();
     this.rttMs = 0;
     this.serverTimeOffsetMs = 0;
+    // The redundancy window holds inputs from before we backgrounded; their
+    // ticks are stale relative to the resync target, and re-sending them on
+    // resume would only invite the server to discard a flood of acks. Clear.
+    this.recentInputs = [];
   }
 
   close(): void {
