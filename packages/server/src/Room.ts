@@ -1,6 +1,8 @@
 import { performance } from 'node:perf_hooks';
 
 import {
+  DEFAULT_DIFFICULTY,
+  DEFAULT_LEVEL_ID,
   ErrorCode,
   ErrorMsg,
   MAX_PLAYERS_PER_ROOM,
@@ -12,8 +14,11 @@ import {
   SnapshotMsg,
   WelcomeMsg,
   createDefaultGrid,
+  isValidDifficulty,
+  isValidLevelId,
   newPlayerState,
   stepPlayer,
+  type DifficultyValue,
   type GridDef,
   type PlayerId,
   type PlayerState,
@@ -68,6 +73,10 @@ export class Room {
   // the room. Bots cannot be host. Promotion happens automatically: first
   // human to join becomes host; on host leave the next human is promoted.
   hostId: PlayerId = NO_HOST;
+  // Pre-game selections, settable from the lobby UI by the host. Defaults
+  // are the only Phase 0 level + Normal difficulty.
+  levelId: string = DEFAULT_LEVEL_ID;
+  difficulty: DifficultyValue = DEFAULT_DIFFICULTY;
 
   tick = 0;
   private nextPlayerId: PlayerId = 0;
@@ -181,6 +190,26 @@ export class Room {
     return true;
   }
 
+  // Host-only: update level + difficulty selection. Both are validated
+  // against the shared lists; invalid values silently leave the previous
+  // selection untouched (the wire format is too lossy to round-trip an
+  // error code, and the client driving this should be sending valid
+  // values from a dropdown anyway). Returns true if anything changed.
+  setLobbySettings(playerId: PlayerId, levelId: string, difficulty: number): boolean {
+    if (this.phase !== 'lobby') return false;
+    if (playerId !== this.hostId) return false;
+    let changed = false;
+    if (isValidLevelId(levelId) && levelId !== this.levelId) {
+      this.levelId = levelId;
+      changed = true;
+    }
+    if (isValidDifficulty(difficulty) && difficulty !== this.difficulty) {
+      this.difficulty = difficulty;
+      changed = true;
+    }
+    return changed;
+  }
+
   rejectJoin(conn: Connection, code: number, message: string): void {
     conn.send(ErrorMsg.encode({ code, message }));
     conn.close(1008, message);
@@ -230,6 +259,9 @@ export class Room {
         serverTimeMs: Date.now(),
         phase: this.phase,
         hostId: this.hostId,
+        difficulty: this.difficulty,
+        levelId: this.levelId,
+        maxPlayers: this.maxPlayers,
         sessionKey: conn.sessionKey,
         players: Array.from(this.states.values()),
       }),
@@ -326,6 +358,8 @@ export class Room {
         inputAckBitmask: pilot.computeAckBitmask(),
         phase: this.phase,
         hostId: this.hostId,
+        difficulty: this.difficulty,
+        levelId: this.levelId,
         players: visible,
       });
       pilot.send(bytes);

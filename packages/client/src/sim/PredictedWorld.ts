@@ -47,6 +47,11 @@ export class PredictedWorld {
   // show the playfield as live before we've actually heard from the server.
   phase: 'lobby' | 'playing' = 'lobby';
   hostId: PlayerId = 0xff;
+  // Mirrored from server snapshots. Surfaced in the lobby UI so dropdowns
+  // match what the server actually has.
+  levelId = '';
+  difficulty = 1;
+  maxPlayers = 4;
 
   // The player states we've simulated forward to predictedTick. For remote
   // players these get overwritten each snapshot; we don't predict them here
@@ -141,6 +146,9 @@ export class PredictedWorld {
     this.localPlayerId = w.yourPlayerId;
     this.phase = w.phase;
     this.hostId = w.hostId;
+    this.levelId = w.levelId;
+    this.difficulty = w.difficulty;
+    this.maxPlayers = w.maxPlayers;
     // Lead the server tick from the start: by the time our first input
     // reaches the server, the server has already advanced past startTick by
     // ~RTT/2 ticks. Tagging from (startTick + lead) ensures the input lands
@@ -209,6 +217,8 @@ export class PredictedWorld {
     this.diagnostics.serverTick = snap.tick;
     this.phase = snap.phase;
     this.hostId = snap.hostId;
+    this.levelId = snap.levelId;
+    this.difficulty = snap.difficulty;
 
     // Lead maintenance. Two regimes:
     //   1. predictedTick has fallen below MIN_SAFE_LEAD (or even past the

@@ -231,3 +231,90 @@ test('startGame is idempotent: second call while playing returns false', async (
     await h.shutdown();
   }
 });
+
+test('setLobbySettings: host can change level and difficulty', async () => {
+  const h = await startHarness();
+  let c: TestClient | null = null;
+  try {
+    const room = h.manager.createRoom({ visibility: 'unlisted' });
+    c = new TestClient({
+      url: h.wsUrl,
+      roomCode: room.code,
+      name: 'a',
+      drive: () => ({ mx: 0, my: 0, dash: false }),
+    });
+    await c.connect();
+    await new Promise<void>((r) => setTimeout(r, 100));
+    const id = room.hostId;
+    // Setting back to defaults isn't a "change" — assert ground truth first.
+    assert.equal(room.levelId, 'test-grid');
+    assert.equal(room.difficulty, 1); // Normal
+
+    assert.equal(room.setLobbySettings(id, 'test-grid', 0), true);
+    assert.equal(room.difficulty, 0);
+    // Unknown levelId silently rejected (server-side validated).
+    room.setLobbySettings(id, 'no-such-level', 2);
+    assert.equal(room.levelId, 'test-grid');
+    // But difficulty did change in that same call.
+    assert.equal(room.difficulty, 2);
+  } finally {
+    c?.stop();
+    await h.shutdown();
+  }
+});
+
+test('setLobbySettings: non-host call is rejected', async () => {
+  const h = await startHarness();
+  let host: TestClient | null = null;
+  let guest: TestClient | null = null;
+  try {
+    const room = h.manager.createRoom({ visibility: 'unlisted' });
+    host = new TestClient({
+      url: h.wsUrl,
+      roomCode: room.code,
+      name: 'host',
+      drive: () => ({ mx: 0, my: 0, dash: false }),
+    });
+    await host.connect();
+    guest = new TestClient({
+      url: h.wsUrl,
+      roomCode: room.code,
+      name: 'guest',
+      drive: () => ({ mx: 0, my: 0, dash: false }),
+    });
+    await guest.connect();
+    await new Promise<void>((r) => setTimeout(r, 100));
+    const hostId = room.hostId;
+    // Pick the non-host id.
+    const nonHostId = Array.from(room.pilots.keys()).find((k) => k !== hostId)!;
+    assert.equal(room.setLobbySettings(nonHostId, 'test-grid', 2), false);
+    assert.equal(room.difficulty, 1);
+  } finally {
+    guest?.stop();
+    host?.stop();
+    await h.shutdown();
+  }
+});
+
+test('setLobbySettings: rejected after game has started', async () => {
+  const h = await startHarness();
+  let c: TestClient | null = null;
+  try {
+    const room = h.manager.createRoom({ visibility: 'unlisted' });
+    c = new TestClient({
+      url: h.wsUrl,
+      roomCode: room.code,
+      name: 'a',
+      drive: () => ({ mx: 0, my: 0, dash: false }),
+    });
+    await c.connect();
+    await new Promise<void>((r) => setTimeout(r, 100));
+    const id = room.hostId;
+    assert.equal(room.startGame(id), true);
+    assert.equal(room.setLobbySettings(id, 'test-grid', 2), false);
+    assert.equal(room.difficulty, 1);
+  } finally {
+    c?.stop();
+    await h.shutdown();
+  }
+});

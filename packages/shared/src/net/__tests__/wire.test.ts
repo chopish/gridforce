@@ -70,6 +70,9 @@ test('Welcome round-trip', () => {
     serverTimeMs: 1700000000123.5,
     phase: 'lobby' as const,
     hostId: 0,
+    difficulty: 1,
+    levelId: 'test-grid',
+    maxPlayers: 4,
     sessionKey: 'sess-abc123',
     players: [
       { ...newPlayerState(0, 100, 100, 'alice'), facing: 1.234, stateSeq: 7 },
@@ -85,6 +88,8 @@ test('Welcome round-trip', () => {
   assert.equal(w.serverTimeMs, 1700000000123.5);
   assert.equal(w.phase, 'lobby');
   assert.equal(w.hostId, 0);
+  assert.equal(w.difficulty, 1);
+  assert.equal(w.levelId, 'test-grid');
   assert.equal(w.sessionKey, 'sess-abc123');
   assert.equal(w.players.length, 2);
   assert.equal(w.players[0]!.name, 'alice');
@@ -141,6 +146,8 @@ test('Snapshot round-trip with multiple players, ack bitmask, dash timers', () =
     inputAckBitmask: 0b1010_1100,
     phase: 'playing' as const,
     hostId: 0,
+    difficulty: 2,
+    levelId: 'test-grid',
     players,
   };
   const dec = decodeMessage(SnapshotMsg.encode(payload));
@@ -152,6 +159,8 @@ test('Snapshot round-trip with multiple players, ack bitmask, dash timers', () =
   assert.equal(s.inputAckBitmask, payload.inputAckBitmask);
   assert.equal(s.phase, 'playing');
   assert.equal(s.hostId, 0);
+  assert.equal(s.difficulty, 2);
+  assert.equal(s.levelId, 'test-grid');
   assert.equal(s.players.length, players.length);
   // Idle player: both timers 0.
   assert.equal(s.players[0]!.dashCooldownS, 0);
@@ -173,6 +182,8 @@ test('Snapshot handles zero players', () => {
       inputAckBitmask: 0,
       phase: 'lobby',
       hostId: 0xff,
+      difficulty: 1,
+      levelId: 'test-grid',
       players: [],
     }),
   );

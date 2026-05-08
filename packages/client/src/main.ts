@@ -56,11 +56,13 @@ async function bootstrap(): Promise<void> {
   const lobbyOverlay = new LobbyOverlay({
     onToggleReady: (next) => socket.sendSetReady(next),
     onStartGame: () => socket.sendStartGame(),
-    onGenerateInvite: async () => {
+    onChangeLevel: (levelId) => socket.sendLobbySettings(levelId, world.difficulty),
+    onChangeDifficulty: (d) => socket.sendLobbySettings(world.levelId, d),
+    onGenerateInvite: async (uses) => {
       const sessionKey = socket.status().sessionKey;
       if (!sessionKey) throw new Error('not connected yet');
       try {
-        const inv = await createInvite(roomCode, sessionKey, { maxUses: 1 });
+        const inv = await createInvite(roomCode, sessionKey, { maxUses: uses });
         return `${window.location.origin}${window.location.pathname}?inv=${inv.token}`;
       } catch (e) {
         if (e instanceof LobbyApiError) {
@@ -238,6 +240,9 @@ async function bootstrap(): Promise<void> {
         hostId: world.hostId,
         localPlayerId: world.localPlayerId,
         roomCode,
+        levelId: world.levelId,
+        difficulty: world.difficulty,
+        maxPlayers: world.maxPlayers,
         players: Array.from(world.players.values()),
       });
 

@@ -54,6 +54,11 @@ export interface SnapshotPayload {
   // PlayerId of the host, or 0xff if no human host yet (room is empty or
   // only contains bots — bots never become host).
   hostId: PlayerId;
+  // Pre-game selections. Carried in every snapshot so a late-joining
+  // client gets them on first delivery without a separate sync message.
+  // Snapshot-rate cost is ~12 bytes/snap which is negligible.
+  difficulty: number; // DifficultyValue
+  levelId: string;
   players: PlayerState[];
 }
 
@@ -64,6 +69,12 @@ export interface WelcomePayload {
   serverTimeMs: number;
   phase: RoomPhase;
   hostId: PlayerId;
+  difficulty: number;
+  levelId: string;
+  // Cap on humans + bots in this room. Static for the room's lifetime.
+  // Surfaced to the client so the lobby UI can show "X/N" and bound the
+  // invite-uses dropdown without a separate /api round-trip.
+  maxPlayers: number;
   players: PlayerState[];
   // Per-connection bearer token. The client stores it and sends as
   // `Authorization: Bearer <sessionKey>` on host-gated HTTP endpoints
@@ -86,6 +97,14 @@ export interface SetReadyPayload {
 // playerId, not from any field the client could spoof.
 // eslint-disable-next-line @typescript-eslint/no-empty-interface
 export interface StartGamePayload {}
+
+// Host-only mid-lobby tweak. Server validates that the sender is the
+// current hostId, that levelId is in the LEVELS list, and that
+// difficulty is a known enum value before applying.
+export interface SetLobbySettingsPayload {
+  levelId: string;
+  difficulty: number;
+}
 
 export interface HelloPayload {
   schemaVersion: number;

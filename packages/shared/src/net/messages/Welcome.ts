@@ -14,6 +14,9 @@ export function encode(p: WelcomePayload): Uint8Array {
   w.f64(p.serverTimeMs);
   w.u8(p.phase === 'playing' ? 1 : 0);
   w.u8(p.hostId & 0xff);
+  w.u8(p.difficulty & 0xff);
+  w.string(p.levelId);
+  w.u8(p.maxPlayers & 0xff);
   w.string(p.sessionKey);
   w.varuint(p.players.length);
   for (const pl of p.players) PlayerEncoder.encode(w, pl);
@@ -29,6 +32,9 @@ export function decode(r: BinaryReader): WelcomePayload {
   const serverTimeMs = r.f64();
   const phase: 'lobby' | 'playing' = r.u8() === 1 ? 'playing' : 'lobby';
   const hostId = r.u8();
+  const difficulty = r.u8();
+  const levelId = r.string();
+  const maxPlayers = r.u8();
   const sessionKey = r.string();
   const count = r.varuint();
   const players: PlayerState[] = [];
@@ -40,6 +46,9 @@ export function decode(r: BinaryReader): WelcomePayload {
     serverTimeMs,
     phase,
     hostId,
+    difficulty,
+    levelId,
+    maxPlayers,
     sessionKey,
     players,
   };

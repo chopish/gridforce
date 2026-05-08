@@ -7,6 +7,7 @@ import {
   PingMsg,
   RTT_OUTLIER_MS,
   SCHEMA_VERSION,
+  SetLobbySettingsMsg,
   SetReadyMsg,
   StartGameMsg,
   decodeMessage,
@@ -129,6 +130,10 @@ export class Socket {
 
   sendStartGame(): void {
     this.send(StartGameMsg.encode({}));
+  }
+
+  sendLobbySettings(levelId: string, difficulty: number): void {
+    this.send(SetLobbySettingsMsg.encode({ levelId, difficulty }));
   }
 
   // Send any pre-encoded message (e.g. AddBot). Exposed so callers don't have

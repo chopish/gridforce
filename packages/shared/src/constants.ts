@@ -11,7 +11,10 @@
 //       and StartGame client→server messages
 //   v5: Welcome carries sessionKey so the host's client can authenticate
 //       /api/rooms/:code/invites and other host-gated endpoints
-export const SCHEMA_VERSION = 5;
+//   v6: Snapshot + Welcome carry levelId (string) and difficulty (u8); new
+//       SetLobbySettings client→server message lets the host adjust them
+//       in the pre-game lobby
+export const SCHEMA_VERSION = 6;
 
 // Tick rates
 export const SERVER_TICK_HZ = 30;

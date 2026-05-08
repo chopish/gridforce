@@ -178,6 +178,14 @@ function handleConnectionMessage(
       room.startGame(conn.playerId);
       return;
     }
+    case MessageType.SetLobbySettings: {
+      room.setLobbySettings(
+        conn.playerId,
+        decoded.payload.levelId,
+        decoded.payload.difficulty,
+      );
+      return;
+    }
     default:
       // Hello mid-stream / unexpected: ignore. Inputs are handled inside Connection itself.
       return;
