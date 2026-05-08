@@ -1,0 +1,51 @@
+name: ci
+
+# Runs on every PR and on direct pushes to main. The auto-deploy webhook
+# fires independently from main pushes; this workflow surfaces breakage
+# but does NOT gate deploy yet (the test suite still has occasional
+# timing flake under load). Once the headless integration test stabilises
+# we can wire deploy to require this workflow as a status check.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Cancel in-flight runs for the same branch when a new commit lands. Saves
+# minutes on push-storms and keeps the queue tidy during active work.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          # Match production. The deploy VM runs Node 20 LTS; pick the
+          # same here so anything that ships in CI also ships on the VM.
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install
+        # ci is reproducible-from-lockfile, in contrast to install which
+        # may rewrite package-lock.json on dependency drift.
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        # Server suite spins a real WebSocket server in-process and runs
+        # 4 TestClient bots against it; node-datachannel ships prebuilt
+        # linux-x64 binaries so no native compile step is needed here.
+        run: npm test
+
+      - name: Build
+        run: npm run build
