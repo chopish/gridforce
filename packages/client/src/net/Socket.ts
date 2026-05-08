@@ -7,6 +7,8 @@ import {
   NETSIM_PROFILES,
   PingMsg,
   RTT_OUTLIER_MS,
+  RtcAnswerMsg,
+  RtcIceMsg,
   SCHEMA_VERSION,
   SetLobbySettingsMsg,
   SetNpcCountMsg,
@@ -19,8 +21,17 @@ import {
 } from '@gridforce/shared';
 
 import { SERVER_WS } from '../config.js';
-import type { Channel, Transport, TransportKind } from './transport/Transport.js';
+import { MultiTransport } from './transport/MultiTransport.js';
+import type { Channel, TransportKind } from './transport/Transport.js';
+import { WebRtcTransport } from './transport/WebRtcTransport.js';
 import { WebSocketTransport } from './transport/WebSocketTransport.js';
+
+// STUN servers for the browser RTCPeerConnection. Server has its own
+// matching list in transport/rtcConfig.ts.
+const ICE_SERVERS: RTCIceServer[] = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun.cloudflare.com:3478' },
+];
 
 export type MessageListener = (m: DecodedMessage) => void;
 
@@ -42,10 +53,13 @@ const RTT_EWMA_ALPHA = 0.2;
 
 // Session-layer wrapper around a Transport. Handles handshake, pings,
 // the redundancy window, NetSim dev simulation, and decode dispatch.
-// The actual byte delivery is a Transport (WebSocket today, WebRTC and
-// WebTransport in upcoming phases).
+// The actual byte delivery is a MultiTransport — WebSocket as the
+// always-present control plane, WebRTC DataChannel as the optional
+// data plane that attaches once SDP/ICE negotiation completes.
 export class Socket {
-  private transport: Transport | null = null;
+  private transport: MultiTransport | null = null;
+  private rtcPeer: RTCPeerConnection | null = null;
+  private rtcDataChannel: RTCDataChannel | null = null;
   private listeners = new Set<MessageListener>();
   private closeListeners = new Set<() => void>();
   private pingTimer: ReturnType<typeof setInterval> | null = null;
@@ -77,13 +91,14 @@ export class Socket {
   }
 
   private openTransport(): void {
-    const t = new WebSocketTransport(SERVER_WS);
-    this.transport = t;
-    t.onOpen(() => {
+    const ws = new WebSocketTransport(SERVER_WS);
+    const mux = new MultiTransport(ws);
+    this.transport = mux;
+    mux.onOpen(() => {
       this.state = 'open';
       // Hello bypasses NetSim — handshake is reliable. NetSim simulates
       // in-game gameplay traffic only.
-      t.send(
+      mux.send(
         HelloMsg.encode({
           schemaVersion: SCHEMA_VERSION,
           roomCode: this.roomCode,
@@ -97,10 +112,11 @@ export class Socket {
       this.outboxBeforeOpen = [];
       this.startPings();
     });
-    t.onMessage((bytes) => this.deliverIncoming(bytes));
-    t.onClose(() => {
+    mux.onMessage((bytes) => this.deliverIncoming(bytes));
+    mux.onClose(() => {
       this.state = 'closed';
       this.stopPings();
+      this.teardownRtc();
       for (const cb of this.closeListeners) {
         try {
           cb();
@@ -244,6 +260,20 @@ export class Socket {
     if (decoded.type === MessageType.Welcome) {
       this.sessionKey = decoded.payload.sessionKey;
     }
+    if (decoded.type === MessageType.RtcOffer) {
+      this.handleRtcOffer(decoded.payload.sdp).catch((err) => {
+        console.warn('[rtc] offer handling failed:', err);
+        this.teardownRtc();
+      });
+      // Don't propagate signalling messages to game listeners.
+      return;
+    }
+    if (decoded.type === MessageType.RtcIce) {
+      this.handleRemoteIce(decoded.payload.candidate, decoded.payload.mid).catch((err) => {
+        console.warn('[rtc] addIceCandidate failed:', err);
+      });
+      return;
+    }
     if (decoded.type === MessageType.Pong) {
       const sent = this.pendingPings.get(decoded.payload.nonce);
       if (sent !== undefined) {
@@ -265,6 +295,88 @@ export class Socket {
       }
     }
     for (const l of this.listeners) l(decoded);
+  }
+
+  // --- WebRTC -----------------------------------------------------------
+
+  private async handleRtcOffer(sdp: string): Promise<void> {
+    if (!this.transport) return;
+    if (typeof RTCPeerConnection === 'undefined') {
+      // Browser without WebRTC support (vanishingly rare). Stay on WS.
+      return;
+    }
+    this.teardownRtc();
+
+    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    this.rtcPeer = pc;
+
+    pc.onicecandidate = (e) => {
+      if (!e.candidate) return; // null = end-of-gathering
+      // sdpMid is the media-stream id; libdatachannel uses '0' for the
+      // sole DC. Fall back to '0' if the browser elides it.
+      const mid = e.candidate.sdpMid ?? '0';
+      const candidate = e.candidate.candidate;
+      if (!candidate) return;
+      // Signalling rides reliable on the control transport (WS).
+      this.transport!.send(RtcIceMsg.encode({ candidate, mid }), 'reliable');
+    };
+    pc.ondatachannel = (e) => {
+      const dc = e.channel;
+      if (dc.label !== 'data') return; // only one channel today
+      this.rtcDataChannel = dc;
+      const t = new WebRtcTransport(dc);
+      t.onOpen(() => {
+        // Once the DC is up, snapshots/inputs will route through it via
+        // MultiTransport.send routing. Nothing else to do.
+      });
+      this.transport!.attachDataTransport(t);
+    };
+    pc.onconnectionstatechange = () => {
+      if (
+        pc.connectionState === 'failed' ||
+        pc.connectionState === 'disconnected' ||
+        pc.connectionState === 'closed'
+      ) {
+        this.teardownRtc();
+      }
+    };
+
+    await pc.setRemoteDescription({ type: 'offer', sdp });
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    if (!answer.sdp) return;
+    this.transport.send(RtcAnswerMsg.encode({ sdp: answer.sdp }), 'reliable');
+  }
+
+  private async handleRemoteIce(candidate: string, mid: string): Promise<void> {
+    if (!this.rtcPeer) return;
+    if (!candidate) return;
+    try {
+      await this.rtcPeer.addIceCandidate({ candidate, sdpMid: mid });
+    } catch {
+      // duplicate / late candidates are normal; addIceCandidate may
+      // throw harmlessly. Caller will log if it matters.
+    }
+  }
+
+  private teardownRtc(): void {
+    if (this.rtcDataChannel) {
+      try {
+        this.rtcDataChannel.close();
+      } catch {
+        // ignore
+      }
+      this.rtcDataChannel = null;
+    }
+    if (this.rtcPeer) {
+      try {
+        this.rtcPeer.close();
+      } catch {
+        // ignore
+      }
+      this.rtcPeer = null;
+    }
+    this.transport?.detachDataTransport();
   }
 
   private startPings(): void {

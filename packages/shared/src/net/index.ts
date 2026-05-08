@@ -16,6 +16,9 @@ import * as PingMsg from './messages/Ping.js';
 import * as PlayerJoinedMsg from './messages/PlayerJoined.js';
 import * as PlayerLeftMsg from './messages/PlayerLeft.js';
 import * as PongMsg from './messages/Pong.js';
+import * as RtcAnswerMsg from './messages/RtcAnswer.js';
+import * as RtcIceMsg from './messages/RtcIce.js';
+import * as RtcOfferMsg from './messages/RtcOffer.js';
 import * as SetLobbySettingsMsg from './messages/SetLobbySettings.js';
 import * as SetNpcCountMsg from './messages/SetNpcCount.js';
 import * as SetReadyMsg from './messages/SetReady.js';
@@ -47,6 +50,9 @@ export {
   PlayerJoinedMsg,
   PlayerLeftMsg,
   PongMsg,
+  RtcAnswerMsg,
+  RtcIceMsg,
+  RtcOfferMsg,
   SetLobbySettingsMsg,
   SetNpcCountMsg,
   SetReadyMsg,
@@ -64,6 +70,9 @@ export type DecodedMessage =
   | { type: MessageType.StartGame; payload: ReturnType<typeof StartGameMsg.decode> }
   | { type: MessageType.SetLobbySettings; payload: ReturnType<typeof SetLobbySettingsMsg.decode> }
   | { type: MessageType.SetNpcCount; payload: ReturnType<typeof SetNpcCountMsg.decode> }
+  | { type: MessageType.RtcOffer; payload: ReturnType<typeof RtcOfferMsg.decode> }
+  | { type: MessageType.RtcAnswer; payload: ReturnType<typeof RtcAnswerMsg.decode> }
+  | { type: MessageType.RtcIce; payload: ReturnType<typeof RtcIceMsg.decode> }
   | { type: MessageType.Welcome; payload: ReturnType<typeof WelcomeMsg.decode> }
   | { type: MessageType.Snapshot; payload: ReturnType<typeof SnapshotMsg.decode> }
   | { type: MessageType.Pong; payload: ReturnType<typeof PongMsg.decode> }
@@ -108,6 +117,12 @@ export function decodeMessage(bytes: Uint8Array | ArrayBuffer): DecodedMessage {
       return { type: header.type, payload: SetLobbySettingsMsg.decode(r) };
     case MessageType.SetNpcCount:
       return { type: header.type, payload: SetNpcCountMsg.decode(r) };
+    case MessageType.RtcOffer:
+      return { type: header.type, payload: RtcOfferMsg.decode(r) };
+    case MessageType.RtcAnswer:
+      return { type: header.type, payload: RtcAnswerMsg.decode(r) };
+    case MessageType.RtcIce:
+      return { type: header.type, payload: RtcIceMsg.decode(r) };
     case MessageType.Welcome:
       return { type: header.type, payload: WelcomeMsg.decode(r) };
     case MessageType.Snapshot:

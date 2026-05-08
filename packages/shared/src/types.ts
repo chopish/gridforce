@@ -131,6 +131,22 @@ export interface SetNpcCountPayload {
   count: number;
 }
 
+// WebRTC DataChannel signalling, all carried over the existing WS
+// control plane. Server is the offerer (it creates the data channel
+// and triggers libdatachannel's auto-negotiation), client answers.
+// Each payload carries one piece of SDP / ICE; RtcIce can fire many
+// times during gathering on both sides via trickle.
+export interface RtcOfferPayload {
+  sdp: string;
+}
+export interface RtcAnswerPayload {
+  sdp: string;
+}
+export interface RtcIcePayload {
+  candidate: string;
+  mid: string;
+}
+
 export interface HelloPayload {
   schemaVersion: number;
   roomCode: string;

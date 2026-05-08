@@ -109,3 +109,58 @@ sudo systemctl restart gridforce-webhook
 - The receiver listens on `127.0.0.1` only; nginx is the public entrypoint.
 - The webhook only triggers on pushes to `main` (override with `DEPLOY_BRANCH` in `webhook.env`).
 - The `gridforce` user has `NOPASSWD` sudo for *only* `systemctl restart gridforce` — nothing else.
+
+## WebRTC DataChannel transport (data plane)
+
+Snapshots and inputs migrate to a WebRTC DataChannel once it's negotiated.
+The control plane (handshake, lobby, signalling) stays on the WebSocket
+through nginx. RTC traffic is direct UDP between the client and the VM —
+nginx is **not** in the path.
+
+This adds two production-deploy steps the WS-only setup didn't need:
+
+### 1. Pin a UDP port range
+
+In `/etc/gridforce/webhook.env` (or a new `/etc/gridforce/server.env`
+sourced by `gridforce.service`), set:
+
+```
+GRIDFORCE_RTC_PORT_BEGIN=50000
+GRIDFORCE_RTC_PORT_END=50050
+```
+
+Without these, `node-datachannel` picks ephemeral ports — fine for dev,
+unsuitable for a firewalled VM.
+
+### 2. Open the range in the GCP firewall
+
+GCP → VPC network → Firewall → create rule:
+
+| Field            | Value                                            |
+| ---------------- | ------------------------------------------------ |
+| Direction        | Ingress                                          |
+| Action           | Allow                                            |
+| Targets          | the VM's network tag                             |
+| Source ranges    | `0.0.0.0/0`                                      |
+| Protocols/ports  | `udp:50000-50050`                                |
+
+The exact range must match `GRIDFORCE_RTC_PORT_BEGIN/_END`. Leaving it
+closed just means clients fall back to WebSocket — not a hard failure.
+
+### 3. (Optional) ICE servers
+
+The defaults (`stun:stun.l.google.com:19302`, `stun:stun.cloudflare.com:3478`)
+are fine for most users. Override with:
+
+```
+GRIDFORCE_RTC_ICE_SERVERS=stun:stun.l.google.com:19302,turn:turn.example.com:3478?transport=udp
+```
+
+A TURN server is only needed for users behind strict NATs / corporate
+firewalls. Coturn on a $5/mo VM handles ~100 concurrent relays.
+
+### 4. Verify
+
+After deploy, the in-game HUD's `xport` line shows `webrtc` once the
+DataChannel is up; it stays at `websocket` if the handshake failed (no
+gameplay impact, just the HOL-blocking sensitivity from before).

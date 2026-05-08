@@ -9,6 +9,8 @@ import {
   MessageType,
   SCHEMA_VERSION,
   PongMsg,
+  RtcIceMsg,
+  RtcOfferMsg,
   decodeMessage,
 } from '@gridforce/shared';
 
@@ -18,6 +20,9 @@ import type { InviteStore } from './InviteStore.js';
 import type { RoomManager } from './RoomManager.js';
 import type { Room } from './Room.js';
 import type { SessionStore } from './SessionStore.js';
+import { MultiTransport } from './transport/MultiTransport.js';
+import { RtcPeer } from './transport/RtcPeer.js';
+import { rtcConfig } from './transport/rtcConfig.js';
 import { WebSocketTransport } from './transport/WebSocketTransport.js';
 
 const HELLO_TIMEOUT_MS = 5_000;
@@ -128,18 +133,72 @@ async function bootstrap(ws: WebSocket, deps: WsDeps): Promise<void> {
     playerId: reservation.playerId,
   });
 
-  const transport = new WebSocketTransport(ws);
+  // Compose the transports: WS is the always-present control + initial
+  // data path; RTC layers in once negotiated.
+  const wsTransport = new WebSocketTransport(ws);
+  const transport = new MultiTransport(wsTransport);
+  let peer: RtcPeer | null = null;
   const conn = new Connection(reservation.playerId, safeName, sessionKey, transport, (c, decoded) =>
-    handleConnectionMessage(c, decoded, room, deps.manager),
+    handleConnectionMessage(c, decoded, room, deps.manager, () => peer),
   );
 
-  // If the socket dies before we commit, undo nothing — we never registered.
+  // Tear down on socket close. The MultiTransport mirrors the WS close
+  // event to its own onClose listeners; we hook there to revoke the
+  // session and remove the player.
   transport.onClose(() => {
+    if (peer) {
+      peer.close();
+      peer = null;
+    }
     deps.sessions.revoke(sessionKey);
     room.remove(reservation.playerId);
   });
 
   room.commitJoin(conn);
+
+  // Kick off the WebRTC handshake. Server is the offerer: creating the
+  // data channel triggers libdatachannel's auto-negotiation and fires
+  // onLocalSdp with the offer.
+  startRtcHandshake(transport, conn, (p) => {
+    peer = p;
+  });
+}
+
+// Server initiates RTC after commitJoin. If the handshake fails, the
+// MultiTransport simply stays on the WebSocket — game continues to work,
+// just with HOL-blocking sensitivity on the data plane.
+function startRtcHandshake(
+  transport: MultiTransport,
+  conn: Connection,
+  onPeer: (peer: RtcPeer) => void,
+): void {
+  const peer = new RtcPeer(
+    {
+      ...rtcConfig(),
+      name: `gridforce-${conn.playerId}`,
+    },
+    {
+      onLocalSdp: (sdp, type) => {
+        if (type !== 'offer') return; // we never send an answer from the server
+        // Offer goes over WS reliable. Channel hint doesn't matter on
+        // single-WS transports but we'll be explicit.
+        conn.send(RtcOfferMsg.encode({ sdp }), 'reliable');
+      },
+      onLocalIce: (candidate, mid) => {
+        conn.send(RtcIceMsg.encode({ candidate, mid }), 'reliable');
+      },
+      onDataTransport: (dataTransport) => {
+        transport.attachDataTransport(dataTransport);
+      },
+      onClose: () => {
+        // libdatachannel reports the peer as closed/failed/disconnected.
+        // detachDataTransport in MultiTransport is the natural cleanup
+        // path; the data channel close fires through its own callback.
+        transport.detachDataTransport();
+      },
+    },
+  );
+  onPeer(peer);
 }
 
 function reject(ws: WebSocket, code: number, message: string): void {
@@ -156,6 +215,7 @@ function handleConnectionMessage(
   decoded: ReturnType<typeof decodeMessage>,
   room: Room,
   _manager: RoomManager,
+  getPeer: () => RtcPeer | null,
 ): void {
   switch (decoded.type) {
     case MessageType.Ping: {
@@ -165,6 +225,7 @@ function handleConnectionMessage(
           clientTimeMs: decoded.payload.clientTimeMs,
           serverTimeMs: Date.now(),
         }),
+        'unreliable',
       );
       return;
     }
@@ -190,6 +251,16 @@ function handleConnectionMessage(
     }
     case MessageType.SetNpcCount: {
       room.setNpcCount(conn.playerId, decoded.payload.count);
+      return;
+    }
+    case MessageType.RtcAnswer: {
+      const peer = getPeer();
+      if (peer) peer.setRemoteAnswer(decoded.payload.sdp);
+      return;
+    }
+    case MessageType.RtcIce: {
+      const peer = getPeer();
+      if (peer) peer.addRemoteCandidate(decoded.payload.candidate, decoded.payload.mid);
       return;
     }
     default:

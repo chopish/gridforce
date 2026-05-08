@@ -21,7 +21,11 @@
 //       a single tick — the client sends the last N ticks in every frame
 //       so a single dropped packet doesn't lose an input. Server dedupes
 //       via existing tick check.
-export const SCHEMA_VERSION = 8;
+//   v9: WebRTC DataChannel signalling — three new messages (RtcOffer,
+//       RtcAnswer, RtcIce) carry SDP + ICE between client and server
+//       over the existing WebSocket. Snapshots/inputs migrate to the
+//       DataChannel once it opens; WebSocket stays for control.
+export const SCHEMA_VERSION = 9;
 
 // Tick rates
 export const SERVER_TICK_HZ = 30;

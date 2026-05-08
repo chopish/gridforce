@@ -21,6 +21,10 @@ export const enum MessageType {
   StartGame = 0x0006,
   SetLobbySettings = 0x0007,
   SetNpcCount = 0x0008,
+  // Bidirectional (signalling, carried over the WS control plane)
+  RtcOffer = 0x0010, // server -> client
+  RtcAnswer = 0x0011, // client -> server
+  RtcIce = 0x0012, // both directions
   // Server -> Client
   Welcome = 0x0081,
   Snapshot = 0x0082,

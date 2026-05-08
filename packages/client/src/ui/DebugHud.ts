@@ -36,6 +36,7 @@ export class DebugHud {
       `corr    ${f.prediction.correctionMagnitudePx.toFixed(1)} px (avg ${f.prediction.correctionEwmaPx.toFixed(1)})`,
       `recon   smooth=${f.prediction.smoothCorrections}  hard=${f.prediction.hardSnaps}`,
       `interp  ${f.remoteDelayMs.toFixed(0)} ms`,
+      `xport   ${f.socket.dataTransport}`,
       `npcs    ${f.npcCount} (N +20  J +100  K clear)`,
     ];
     this.root.textContent = lines.join('\n');

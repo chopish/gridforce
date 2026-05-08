@@ -11,8 +11,9 @@
   },
   "dependencies": {
     "@gridforce/shared": "*",
-    "express": "^4.21.2",
     "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "node-datachannel": "^0.32.3",
     "ws": "^8.18.0"
   },
   "devDependencies": {
