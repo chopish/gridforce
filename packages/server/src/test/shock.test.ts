@@ -3,9 +3,28 @@ import assert from 'node:assert/strict';
 import { Room } from '../Room.js';
 import { CrawlerAIState, PanelState, allLive, indexOf } from '@gridforce/shared';
 
+interface RoomInternals {
+  phase: string;
+  hostId: number;
+  panelStates: Uint8Array;
+  grid: { cols: number; rows: number; panelSize: number };
+  states: Map<number, {
+    id: number; x: number; y: number; facing: number;
+    panelJumpCooldownS: number; stateSeq: number; name: string; ready: boolean;
+    carbon: number; shockCooldownS: number; repairProgressS: number;
+  }>;
+  crawlers: Map<number, {
+    id: number; x: number; y: number; facing: number; hp: number;
+    targetCx: number; targetCy: number; ai: number;
+  }>;
+  carbons: Map<number, unknown>;
+  pilots: Map<number, unknown>;
+  physicsStep(): void;
+}
+
 test('shock kills crawler on adjacent LIVE tile', () => {
   const room = new Room('TEST', { visibility: 'unlisted' });
-  const r = room as any;
+  const r = room as unknown as RoomInternals;
   r.phase = 'playing';
   r.panelStates = allLive(r.grid.cols, r.grid.rows);
   r.states.set(0, {
@@ -36,7 +55,7 @@ test('shock kills crawler on adjacent LIVE tile', () => {
 
 test('shock cooldown enforced after first fire', () => {
   const room = new Room('TEST2', { visibility: 'unlisted' });
-  const r = room as any;
+  const r = room as unknown as RoomInternals;
   r.phase = 'playing';
   r.panelStates = allLive(r.grid.cols, r.grid.rows);
   r.states.set(0, {
@@ -49,13 +68,13 @@ test('shock cooldown enforced after first fire', () => {
     consumeInputForTick: () => ({ tick: 0, clientTimeMs: 0, mx: 0, my: 0, dash: false, sprint: false, shock: true, repair: false }),
   });
   r.physicsStep();
-  const after = r.states.get(0);
+  const after = r.states.get(0)!;
   assert.ok(after.shockCooldownS > 0, `expected cooldown > 0 after fire, got ${after.shockCooldownS}`);
 });
 
 test('shock does not reach across DAMAGED tile', () => {
   const room = new Room('TEST3', { visibility: 'unlisted' });
-  const r = room as any;
+  const r = room as unknown as RoomInternals;
   r.phase = 'playing';
   r.panelStates = allLive(r.grid.cols, r.grid.rows);
   // DAMAGE the tile right of the player so it can't conduct.

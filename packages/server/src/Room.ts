@@ -13,7 +13,6 @@ import {
   CrawlerAIState,
   DEFAULT_DIFFICULTY,
   DEFAULT_RUN_ID,
-  EntityType,
   ErrorCode,
   ErrorMsg,
   GRID_COLS,

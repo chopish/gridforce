@@ -3,6 +3,25 @@ import assert from 'node:assert/strict';
 import { Room } from '../Room.js';
 import { PanelState, REPAIR_DURATION_S, REPAIR_CARBON_COST, allLive, indexOf } from '@gridforce/shared';
 
+interface RoomInternals {
+  phase: string;
+  hostId: number;
+  panelStates: Uint8Array;
+  grid: { cols: number; rows: number; panelSize: number };
+  states: Map<number, {
+    id: number; x: number; y: number; facing: number;
+    panelJumpCooldownS: number; stateSeq: number; name: string; ready: boolean;
+    carbon: number; shockCooldownS: number; repairProgressS: number;
+  }>;
+  crawlers: Map<number, {
+    id: number; x: number; y: number; facing: number; hp: number;
+    targetCx: number; targetCy: number; ai: number;
+  }>;
+  carbons: Map<number, unknown>;
+  pilots: Map<number, unknown>;
+  physicsStep(): void;
+}
+
 function pilotWithRepair(repair: boolean) {
   return {
     isBot: false, ready: true, name: 'a',
@@ -16,7 +35,7 @@ function pilotWithRepair(repair: boolean) {
 
 test('holding repair on DAMAGED tile with carbon flips to LIVE after 1.5s', () => {
   const room = new Room('TR', { visibility: 'unlisted' });
-  const r = room as any;
+  const r = room as unknown as RoomInternals;
   r.phase = 'playing';
   r.panelStates = allLive(r.grid.cols, r.grid.rows);
   // Damage the tile at (5, 5).
@@ -33,13 +52,13 @@ test('holding repair on DAMAGED tile with carbon flips to LIVE after 1.5s', () =
   const ticks = Math.ceil(REPAIR_DURATION_S / dt) + 1;
   for (let i = 0; i < ticks; i++) r.physicsStep();
   assert.equal(r.panelStates[indexOf(r.grid.cols, 5, 5)], PanelState.LIVE);
-  assert.equal(r.states.get(0).carbon, 5 - REPAIR_CARBON_COST);
-  assert.equal(r.states.get(0).repairProgressS, 0);
+  assert.equal(r.states.get(0)!.carbon, 5 - REPAIR_CARBON_COST);
+  assert.equal(r.states.get(0)!.repairProgressS, 0);
 });
 
 test('releasing repair resets the progress timer', () => {
   const room = new Room('TR2', { visibility: 'unlisted' });
-  const r = room as any;
+  const r = room as unknown as RoomInternals;
   r.phase = 'playing';
   r.panelStates = allLive(r.grid.cols, r.grid.rows);
   r.panelStates[indexOf(r.grid.cols, 5, 5)] = PanelState.DAMAGED;
@@ -54,16 +73,16 @@ test('releasing repair resets the progress timer', () => {
     consumeInputForTick: () => ({ tick: 0, clientTimeMs: 0, mx: 0, my: 0, dash: false, sprint: false, shock: false, repair: repairing }),
   });
   for (let i = 0; i < 10; i++) r.physicsStep(); // ~0.33s of repair
-  assert.ok(r.states.get(0).repairProgressS > 0);
+  assert.ok(r.states.get(0)!.repairProgressS > 0);
   // Release.
   repairing = false;
   r.physicsStep();
-  assert.equal(r.states.get(0).repairProgressS, 0);
+  assert.equal(r.states.get(0)!.repairProgressS, 0);
 });
 
 test('repair does nothing on a LIVE tile', () => {
   const room = new Room('TR3', { visibility: 'unlisted' });
-  const r = room as any;
+  const r = room as unknown as RoomInternals;
   r.phase = 'playing';
   r.panelStates = allLive(r.grid.cols, r.grid.rows);
   // Player on LIVE tile (default).
@@ -74,13 +93,13 @@ test('repair does nothing on a LIVE tile', () => {
   });
   r.pilots.set(0, pilotWithRepair(true));
   for (let i = 0; i < 50; i++) r.physicsStep();
-  assert.equal(r.states.get(0).carbon, 5, 'no carbon spent');
-  assert.equal(r.states.get(0).repairProgressS, 0, 'no progress accrued');
+  assert.equal(r.states.get(0)!.carbon, 5, 'no carbon spent');
+  assert.equal(r.states.get(0)!.repairProgressS, 0, 'no progress accrued');
 });
 
 test('repair does nothing with 0 carbon', () => {
   const room = new Room('TR4', { visibility: 'unlisted' });
-  const r = room as any;
+  const r = room as unknown as RoomInternals;
   r.phase = 'playing';
   r.panelStates = allLive(r.grid.cols, r.grid.rows);
   r.panelStates[indexOf(r.grid.cols, 5, 5)] = PanelState.DAMAGED;
@@ -92,5 +111,5 @@ test('repair does nothing with 0 carbon', () => {
   r.pilots.set(0, pilotWithRepair(true));
   for (let i = 0; i < 50; i++) r.physicsStep();
   assert.equal(r.panelStates[indexOf(r.grid.cols, 5, 5)], PanelState.DAMAGED, 'tile still damaged');
-  assert.equal(r.states.get(0).repairProgressS, 0, 'no progress accrued');
+  assert.equal(r.states.get(0)!.repairProgressS, 0, 'no progress accrued');
 });
