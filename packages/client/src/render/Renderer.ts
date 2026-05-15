@@ -17,10 +17,6 @@ import { PlayerRenderer } from './PlayerRenderer.js';
 // frame (main.ts, Task 9) to drive the camera and apply the offset.
 export class Renderer {
   app!: Application;
-  /** @deprecated use playfield — kept for backwards compatibility */
-  get worldRoot(): Container {
-    return this.playfield ?? new Container();
-  }
   playfield: Container | null = null;
   gridRenderer!: GridRenderer;
   npcRenderer!: NpcRenderer;
@@ -77,7 +73,11 @@ export class Renderer {
   setGrid(grid: GridDef): void {
     if (!this.camera || !this.playfield) return;
     this.gridRenderer.rebuild(grid);
-    this.camera.setWorldBounds(grid.cols * grid.panelSize, grid.rows * grid.panelSize);
+    const worldW = grid.cols * grid.panelSize;
+    const worldH = grid.rows * grid.panelSize;
+    this.camera.setWorldBounds(worldW, worldH);
+    this.camera.snapTo(worldW / 2, worldH / 2);
+    this._applyOffset();
   }
 
   /**
