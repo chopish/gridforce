@@ -247,6 +247,12 @@ async function bootstrap(): Promise<void> {
         lastRenderedStageId = currentStage.id;
       }
 
+      // Push latest panel states to the grid renderer each frame.
+      // Reference-equality check inside setPanelStates avoids redundant redraws.
+      if (world.panelStates.length > 0) {
+        renderer.gridRenderer.setPanelStates(world.panelStates);
+      }
+
       // Render players: local from prediction, remotes from interpolator.
       const me = world.visualLocalPosition(alpha);
       const ids: PlayerId[] = [];
