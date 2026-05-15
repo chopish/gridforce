@@ -1,34 +1,52 @@
 # Electrical-defense: first playable round
 
+*Design spec. The implementation plan that translates this into tasks is a separate document, to be written after this design stabilizes. See `docs/superpowers/plans/2026-05-15-larger-maps-and-sprint.md` for the pattern.*
+
 ## Context
 
-Sub-spec 2 (larger maps + sprint + panel-jump) shipped at commit `03e41f8` and is live at https://grid.clab.su. Players can run, sprint, and panel-jump on the Large Run arena, but there is still no gameplay — no enemies, no panel state, no combat, no objective. This spec lands the **first complete playable round**: a single survival session where players defend solar panels against waves of mutated wildlife (Crawlers), repair damage with carbon dropped by kills, and either survive 5 waves or lose to city HP draining / all players going down.
+Sub-spec 2 (larger maps + sprint + panel-jump) shipped at commit `03e41f8` and is live at https://grid.clab.su. Players can run, sprint, and panel-jump on the Large Run arena, but there is still no gameplay — no enemies, no panel state, no combat, no objective.
 
-The design draws directly from the original GridForce design doc (`Downloads/GridForce.txt`) — Smash TV horde defense, electrical shock attacks, panel state degradation, carbon scavenging, co-op stakes. Tools beyond the local shock (electrodes, discharge, magnet, etc.) are deferred to future specs; this one ships the minimum-but-complete loop.
+This spec lands the **first complete playable round** of GridForce: a single survival session where players defend solar panels against waves of mutated wildlife, repair damage with carbon dropped by kills, and either survive 5 waves or lose to city HP draining / all players going down.
+
+The design is anchored in the original GridForce concept doc, pasted verbatim in [Appendix A](#appendix-a-original-gridforce-concept-doc-canonical-source). Future tool specs (electrodes, discharge, magnet, etc.) build on top of this foundation.
+
+## Concept & setting
+
+**Pitch.** Co-op electrical tower-defense vs hordes of mutated wildlife trying to break into the last city.
+
+**Setting.** Far-future dystopia. What's left of human society lives inside a single dome lined with a grid of solar panels that powers the city. Outside the dome is desolate; the mutated wildlife is desperate. Players are **grid enforcers** patrolling the outside, using electrical equipment to shock animals as they try to break through the panels, and repairing damage before the city loses power.
+
+**Player fantasy.** A tiny enforcer dwarfed by massive creatures, frying them with violent electrical effects, racing to keep the grid alive as the situation gets steadily more hectic.
+
+**Aesthetic anchors** (carried forward as guidance — not first-playable scope):
+- Retro / dystopian / desert palette.
+- Violent electrical VFX as the visual signature.
+- Strong scale contrast: tiny enforcers, massive enemies.
+- Music potentially synced rhythmically to gameplay (aspirational).
 
 ## Goals and non-goals
 
 **Goals**
 - A complete playable survival round: spawn, fight, repair, win or lose.
 - Three-state panels (LIVE / DAMAGED / BROKEN) as both the conductive grid and the defensive surface.
-- Crawler enemies with deterministic AI: spawn at edge → walk to nearest panel → attack → walk through holes → exit and damage the city.
-- Local shock attack as the core verb.
-- Carbon econ closing the loop between killing and repairing.
-- Hold-to-repair as a real game-feel beat.
+- Crawler enemies (the doc's "type 1 — normal pathing") with deterministic AI: spawn at edge → walk to nearest panel → attack → walk through holes → exit and damage the city.
+- **Local shock** as the core verb, in both **uncharged** (tap) and **charged** (hold) variants, per canon.
+- Carbon as the universal currency closing the loop between killing, repairing, and rebuilding.
+- Hold-to-repair as a real game-feel beat (DAMAGED → LIVE).
+- **Expensive BROKEN-tile rebuild** as a relief-valve verb so players retain agency over their grid late in the run.
 - Player HP with downed/revive states for co-op stakes.
 - Wave structure with escalating budgets, looped via a new `loopPhases` field on `StageDef`.
 - City HP as the global loss timer.
 - Win state on surviving wave 5.
-- Schema bumped to v12; clean break, no compat shims.
 
 **Non-goals**
-- Electrodes (3e), discharge (3f), push/pull (3g), bright panel / walls / reinforce (3h) — all deferred.
-- More than one enemy type. Chargers, spitters, bosses come in 3i.
-- Tool-unlock progression / persistence (3j).
+- Other tools from the doc: electrodes (3e), discharge (3f), push/pull (3g), bright panel / walls / reinforce tile (3h). All deferred.
+- The doc's other enemy types: red-toned attackers (type 2) and bosses (type 3). Deferred to 3i.
+- Tool-unlock progression / persistence / continues / lives meta-game (3j).
 - Multiple stages with mixed grid sizes mid-run.
-- AI partner gameplay (the design-doc "tag" mechanism for cooperating with AI on electrodes is deferred to 3e).
+- AI partner gameplay (the doc's "tag" mechanism for cooperating with AI on electrodes is deferred to 3e).
+- Aesthetic polish beyond minimum readability (sirens, screen shake, electrical particle systems are their own spec).
 - AOI culling. Wave budgets keep entity counts well under the existing snapshot envelope.
-- Aesthetic polish (sirens, screen shake, particle effects beyond minimum). The systems must work; polish is its own spec.
 
 ## Design
 
@@ -36,363 +54,297 @@ The design draws directly from the original GridForce design doc (`Downloads/Gri
 
 Each grid cell holds one of:
 
-- `LIVE` — bright, full power, conducts electricity, blocks enemy passage.
-- `DAMAGED` — cracked, no conduction, still blocks enemy passage.
-- `BROKEN` — pit/hole, no conduction, **passable by enemies**; permanent (per the doc).
+- **LIVE** — bright, full power, conducts electricity, blocks enemy passage.
+- **DAMAGED** — cracked, no conduction, still blocks enemy passage.
+- **BROKEN** — pit/hole, no conduction, **passable by enemies**.
 
 Transitions:
-- LIVE → DAMAGED: Crawler attacks for `PANEL_ATTACK_TO_DAMAGE_S = 0.5` seconds.
-- DAMAGED → BROKEN: Crawler attacks for another `PANEL_ATTACK_TO_BREAK_S = 0.5` seconds.
-- DAMAGED → LIVE: a player completes a hold-repair (see Repair section). Costs 1 carbon.
-- BROKEN → (anything): impossible.
 
-**State storage:** server-side `panelStates: Uint8Array` of length `cols * rows`, indexed by `y * cols + x`. Values are `PanelState` enum members. New player join sees the current state in `Welcome`; in-progress changes broadcast in snapshots.
+| From → To | Trigger | Cost | Duration |
+|---|---|---|---|
+| LIVE → DAMAGED | Crawler attacks the tile | — | 0.5s of contact (placeholder) |
+| DAMAGED → BROKEN | Crawler attacks the tile | — | another 0.5s of contact (placeholder) |
+| DAMAGED → LIVE | Player completes a hold-repair on the tile | 1 carbon | `REPAIR_DURATION_S = 1.5s` (placeholder) |
+| BROKEN → LIVE | Player completes a hold-rebuild on the tile | `REBUILD_CARBON_COST = 10` carbon | `REBUILD_DURATION_S = 4.0s` (placeholder) |
 
-**Wire encoding:** snapshots carry a delta-encoded run of `(index: varuint, newState: u8)` pairs for any cells that changed since the last full sync. Welcome includes the full state as a RLE-compressed `Uint8Array` (length-prefix + byte stream — most rounds will be mostly LIVE, so RLE is cheap). For the first-playable build this can ship as **full state in every snapshot** (RLE-encoded, ~few hundred bytes/snap at 36×24) — deltas are a follow-up optimization once profiling shows it matters.
+**Rebuild rationale.** The original doc frames BROKEN as effectively permanent ("creatures will just go through those openings, and it gets a lot harder pretty quickly"). Rebuild preserves that intent — at 10× the carbon cost and ~3× the duration of repair, it's a deliberate late-run commitment, not a routine action. But it gives players a relief-valve so a single bad wave doesn't doom the run.
 
-Concretely for this spec: send the full panel-state array in every snapshot, RLE-encoded. Server keeps a `Uint8Array(cols*rows)`. Encoder walks the array, emits `(state: u8, runLength: varuint)` pairs. Decoder reconstructs. At 36×24 with most cells LIVE: ~3–6 byte RLE → ~120 B/s at 20 Hz. Acceptable.
-
-**Render:** `GridRenderer` extends to draw per-cell state. LIVE is the existing solar-panel tile sprite; DAMAGED overlays a crack pattern + dim alpha 0.6; BROKEN replaces the tile with a darker pit sprite (or just renders nothing for the tile and lets a global "void" background show through).
+**Render:** LIVE is the existing solar-panel tile; DAMAGED overlays a crack pattern + dimmed alpha; BROKEN replaces the tile with a darker pit/hole sprite (or renders nothing, exposing a "void" background). Specific visual treatment is for the implementation pass.
 
 ### Crawler enemy
 
-New entity type alongside Player/NPC. **Crawlers and the existing wandering NPCs are different things** — NPCs are stress-test bouncing walkers, Crawlers are gameplay. Crawlers get their own entity type (`EntityType.Crawler = 3`) in the wire format.
+The Crawler corresponds to the doc's **type 1** enemy: normal pathing creatures that try to break through panels. First playable layers contact-damage onto type 1 so players have co-op stakes (down/revive); the doc's type 2 (red-toned, deliberately attacks players) and type 3 (bosses) stay deferred.
 
-**State per Crawler:**
-```ts
-interface CrawlerState {
-  id: number;          // u16
-  x: number;           // f32 px world position
-  y: number;           // f32
-  facing: number;      // f32 (quantized u8 on wire)
-  hp: number;          // u8, default 1 (one-shot from local shock)
-  target: {            // current target panel coords (for AI debug + interpolation hints)
-    cx: number;        // u8 column
-    cy: number;        // u8 row
-  };
-  state: CrawlerState_AIState;  // u8 enum: APPROACHING | ATTACKING | TRANSITING
-}
-```
+**AI behavior:**
+- Spawn on a random edge tile at the start of a wave.
+- **APPROACHING**: walk straight toward the nearest LIVE or DAMAGED panel adjacent to the outside. If multiple panels equidistant, prefer one nearest an existing BROKEN tile (so Crawlers funnel through openings rather than spreading damage uniformly).
+- **ATTACKING**: pinned in place adjacent to a target panel; advances that panel's degradation timer. When the panel breaks, transition to TRANSITING.
+- **TRANSITING**: walk through the BROKEN tile toward the opposite edge. When the Crawler's centre crosses the world edge, decrement city HP by 1 and remove the Crawler.
 
-**AI states:**
-- `APPROACHING`: walking toward the target panel at `CRAWLER_MOVE_SPEED = 80 px/s`. Once within `PLAYER_RADIUS + tile-half`, transition to ATTACKING.
-- `ATTACKING`: pinned in place adjacent to a LIVE or DAMAGED panel; advances the panel's "damage timer". When the panel breaks, transition to TRANSITING.
-- `TRANSITING`: walking through the BROKEN tile and toward the opposite edge. When the Crawler's centre passes the edge of the world: deduct 1 from `cityHp`, remove the Crawler.
+**Player contact:** a Crawler whose centre is within `(PLAYER_RADIUS + CRAWLER_RADIUS)` of a non-downed player drains the player's HP at `CRAWLER_CONTACT_DPS` (first-pass placeholder). Downed players are invisible to contact damage (Crawlers walk over without piling on).
 
-**Targeting:**
-- On spawn: pick a random edge, pick a random tile on that edge, walk toward it.
-- After damaging that tile to BROKEN: target the world centre line for the TRANSITING phase. Just keeps walking forward through the hole; the exit determines the city-damage event.
-- A Crawler whose ATTACKING target is on the OPPOSITE side of an already-BROKEN tile prefers walking through the hole over creating a new one (so multiple Crawlers funnel through openings rather than spreading damage).
+Specific speeds, sizes, and HP values are first-pass placeholders for the implementation plan to set and the playtest pass to tune. Conceptually: a Crawler walks slower than a player walks, takes one uncharged shock to kill, and is dangerous in groups rather than individually.
 
-**Damage to players:**
-- If a Crawler's centre is within `(PLAYER_RADIUS + CRAWLER_RADIUS)` of a non-downed player: deal `CRAWLER_CONTACT_DPS = 30` HP/s to that player.
-- A downed player is invisible to Crawlers' damage (they walk over without harming further).
+### Wave manager + `loopPhases` extension
 
-**Spawn rate (controlled by the Wave Manager — see below):**
-- Server-side spawner picks a random edge tile each spawn event.
-- Hardcoded for first playable: each wave's enemies spawn evenly distributed over the first ~half of the wave's duration, capped at `MAX_ALIVE_CRAWLERS = 24` simultaneous.
+Extend `StageDef` with an optional `loopPhases: boolean` field. When true, the room wraps from the last phase back to phase 0 instead of advancing to the next stage. This enables a stage to host "wave 1, wave 2, wave 3 …" without authoring N stage definitions.
 
-### Wave Manager + `loopPhases` extension
+The first-playable run, `td-prototype`, has one stage with phases `[prepare, wave, cleanup]` and `loopPhases: true`. Wave budgets escalate per wave (placeholder curve: wave 1 = 8 enemies, increasing through wave 5 = ~24). When the wave's kill goal is met (every Crawler from this wave has died OR exited), the server advances from `wave` to `cleanup`. When `cleanup` ends, the framework normally loops back to `prepare`, except: if doing so would push `currentWave` past `WAVE_GOAL = 5`, the framework instead falls through to `advanceStage()`, which transitions the room into `'run-end'` (since the run has only this one stage).
 
-Extend `StageDef`:
-
-```ts
-export interface StageDef {
-  id: string;
-  displayName: string;
-  grid: GridDef;
-  phaseSequence: PhaseDef[];
-  loopPhases?: boolean;  // NEW. If true, wrap to phaseSequence[0] when the
-                         // last phase ends instead of advancing to the next
-                         // stage. Useful for "wave 1, wave 2, …" loops.
-  theme?: string;
-}
-```
-
-In `Room.advancePhase()`, when `currentPhaseIndex` exceeds the stage's phase sequence:
-- If `stage.loopPhases === true`: wrap to phase 0, increment `currentWave` (new room state, u8, starts at 1).
-- Else: existing behavior — call `advanceStage()`.
-
-New stage definition:
-
-```ts
-STAGES['td-prototype'] = {
-  id: 'td-prototype',
-  displayName: 'TD Prototype',
-  grid: { cols: 36, rows: 24, panelSize: 64 },
-  phaseSequence: [
-    { id: 'prepare',  displayName: 'Prepare',  durationS: 10 },
-    { id: 'wave',     displayName: 'Wave',     durationS: null },  // event-driven
-    { id: 'cleanup',  displayName: 'Cleanup',  durationS: 5 },
-  ],
-  loopPhases: true,
-};
-
-RUNS['td-prototype'] = {
-  id: 'td-prototype',
-  displayName: 'TD Prototype',
-  stageSequence: ['td-prototype'],
-};
-```
-
-**Wave Manager (server-side, owned by `Room`):**
-- `currentWave: number` (u8, 1-indexed). Resets to 1 in `startGame`.
-- `waveSpawnBudget(wave: number): number` returns enemies-this-wave. Curve: `4 + 4 * wave` → wave 1 = 8, wave 2 = 12, … wave 5 = 24.
-- During `prepare` phase: no spawns, players can run + repair.
-- On entry to `wave` phase: reset `waveKills = 0`, `waveSpawned = 0`. Start spawning.
-- During `wave` phase: spawn up to `waveSpawnBudget(currentWave)` enemies over the first `WAVE_SPAWN_WINDOW_S = 20` seconds, paced evenly with jitter, capped at `MAX_ALIVE_CRAWLERS` alive at once. When `waveKills === waveSpawnBudget` (every Crawler from this wave has died, regardless of whether they reached the city), call `room.advancePhase()` to enter cleanup.
-- Crawlers that exit through holes also count as "ended" (they decremented city HP, then died). Treat them the same as killed Crawlers for the kill counter.
-- On entry to `cleanup` phase: idle 5s, players collect remaining carbon, breathe.
-- On exit from `cleanup`: framework auto-advances; with `loopPhases: true` this wraps to `prepare` and increments `currentWave`.
-- When `currentWave` would exceed `WAVE_GOAL = 5` after a successful cleanup: don't loop — advance past the stage to hit `run-end`.
-
-**Implementation:** in `advancePhase()`, when the current index is the last phase AND `loopPhases` is true, check `currentWave + 1 > WAVE_GOAL`. If yes, fall through to `advanceStage()` instead of wrapping; since the `td-prototype` run has a single-element `stageSequence`, this transitions the room to `'run-end'`. If no, wrap to phase 0 and increment `currentWave`. This keeps Run/Stage/Phase semantics intact: hitting the wave goal = stage complete = run-end.
+This keeps Run/Stage/Phase semantics clean: hitting the wave goal = stage complete = run complete.
 
 ### Combat — local shock
 
-**New `shock: bool` bit in `PlayerInput`:**
-- Bit 2 in the existing buttons byte (dash=bit0, sprint=bit1, shock=bit2).
-- Wire layout otherwise unchanged.
-- Client: bound to `KeyF` and the left mouse button (`mousedown` on the playfield canvas — rising-edge), plus gamepad `buttons[2]` (X on Xbox). Held = continuous fire (server enforces cooldown).
+Per the doc, local shock has two variants. The first playable ships both.
 
-**Server behavior in `physicsStep` during `wave` phase:**
-- For each player whose input has `shock === true` AND `shockCooldownS === 0`:
-  - Determine the player's own panel cell: `cx = floor(x / panelSize), cy = floor(y / panelSize)`.
-  - Iterate the 4 cardinal neighbors `(cx±1, cy)` and `(cx, cy±1)`.
-  - For each neighbor that is `LIVE`: any Crawler whose centre is inside that neighbor's tile bounds takes 1 damage (Crawlers are 1-HP, so they die).
-  - Set `shockCooldownS = SHOCK_COOLDOWN_S = 0.25` on the player.
-- Decrement `shockCooldownS` toward 0 every tick.
+**Uncharged (tap).** Rising-edge of the shock input fires immediately:
+- Pulse affects the 4 cardinal neighbor tiles that are LIVE — diagonals and DAMAGED/BROKEN tiles do not conduct.
+- Any Crawler standing on an affected tile takes 1 damage. Crawlers are 1-HP for first playable, so this is a one-shot.
+- Cooldown: `SHOCK_COOLDOWN_S = 0.25` (placeholder).
+- Doc framing: "low damage, ineffective for larger enemies, too risky for faster moving enemies." That distinction reactivates when bigger/faster enemies arrive in 3i; in first playable all enemies are Crawlers and one-shot regardless.
 
-**Player state additions (wire format):**
-- `shockCooldownS: f32` (or quantized u8).
+**Charged (hold).** Holding the shock input builds charge:
+- Visible charge level on the player (a ring or aura) tells the player and remote teammates how charged they are.
+- After `SHOCK_CHARGE_TIME_S = 0.6s` (placeholder), the pulse becomes "fully charged."
+- On release of a fully-charged shock: pulse propagates along the LIVE conduction graph up to manhattan distance 2 in each cardinal direction (still no diagonals, still no conduction through DAMAGED/BROKEN). Affects every Crawler standing on any reached tile.
+- On release before full charge: emits an uncharged pulse (no penalty for misclicks).
+- Cooldown after a fully-charged release: `SHOCK_CHARGE_COOLDOWN_S = 0.5s` (placeholder).
+- First-playable payoff: **range and breadth** (multi-tile, multi-enemy in one pulse), not damage — Crawlers are still 1-HP. The damage-tier distinction in the doc reactivates with bigger enemies.
 
-**Client visual (deferred polish, minimum for first playable):**
-- On shock fire: brief flash on the player's tile + each LIVE neighbor (1 frame of full-brightness overlay). A future polish pass adds the forked-arc particle.
+**Wire/input envelope:** the existing `shock` bit becomes a held-state bit (server tracks how long the player has held it). PlayerState carries the current hold duration so remote clients can render the charge ring. No new input bit needed beyond the one the spec already adds for `shock`.
 
-### Carbon — drops and pickups
+### Carbon — universal currency
 
-**New entity type `Carbon` (EntityType = 4):**
-```ts
-interface CarbonState {
-  id: number;     // u16
-  x: number;      // f32
-  y: number;      // f32
-  ttlS: number;   // f32 — countdown to despawn, default 10s
-}
-```
+Carbon is GridForce's universal economy, per the doc. Crawlers drop a Carbon pickup at the kill location on death; pickups have a TTL (~10s placeholder); a player walking near a pickup collects it (clamped to a max stack of 99 to fit a u8).
 
-**Server:**
-- On Crawler death (from shock): spawn one Carbon at the Crawler's centre.
-- Each tick during `wave` and `cleanup` phases: decrement every Carbon's `ttlS` by `dt`. If ≤ 0, remove.
-- Each tick: for every player and every Carbon, check distance. If within `(PLAYER_RADIUS + CARBON_PICKUP_RADIUS)` (`CARBON_PICKUP_RADIUS = 16`): increment that player's `carbon` (clamped to 99), remove the Carbon.
+First-playable spends:
+- Panel repair (DAMAGED → LIVE): **1 carbon**.
+- Panel rebuild (BROKEN → LIVE): **10 carbon**.
 
-**Player state additions:**
-- `carbon: number` (u8 quantized, 0–99).
+Future spends (out of scope for this spec, listed for context):
+- Electrode placement, discharge ultimate, magnet, bright panel decoy, walls, reinforce tile.
 
-### Repair
+The 10× cost gap between repair and rebuild is felt: rebuild is a deliberate strategic commitment, not a routine action.
 
-**New `repair: bool` bit in `PlayerInput`:**
-- Bit 3 in the buttons byte (dash=0, sprint=1, shock=2, repair=3).
-- Client: bound to `KeyR` and right mouse button, plus gamepad `buttons[3]` (Y on Xbox). Held = repair-in-progress.
+### Repair + Rebuild
 
-**Player state additions:**
-- `repairProgressS: f32` (or quantized u8). Visible to remote clients via PlayerEncoder.
+Both transitions share one `repair` input bit:
 
-**Server behavior in `physicsStep`:**
-- For each player with `repair === true`:
-  - Determine the player's current tile.
-  - If that tile is `DAMAGED` AND `carbon ≥ 1`:
-    - Increment `repairProgressS` by `dt`.
-    - If `repairProgressS >= REPAIR_DURATION_S = 1.5`:
-      - Set the tile to `LIVE`.
-      - Deduct 1 carbon.
-      - Reset `repairProgressS = 0`.
-  - Else: reset `repairProgressS = 0`.
-- For each player with `repair === false`: reset `repairProgressS = 0`.
+- **DAMAGED tile under the player, hold `repair`, carbon ≥ 1**: progress timer climbs over 1.5s; on completion, tile → LIVE, deduct 1 carbon, reset timer.
+- **BROKEN tile under the player, hold `repair`, carbon ≥ 10**: progress timer climbs over 4.0s; on completion, tile → LIVE, deduct 10 carbon, reset timer.
+- **LIVE tile under the player**: no-op.
+- **Insufficient carbon for the tile's current state**: no progress accrues (clear feedback: nothing happens).
+- **Release the input OR leave the tile mid-repair**: reset timer to 0.
+- **Crawler hitting the player mid-repair** doesn't directly cancel the repair, but the player will either move away or die, both of which reset the timer naturally.
 
-Result: holding R/RMB while standing on a damaged tile with at least 1 carbon drains a 1.5s timer; leaving the tile, releasing the input, or running out of carbon resets it. A Crawler hitting the player mid-repair doesn't directly cancel the repair, but the player's HP drains and they'll either move (resetting) or die (downed players can't hold inputs anyway).
+Server picks the destination state and cost from the tile currently under the player. The progress timer is visible to remote clients so teammates can see who's mid-repair.
+
+Doc note: the doc says "takes a couple seconds at first but speeds up as you get upgrades." First playable ships only the base speed; speed-up upgrades belong to the eventual tool-unlock progression spec (3j).
 
 ### Player HP + revives
 
-**Player state additions:**
-- `hp: number` (u8, 0–100; spawn at 100).
-- `downed: boolean` (bit on the flags byte).
-- `reviveProgressS: f32` (or quantized u8) — accumulated time a teammate has been within revive range.
+- Players spawn with `hp = 100`.
+- Crawler contact drains `CRAWLER_CONTACT_DPS` HP/sec (placeholder).
+- At HP = 0: player becomes `downed`. They can't move, fire, jump, or repair while downed.
+- A non-downed teammate within `REVIVE_RANGE = panelSize * 1.5` (~1.5 tiles) accumulates revive progress on the downed player at a fixed rate. After 3 seconds: the downed player is revived at HP = 50.
+- **Multiple teammates in range do not speed up the revive** — the timer accumulates at a fixed rate so long as at least one teammate is there.
+- Revive progress resets if no teammate remains in range.
 
-**Server behavior:**
-- Each tick: for each non-downed player, check distance to every Crawler. For each Crawler within contact range: drain `CRAWLER_CONTACT_DPS * dt` from the player's HP.
-- When a player's HP reaches 0: set `downed = true`, `hp = 0`. Zero out their movement input on the next tick (they can't walk, sprint, shock, jump, or repair while downed).
-- Each tick: for each downed player, check distance to every non-downed teammate. If **at least one** teammate is within `REVIVE_RANGE = panelSize * 1.5` (1.5 tiles, ~96 px): increment `reviveProgressS` by `dt`. Multiple teammates in range do not speed up the revive — the timer accumulates at a fixed rate so long as someone is there.
-- If `reviveProgressS >= REVIVE_DURATION_S = 3.0`: set `downed = false`, `hp = REVIVE_HP = 50`, `reviveProgressS = 0`.
-- If at any tick no teammate is in range: reset `reviveProgressS = 0`.
+**Loss condition (player side):** if every player in the room is `downed` simultaneously, the room transitions to `'run-end'` with a "WIPE" headline (computed client-side from the snapshot at transition).
 
-**Client:**
-- Downed players render as a slumped sprite with a faint timer ring.
-- Standing within revive range shows a held-progress indicator over the downed teammate.
-- The local downed player sees a "DOWNED — waiting for revive" overlay.
+### City HP + win/loss
 
-**Loss condition (player side):**
-- If every player in the room is `downed` simultaneously: `room.phase = 'run-end'` with a "WIPE" subtype flag. (For wire format simplicity, repurpose the existing `run-end` phase value; the win/loss differentiation rides on `cityHp > 0` and at-least-one-player-not-downed at the moment of transition. Client computes the headline from those.)
+- Room tracks `cityHp` (starts at 100; placeholder).
+- Each Crawler that exits through a BROKEN tile decrements `cityHp` by 1.
+- If `cityHp` reaches 0: room → `'run-end'` with "CITY LOST" headline.
+- Surviving wave 5's cleanup phase → room → `'run-end'` with "VICTORY" headline.
 
-### City HP + win/loss state
+Per-room counters maintained for the run-end summary panel: total kills, panels permanently broken, carbon spent on repairs/rebuilds.
 
-**Room state additions:**
-- `cityHp: number` (u8, 0–100). Resets to 100 in `startGame`.
+### Wire format envelope
 
-**Behavior:**
-- When a Crawler exits through a BROKEN tile: deduct 1 from `cityHp`.
-- If `cityHp` reaches 0: `room.phase = 'run-end'`.
+- **Schema version bumps 11 → 12.**
+- `PlayerInput` adds `shock` and `repair` bits; `shock` is held-state rather than rising-edge.
+- `PlayerState` adds: `hp`, `downed`, `carbon`, `repairProgressS`, `reviveProgressS`, `shockCooldownS`, `shockHeldS`.
+- Snapshot adds: panel-state array (RLE-encoded), `cityHp`, `currentWave`, per-room counters, and two new entity groups (Crawler, Carbon).
+- Welcome adds: full panel-state byte array (raw, joiner-friendly).
+- New EntityTypes: `Crawler` and `Carbon`.
 
-**Win condition:**
-- Surviving wave 5's cleanup phase. The framework's stage-advance fires at that point (since `td-prototype` has only one stage in its `stageSequence`), transitioning to `run-end`.
+Bandwidth envelope estimate at 36×24 grid, 4 players, 20 Hz snapshots: a few hundred bytes added per snapshot — comfortably inside the existing budget.
 
-**Client run-end panel** (extends the existing StageHud "Run Complete" panel):
-- Compute headline from the last-known snapshot at transition:
-  - All players downed: "OVERRUN — your team fell to the wildlife".
-  - cityHp = 0: "CITY LOST — too many got through".
-  - currentWave > 5: "VICTORY — you survived 5 waves".
-- Show stats: waves cleared, kills, panels lost-permanently, carbon spent on repairs.
+*Exact byte layouts, quantization scales, and encoder/decoder structure are specified in the implementation plan.*
 
-These per-room counters are useful for the run-end panel but cheap to track:
-- `totalKills: u16` (clamps at 0xffff, fine)
-- `panelsBroken: u8`
-- `carbonSpent: u16`
+## Gameplay scenarios to validate
 
-### Wire format — schema v12
+The first-playable build must demonstrate these player-observable behaviors. Concrete test files, framework choices, and TDD steps are decisions for the implementation plan.
 
-Schema bumped 11 → 12. v12 changelog:
+**Panels**
+- A LIVE tile shows as a bright solar panel; DAMAGED visibly degraded; BROKEN visibly a hole.
+- A Crawler in contact with a LIVE tile takes it to DAMAGED in 0.5s of contact.
+- A Crawler in contact with a DAMAGED tile takes it to BROKEN in another 0.5s.
 
-```
-//  v12: First-playable gameplay. PlayerInput adds `shock` + `repair`
-//       bits. PlayerState adds hp/downed/carbon/repairProgressS/
-//       reviveProgressS/shockCooldownS. Snapshot adds panel-state RLE
-//       block, Crawler entity group, Carbon entity group, cityHp,
-//       currentWave, and per-room counters (totalKills, panelsBroken,
-//       carbonSpent). Welcome adds full panel-state Uint8Array.
-//       New EntityTypes: Crawler=3, Carbon=4.
-```
+**Crawlers**
+- A Crawler spawned at an edge walks toward the nearest LIVE/DAMAGED panel.
+- A Crawler stops at its target panel and attacks until it breaks.
+- A Crawler walks through a BROKEN tile and exits the opposite side.
+- An exiting Crawler decrements city HP by 1.
 
-**Snapshot layout addition (after the existing fields, before the entity groups):**
-```
-u8       cityHp
-u8       currentWave
-u16      totalKills
-u8       panelsBroken
-u16      carbonSpent
-varuint  panelRleLen
-[u8 state, varuint runLen] × panelRleLen   // RLE of panel states
-```
+**Local shock — uncharged**
+- Tap shock with a Crawler one tile away on a LIVE tile: Crawler dies.
+- Tap shock with a Crawler on a DAMAGED tile adjacent to the player: Crawler survives (no conduction).
+- Tap shock with a Crawler on a diagonal LIVE tile: Crawler survives (4-cardinal only).
+- Tap shock twice within 0.25s: second tap has no effect (cooldown).
 
-**Welcome layout addition (after maxPlayers/sessionKey, before players):**
-```
-varuint  panelStateBytes
-u8 × panelStateBytes                          // full Uint8Array, raw (not RLE — joiner-friendly)
-```
+**Local shock — charged**
+- Hold shock for 0.6s and release: pulse reaches up to manhattan-2 along LIVE-connected tiles.
+- Release before 0.6s: equivalent to a tap (uncharged pulse).
+- Hold past 0.6s + release: payload is the same (no overcharge — full charge is the cap).
+- Charge level visible to the player and remote teammates while building.
 
-**Entity types:**
-- Snapshot now potentially emits up to 4 entity groups: Player, NPC, Crawler, Carbon. The existing dynamic-count field handles this.
+**Carbon**
+- Killing a Crawler drops a Carbon pickup at the kill location.
+- A Carbon pickup expires after ~10s.
+- Walking over a pickup increments the player's carbon by 1 and removes the pickup.
 
-**PlayerEncoder additions:**
-- `hp: u8` (0–100)
-- `downed: bool` (existing flags byte, allocate bit 2)
-- `carbon: u8` (0–99 quantized)
-- `repairProgressS: u8` (quantized 0–1.5s)
-- `reviveProgressS: u8` (quantized 0–3.0s)
-- `shockCooldownS: u8` (reuse the existing `quantizeTimer` with `TIMER_SCALE = 255`. 0–0.25s maps to 0–~64; ~4 ms resolution, plenty for a 30 Hz tick game)
+**Repair**
+- Hold `repair` on a DAMAGED tile with ≥1 carbon for 1.5s: tile → LIVE, carbon decrements by 1.
+- Release mid-repair: progress resets.
+- Walk away mid-repair: progress resets.
+- Hold `repair` on a LIVE tile: no effect.
+- Hold `repair` with 0 carbon: no effect.
 
-Approximate per-player wire growth: ~6 bytes. At 4 players × 20Hz = ~480 B/s. Fine.
+**Rebuild**
+- Hold `repair` on a BROKEN tile with ≥10 carbon for 4.0s: tile → LIVE, carbon decrements by 10.
+- Hold `repair` on a BROKEN tile with <10 carbon: no progress.
 
-### Tests
+**HP and revives**
+- Crawler contact drains player HP at the configured DPS.
+- Player HP at 0: player becomes downed; can't act.
+- A teammate within 1.5 tiles of a downed player for 3s: downed player is revived at HP 50.
+- Teammate leaving range mid-revive: progress resets.
+- All players downed simultaneously: room → run-end (WIPE headline).
 
-**Shared sim tests** (`sim.test.ts` + new `panels.test.ts` + new `crawler.test.ts`):
-- `local shock kills crawler on adjacent LIVE tile`
-- `local shock does NOT reach across DAMAGED tile (no conduction)`
-- `local shock does NOT reach diagonals (4 cardinal only)`
-- `shock cooldown enforced (second fire 0.1s after first is no-op)`
-- `crawler attacking a LIVE tile transitions it to DAMAGED in 0.5s`
-- `crawler attacking a DAMAGED tile transitions it to BROKEN in 0.5s`
-- `crawler walks through a BROKEN tile in TRANSITING state`
-- `crawler exit decrements cityHp by 1`
-- `carbon pickup on overlap adds 1 to player carbon and removes the pickup`
-- `carbon pickup expires after ttlS reaches 0`
-- `hold-repair on DAMAGED tile flips to LIVE in 1.5s and deducts 1 carbon`
-- `repair aborts on releasing the bit`
-- `repair aborts on leaving the tile`
-- `repair does nothing on a LIVE tile`
-- `repair does nothing with 0 carbon`
-- `crawler contact drains player HP at CRAWLER_CONTACT_DPS`
-- `player at hp=0 becomes downed`
-- `downed player within revive range for 3s is revived at HP 50`
-- `revive aborts when teammate leaves range`
+**City HP and win/loss**
+- Crawler exit decrements city HP by 1.
+- City HP at 0: room → run-end (CITY LOST headline).
+- Surviving wave 5's cleanup: room → run-end (VICTORY headline).
 
-**Wire tests** (`wire.test.ts`):
-- `shock + repair bits round-trip in Input message`
-- `PlayerState round-trip carries hp/downed/carbon/repairProgressS/reviveProgressS`
-- `panel-state RLE round-trips for a fully-LIVE grid (compact)`
-- `panel-state RLE round-trips for a mixed grid (runs of varying length)`
-- `Crawler entity round-trip`
-- `Carbon entity round-trip`
-- `Welcome carries full panel-state byte array`
+## Verification (design completeness)
 
-**Integration tests** (`integration.headless.test.ts`):
-- `single wave clears: 8 crawlers spawn during wave, all die to shock, room advances to cleanup`
-- `all players downed → run-end with WIPE headline`
-- `cityHp reaches 0 → run-end with CITY LOST headline`
-- `surviving 5 waves → run-end with VICTORY headline`
+1. Every system has a defined state, transitions, and player-facing feedback.
+2. Every player action has a defined input, server-side effect, and visible response.
+3. Every win/loss path is enumerated and produces a distinct run-end headline.
+4. The original GridForce concept doc is captured in [Appendix A](#appendix-a-original-gridforce-concept-doc-canonical-source) so this spec is self-contained.
 
-**Manual playtest:**
-- Host TD Prototype run. Confirm: prepare phase shows 10s countdown; wave phase spawns enemies; shock kills them; carbon drops; repair restores damaged panels; HP drains on contact; downed → revivable; win at wave 5.
-- Multi-client: a teammate revives a downed player; both shocks count toward the wave kill total.
-
-## Files touched (approximate)
-
-**Shared (new + modified):**
-- `packages/shared/src/constants.ts` — schema bump, new gameplay constants
-- `packages/shared/src/types.ts` — Input/Player/Snapshot/Welcome additions
-- `packages/shared/src/stages.ts` — `loopPhases` on StageDef, `td-prototype` stage + run
-- `packages/shared/src/sim.ts` — shock + repair handling in stepPlayer (or a new module)
-- `packages/shared/src/panels.ts` — **NEW** — panel-state helpers + RLE codec
-- `packages/shared/src/enemies/crawler.ts` — **NEW** — Crawler AI step function (deterministic)
-- `packages/shared/src/net/messages/Input.ts` — shock + repair bits
-- `packages/shared/src/net/messages/Snapshot.ts` — panel RLE, new entity groups, cityHp/wave/counters
-- `packages/shared/src/net/messages/Welcome.ts` — full panel state
-- `packages/shared/src/net/entities/PlayerEncoder.ts` — new player fields
-- `packages/shared/src/net/entities/CrawlerEncoder.ts` — **NEW**
-- `packages/shared/src/net/entities/CarbonEncoder.ts` — **NEW**
-- `packages/shared/src/net/wire.ts` — EntityType enum gains Crawler=3, Carbon=4
-- Tests: `panels.test.ts`, `crawler.test.ts`, additions to `sim.test.ts` + `wire.test.ts`
-
-**Server:**
-- `packages/server/src/Room.ts` — panel-state array, Crawler map, Carbon map, wave manager, cityHp + counters, run-end transitions, advancePhase override for loopPhases + wave goal
-- `packages/server/src/CrawlerSpawner.ts` — **NEW** — picks edges + paces spawns
-- `packages/server/src/test/td-prototype.test.ts` — **NEW** integration tests
-
-**Client:**
-- `packages/client/src/input/InputCapture.ts` — F/R keys + LMB/RMB + gamepad bindings
-- `packages/client/src/sim/PredictedWorld.ts` — mirror new state (panels, cityHp, wave, counters)
-- `packages/client/src/render/GridRenderer.ts` — three-state tile rendering
-- `packages/client/src/render/CrawlerRenderer.ts` — **NEW**
-- `packages/client/src/render/CarbonRenderer.ts` — **NEW**
-- `packages/client/src/render/Renderer.ts` — wire new renderers into the playfield container
-- `packages/client/src/ui/GameHud.ts` — **NEW** — HUD overlay showing cityHp / currentWave / player carbon / player HP
-- `packages/client/src/ui/StageHud.ts` — extend run-end panel with win/loss headline + stats
-- `packages/client/src/main.ts` — drive shock + repair through world.step + new HUD updates
-
-Approximate file count: 18 modified + 9 new = ~27 files. This is materially larger than sub-spec 2 (16 files).
-
-## Verification
-
-1. `npm run typecheck` clean across all 3 workspaces.
-2. `npm test` — all existing tests + the new ~25 cases pass.
-3. `npm run lint` — 0 errors.
-4. `npm run build` clean.
-5. Manual playtest checklist above.
-6. Push to main; webhook auto-deploys; gridforce.service restarts with the new wire format and panel-state visualizer; old client tabs SchemaMismatch.
+Build, deploy, and manual-playtest verification belong to the implementation plan.
 
 ## Scope flag
 
-This is a single coherent spec — every system needs every other system to demonstrate value (panels need enemies, enemies need shock, shock needs targets, etc.) — but the implementation plan will likely break out into 18+ tasks. Realistic execution: 1.5–2 sessions via subagent-driven-development. If the plan grows to 25+ tasks, consider splitting:
-- **B1**: panels + Crawler + shock + carbon + repair, no HP/revives/waves yet. Endless-mode minimum.
-- **B2**: HP + revives + wave manager + city HP + win/loss states.
+This is one coherent design — every system depends on every other to demonstrate value. The implementation plan that follows may, at its author's discretion, decompose this into sub-plans:
 
-The plan-writer's call: keep as one spec if the dependency graph is tight; decompose if the tasks fall into two natural clusters with a clean cut between them.
+- **B1**: panels + Crawler + uncharged shock + carbon + repair. Endless-mode minimum.
+- **B2**: charged shock + rebuild + HP/revives + waves + city HP / win-loss.
+
+That split is an implementation-plan decision; this design spec keeps the systems integrated.
+
+## Open items intentionally deferred
+
+- **Tuning values**: charge time, charge cooldown, rebuild cost, rebuild duration, carbon-per-kill, wave-budget curve, Crawler speeds and sizes, contact DPS, repair duration, revive duration. All ship as first-pass placeholders; calibration is a playtest activity owned by the implementation plan and iteration.
+- **Whether the second combat verb is *charged shock* or something else** (e.g., a minimal discharge or push). This spec proposes charged shock because it is the doc's literal completion of "Local shock" and the smallest scope-true-to-canon extension. If a different second verb belongs in first playable, edit this section before generating the implementation plan.
+
+---
+
+## Appendix A: Original GridForce concept doc (canonical source)
+
+The doc lives only on the creator's local machine. Pasted verbatim below so this spec is self-contained.
+
+> GridForce
+> Title:
+> GridForce
+>
+> Pitch:
+> Cooperative electrical weapon and tower-defense mechanics meets hordes of enemies through an escalating difficulty stage progression
+>
+>
+> Story:
+> It's pretty far into the future, a dystopian setting. Much of what's left of human society is inside a single dome lined with a grid of solar panels that power the city. The rest of the planet is fairly desolate. The outside wildlife that has long since mutated and grown desperate is constantly trying to break into the city. There are grid enforcers that patrol the grid on the outside and stop the mutated wildlife from getting in. They use their electrical equipment to shock tiles and literally fry the animals as they're trying to break through the tiles. These enforcers must also repair the damaged and broken solar panels otherwise the city begins to lose power, they can't shock through the tiles, and animals can more easily break through inactive panels. You and your friends are grid enforcers. The threats keep getting worse and worse and it's up to you guys to put a stop to the threats once and for all.
+>
+>
+> Mechanics:
+> The players will path around in analog motion but also have panel-to-panel jump motions to get around the stage. It is an aerial perspective and you're running around defending a massive onslaught of enemies with larger enemies popping up too. THINK SMASH TV.
+>
+>
+> The players have access to an increasing number of tools to help deal with enemies that they unlock throughout the game.
+>
+>
+> (1) Local shock -
+> uncharged is just 1 tile adjacent to the player shocking enemies and dealing low damage. Ineffective for larger enemies and too risky for faster moving enemies
+> - charged is 2 tiles adjacent to the player (takes some time to do so)
+> (2) Repair -
+> takes a couple seconds at first but speeds up as you get upgrades to repair damaged or broken solar panels
+> (3) Electrodes -
+> Place an electrode on the ground that you can shock, however it does not travel anywhere unless another electrode is placed in the same row/column (?) Your teammates can work with you placing temporary electrodes so you can take out larger clusters of creatures as well as the bosses when the other tools are not as effective. Electrodes will do far more damage than local shocks but they require teamwork to execute. Players will likely not be able to place a bunch of electrodes at once.
+> (4) Discharge -
+> Somewhat like an ultimate attack/board clear. Shocks every live tile on-screen. Probably does high damage as well.
+> (5) Push/Pull magnetic tool -
+> Allows you to pull teammates toward you or push them away from you to help each other survive and navigate the scene while you're being bombarded.
+> (6) Bright Panel -
+> Like a lantern, the bright panel will attract smaller enemies toward it. You use it as a distraction when things start becoming unmanageable.
+> (7) Walls (?)
+> Adding walls to press enemies into specific areas
+> (8) Reinforce Tiles -
+> Allows you to reinforce tiles so they do not crack as easily
+>
+>
+> How does repairing work?
+> When you fry creatures they will drop ___CARBON___ that you will use to repair broken and damaged tiles. If you save up enough you can also build other useful things like potentially requirements for discharge/magnets/electrodes.
+>
+>
+> Damaged Tiles?
+> Damaged tiles are no longer LIVE so they will not TRANSMIT electricity through them. Players must balance the repair mechanic with their electric extermination efforts.
+>
+>
+> Enemy types
+> 1. Normal creatures just path around and try to break in
+> 2. Red toned creatures attack players in addition
+> 3. Bosses can be either tone but are generally very large
+>
+>
+> Extras?
+> Probably would have difficulty modes adjusting the rate at which things get more violent and maybe # of lives/continues
+>
+>
+> Potentially have the players move between the panels instead of on the panels directly ?
+>
+>
+> Aesthetic:
+> Not sure. Probably retro-y but maybe 3d with 2-dimensional movement and an aerial perspective. I like the idea of the grid enforcers being TINY compared to the massive mutated creatures trying to break in with lots of electricity animations that look really violent and cool. Definitely dystopian futurey robotic deserty desolate themed. Music no idea whatsoever. Needs to go well with the gameplay that's all I know. I also love the idea of music synchronizing somewhat rhythmically with gameplay.
+>
+>
+> I'm a little concerned about the grid getting boring after a couple of stages, just scenery wise so maybe there will have to be tiers to the grid like where more power is coming from and have the color scheme and decorations on the grid change or something. Maybe as you climb to the top of the dome. Then final boss at the top of the dome, or something.
+>
+>
+> How does losing work:
+> Everyone dies
+> Too many enemies break into the city
+> Once tiles are broken through you can't repair them anymore so it gets a lot harder pretty quickly at that point creatures will just go through those openings (i was thinking there's a set # of creatures per screen and they all won't directly path to the opening but if it breaks in the beginning of a screen then you might lose on that screen but if it's later on in the screen probably not).
+>
+>
+> Multiplayer:
+> I was thinking 1-4 players local COOP with AI if you aren't able to have friends play with you but might be rather difficult to get AIs to work with you on electrodes. Might need a signalling mechanism to tell the AI to work with you right as you place electrodes.
+>
+>
+> I also thought of a game mode where one player is the big monster in the middle and the rest are on the outsides but not sure if that will be fun or work well.
+>
+>
+> Progression:
+> Think SMASH TV
+> You're moving along the grid stage by stage, clearing all creatures on the screen, then moving to another screen and more creatures start showing up. I'm wanting the gameplay to get more and more hectic as the stages go on. Requiring more and more electrode teamwork and even
+> Synchronizing discharge ultimates so you can manage the creature load.
+>
+>
+> I was thinking the solar cells would get smaller and smaller as you make your way to the top of the dome throughout the game. The gameplay would naturally get harder as well.
+>
+>
+> Below is a basic proof of concept image showing local shocking, electrode usage, cracked solar panels, the grid enforcers, and some creatures
+> basic demonstration.png
