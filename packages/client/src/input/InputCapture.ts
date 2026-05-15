@@ -23,6 +23,7 @@ export class InputCapture {
   private down = false;
   private left = false;
   private right = false;
+  private sprint = false;
   private dashTicksRemaining = 0;
 
   private readonly onKey: (e: KeyboardEvent) => void;
@@ -51,6 +52,10 @@ export class InputCapture {
         case 'Space':
           if (pressed) this.dashTicksRemaining = DASH_PRESS_TICKS;
           break;
+        case 'ShiftLeft':
+        case 'ShiftRight':
+          this.sprint = pressed;
+          break;
         default:
           return;
       }
@@ -74,6 +79,7 @@ export class InputCapture {
 
     // Gamepad overrides keyboard if connected and any axis is non-trivial.
     const pad = navigator.getGamepads?.()[0];
+    let sprintPressed = false;
     if (pad) {
       const ax = pad.axes[0] ?? 0;
       const ay = pad.axes[1] ?? 0;
@@ -84,6 +90,7 @@ export class InputCapture {
       if ((pad.buttons[0]?.pressed ?? false) || (pad.buttons[7]?.pressed ?? false)) {
         this.dashTicksRemaining = DASH_PRESS_TICKS;
       }
+      sprintPressed = pad.buttons[6]?.pressed ?? false;
     }
 
     // Normalise diagonal so we don't ship 1.41 to the server.
@@ -95,11 +102,11 @@ export class InputCapture {
 
     const dash = this.dashTicksRemaining > 0;
     if (this.dashTicksRemaining > 0) this.dashTicksRemaining--;
-    return { mx, my, dash, sprint: false };
+    return { mx, my, dash, sprint: this.sprint || sprintPressed };
   }
 
   clear(): void {
-    this.up = this.down = this.left = this.right = false;
+    this.up = this.down = this.left = this.right = this.sprint = false;
     this.dashTicksRemaining = 0;
   }
 
