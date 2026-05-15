@@ -87,7 +87,7 @@ test('Bootstrap: test-run with single open-ended phase never auto-advances', asy
       url: h.wsUrl,
       roomCode: room.code,
       name: 'a',
-      drive: () => ({ mx: 0, my: 0, dash: false, sprint: false }),
+      drive: () => ({ mx: 0, my: 0, dash: false, sprint: false, shock: false, repair: false }),
     });
     await c.connect();
     await new Promise<void>((r) => setTimeout(r, 100));
@@ -121,7 +121,7 @@ test('Timer-driven phase advance via the real tick loop', async () => {
       url: h.wsUrl,
       roomCode: room.code,
       name: 'a',
-      drive: () => ({ mx: 0, my: 0, dash: false, sprint: false }),
+      drive: () => ({ mx: 0, my: 0, dash: false, sprint: false, shock: false, repair: false }),
     });
     await c.connect();
     await new Promise<void>((r) => setTimeout(r, 100));
@@ -164,7 +164,7 @@ test('Manual advancePhase: event-driven phase transitions immediately', async ()
       url: h.wsUrl,
       roomCode: room.code,
       name: 'a',
-      drive: () => ({ mx: 0, my: 0, dash: false, sprint: false }),
+      drive: () => ({ mx: 0, my: 0, dash: false, sprint: false, shock: false, repair: false }),
     });
     await c.connect();
     await new Promise<void>((r) => setTimeout(r, 100));
@@ -204,7 +204,7 @@ test('Stage advance: last phase of a stage rolls to next stage and swaps the gri
       url: h.wsUrl,
       roomCode: room.code,
       name: 'a',
-      drive: () => ({ mx: 0, my: 0, dash: false, sprint: false }),
+      drive: () => ({ mx: 0, my: 0, dash: false, sprint: false, shock: false, repair: false }),
     });
     await c.connect();
     await new Promise<void>((r) => setTimeout(r, 100));
@@ -237,7 +237,7 @@ test('Run end: final phase of final stage transitions room to run-end', async ()
       url: h.wsUrl,
       roomCode: room.code,
       name: 'a',
-      drive: () => ({ mx: 0, my: 0, dash: false, sprint: false }),
+      drive: () => ({ mx: 0, my: 0, dash: false, sprint: false, shock: false, repair: false }),
     });
     await c.connect();
     await new Promise<void>((r) => setTimeout(r, 100));
@@ -265,7 +265,7 @@ test('setLobbySettings rejects unknown run id', async () => {
       url: h.wsUrl,
       roomCode: room.code,
       name: 'a',
-      drive: () => ({ mx: 0, my: 0, dash: false, sprint: false }),
+      drive: () => ({ mx: 0, my: 0, dash: false, sprint: false, shock: false, repair: false }),
     });
     await c.connect();
     await new Promise<void>((r) => setTimeout(r, 100));
@@ -294,7 +294,7 @@ test('Snapshot to a connected TestClient encodes new stage/phase fields', async 
       url: h.wsUrl,
       roomCode: room.code,
       name: 'a',
-      drive: () => ({ mx: 0, my: 0, dash: false, sprint: false }),
+      drive: () => ({ mx: 0, my: 0, dash: false, sprint: false, shock: false, repair: false }),
     });
     await c.connect();
     await new Promise<void>((r) => setTimeout(r, 100));

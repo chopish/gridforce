@@ -45,7 +45,7 @@ export interface TestClientOptions {
   accessKey?: string;
   profile?: NetSimProfile;
   // What input pattern this client drives. Default: walks in a slow circle.
-  drive?: (tick: number) => { mx: number; my: number; dash: boolean; sprint: boolean };
+  drive?: (tick: number) => { mx: number; my: number; dash: boolean; sprint: boolean; shock: boolean; repair: boolean };
 }
 
 export class TestClient {
@@ -239,6 +239,8 @@ export class TestClient {
       my: d.my,
       dash: d.dash,
       sprint: d.sprint,
+      shock: d.shock,
+      repair: d.repair,
     };
     this.localState = stepPlayer(this.localState, input, SERVER_TICK_DT_S, this.grid);
     this.pending.push(input);
@@ -263,8 +265,8 @@ export class TestClient {
   }
 }
 
-function defaultDrive(tick: number): { mx: number; my: number; dash: boolean; sprint: boolean } {
+function defaultDrive(tick: number): { mx: number; my: number; dash: boolean; sprint: boolean; shock: boolean; repair: boolean } {
   // Slow circular orbit at ~6 second period (30Hz × 6 = 180 ticks).
   const theta = (tick / 180) * Math.PI * 2;
-  return { mx: Math.cos(theta), my: Math.sin(theta), dash: false, sprint: false };
+  return { mx: Math.cos(theta), my: Math.sin(theta), dash: false, sprint: false, shock: false, repair: false };
 }

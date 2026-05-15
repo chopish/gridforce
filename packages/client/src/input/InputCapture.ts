@@ -16,6 +16,8 @@ export interface InputSnapshot {
   my: number;
   dash: boolean;
   sprint: boolean;
+  shock: boolean;
+  repair: boolean;
 }
 
 export class InputCapture {
@@ -102,7 +104,7 @@ export class InputCapture {
 
     const dash = this.dashTicksRemaining > 0;
     if (this.dashTicksRemaining > 0) this.dashTicksRemaining--;
-    return { mx, my, dash, sprint: this.sprint || sprintPressed };
+    return { mx, my, dash, sprint: this.sprint || sprintPressed, shock: false, repair: false };
   }
 
   clear(): void {

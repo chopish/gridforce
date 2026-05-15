@@ -32,6 +32,8 @@ export class WanderBot extends Bot {
       my: this.my,
       dash: false,
       sprint: false,
+      shock: false,
+      repair: false,
     };
   }
 }

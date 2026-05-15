@@ -159,12 +159,12 @@ async function runProfile(
   };
 }
 
-function makeDrive(seed: number): (tick: number) => { mx: number; my: number; dash: boolean; sprint: boolean } {
+function makeDrive(seed: number): (tick: number) => { mx: number; my: number; dash: boolean; sprint: boolean; shock: boolean; repair: boolean } {
   // Each client circles with a different phase so they don't all stack.
   const phase = (seed / CLIENT_COUNT) * Math.PI * 2;
   return (tick: number) => {
     const theta = phase + (tick / 180) * Math.PI * 2;
-    return { mx: Math.cos(theta), my: Math.sin(theta), dash: false, sprint: false };
+    return { mx: Math.cos(theta), my: Math.sin(theta), dash: false, sprint: false, shock: false, repair: false };
   };
 }
 
@@ -274,7 +274,7 @@ test('sprint flag survives 10% input loss via redundancy', { timeout: 25_000 }, 
       url,
       roomCode,
       name: 'host',
-      drive: () => ({ mx: 0, my: 0, dash: false, sprint: false }),
+      drive: () => ({ mx: 0, my: 0, dash: false, sprint: false, shock: false, repair: false }),
     });
     await host.connect();
     await new Promise<void>((r) => setTimeout(r, 100));
@@ -296,14 +296,14 @@ test('sprint flag survives 10% input loss via redundancy', { timeout: 25_000 }, 
       roomCode,
       name: 'sprinter',
       profile: SPRINT_LOSS_PROFILE,
-      drive: () => ({ mx: 1, my: 0, dash: false, sprint: true }),
+      drive: () => ({ mx: 1, my: 0, dash: false, sprint: true, shock: false, repair: false }),
     });
     const walk = new TestClient({
       url,
       roomCode,
       name: 'walker',
       profile: SPRINT_LOSS_PROFILE,
-      drive: () => ({ mx: 1, my: 0, dash: false, sprint: false }),
+      drive: () => ({ mx: 1, my: 0, dash: false, sprint: false, shock: false, repair: false }),
     });
     await sprint.connect();
     await walk.connect();
@@ -368,7 +368,7 @@ test('late-joining client can actually move', { timeout: 15_000 }, async () => {
       url,
       roomCode,
       name: 'warm',
-      drive: () => ({ mx: 0, my: 0, dash: false, sprint: false }), // idle
+      drive: () => ({ mx: 0, my: 0, dash: false, sprint: false, shock: false, repair: false }), // idle
     });
     await warmup.connect();
     warmup.start();
@@ -380,7 +380,7 @@ test('late-joining client can actually move', { timeout: 15_000 }, async () => {
       url,
       roomCode,
       name: 'late',
-      drive: () => ({ mx: 1, my: 0, dash: false, sprint: false }),
+      drive: () => ({ mx: 1, my: 0, dash: false, sprint: false, shock: false, repair: false }),
     });
     await late.connect();
     const spawnX = late.getStats().finalLocalPosition.x;

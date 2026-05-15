@@ -23,7 +23,7 @@ function fakeTransport(): Transport & { sent: Uint8Array[] } {
 }
 
 function input(tick: number) {
-  return { tick, clientTimeMs: tick * 16, mx: 0, my: 0, dash: false, sprint: false };
+  return { tick, clientTimeMs: tick * 16, mx: 0, my: 0, dash: false, sprint: false, shock: false, repair: false };
 }
 
 test('consumeInputForTick returns null when no input present, advances ack', () => {

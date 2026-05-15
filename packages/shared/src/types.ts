@@ -7,6 +7,8 @@ export interface PlayerInput {
   my: number;
   dash: boolean;
   sprint: boolean;
+  shock: boolean;
+  repair: boolean;
 }
 
 // Wandering NPC. Phase 0 has no combat or pathing — these are bouncing
