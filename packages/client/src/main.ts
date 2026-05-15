@@ -15,6 +15,7 @@ import { PredictedWorld } from './sim/PredictedWorld.js';
 import { DebugHud } from './ui/DebugHud.js';
 import { Lobby } from './ui/Lobby.js';
 import { LobbyOverlay } from './ui/LobbyOverlay.js';
+import { GameHud } from './ui/GameHud.js';
 import { StageHud } from './ui/StageHud.js';
 
 bootstrap().catch((err) => {
@@ -53,6 +54,7 @@ async function bootstrap(): Promise<void> {
   const renderer = new Renderer();
   let hud: DebugHud | null = null;
   let stageHud: StageHud | null = null;
+  let gameHud: GameHud | null = null;
   let codeBanner: HTMLElement | null = null;
   const lobbyOverlay = new LobbyOverlay({
     onToggleReady: (next) => socket.sendSetReady(next),
@@ -92,6 +94,7 @@ async function bootstrap(): Promise<void> {
             renderer.playerRenderer.setLocalPlayer(world.localPlayerId);
             hud = new DebugHud();
             stageHud = new StageHud();
+            gameHud = new GameHud();
             codeBanner = lobby.showRoomCode(roomCode || 'NEW');
             startLoop();
           })
@@ -310,6 +313,13 @@ async function bootstrap(): Promise<void> {
         totalStages: world.getRun().stageSequence.length,
         phaseElapsedS: world.phaseElapsedS,
       });
+      const mePlayer = world.players.get(world.localPlayerId);
+      if (mePlayer) {
+        gameHud?.update({
+          carbon: mePlayer.carbon,
+          repairProgressS: mePlayer.repairProgressS,
+        });
+      }
 
       // FPS sample
       frameSamples++;
