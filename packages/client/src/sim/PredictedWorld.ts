@@ -6,6 +6,8 @@ import {
   PREDICTION_HARD_SNAP_PX,
   PREDICTION_THRESHOLD_PX,
   SERVER_TICK_DT_S,
+  type CarbonState,
+  type CrawlerState,
   type GridDef,
   type NpcState,
   type PhaseDef,
@@ -64,6 +66,14 @@ export class PredictedWorld {
   currentStageIndex = 0;
   currentPhaseIndex = 0;
   phaseElapsedS = 0;
+
+  // B1 electrical-defense: panel state + entity mirrors. Renderers consume
+  // these to draw tiles and entity sprites.
+  panelStates: Uint8Array = new Uint8Array(0);
+  panelCols = 0;
+  panelRows = 0;
+  readonly crawlers = new Map<number, CrawlerState>();
+  readonly carbons = new Map<number, CarbonState>();
 
   // Latest server-known NPC states. The interpolator owns the small
   // ring buffer + per-arrival jitter tracking that smooths render-time
@@ -172,6 +182,11 @@ export class PredictedWorld {
     this.currentStageIndex = w.currentStageIndex;
     this.currentPhaseIndex = w.currentPhaseIndex;
     this.phaseElapsedS = w.phaseElapsedS;
+    this.panelStates = new Uint8Array(w.panelStates);
+    this.panelCols = w.grid.cols;
+    this.panelRows = w.grid.rows;
+    this.crawlers.clear();
+    this.carbons.clear();
     // Lead the server tick from the start: by the time our first input
     // reaches the server, the server has already advanced past startTick by
     // ~RTT/2 ticks. Tagging from (startTick + lead) ensures the input lands
@@ -260,6 +275,13 @@ export class PredictedWorld {
     this.currentStageIndex = snap.currentStageIndex;
     this.currentPhaseIndex = snap.currentPhaseIndex;
     this.phaseElapsedS = snap.phaseElapsedS;
+    this.panelStates = new Uint8Array(snap.panelStates);
+    this.panelCols = snap.panelCols;
+    this.panelRows = snap.panelRows;
+    this.crawlers.clear();
+    for (const c of snap.crawlers) this.crawlers.set(c.id, c);
+    this.carbons.clear();
+    for (const c of snap.carbons) this.carbons.set(c.id, c);
     // Keep the local sim's grid in lock-step with the active stage. The
     // Welcome payload seeds it once at join time, but the host can swap the
     // run in the lobby and we won't get another Welcome — without this the
