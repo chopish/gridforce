@@ -16,6 +16,7 @@ import { PredictedWorld } from './sim/PredictedWorld.js';
 import { DebugHud } from './ui/DebugHud.js';
 import { Lobby } from './ui/Lobby.js';
 import { LobbyOverlay } from './ui/LobbyOverlay.js';
+import { StageHud } from './ui/StageHud.js';
 
 bootstrap().catch((err) => {
   console.error('[gridforce] fatal:', err);
@@ -52,12 +53,13 @@ async function bootstrap(): Promise<void> {
   const inputs = new InputCapture();
   const renderer = new Renderer();
   let hud: DebugHud | null = null;
+  let stageHud: StageHud | null = null;
   let codeBanner: HTMLElement | null = null;
   const lobbyOverlay = new LobbyOverlay({
     onToggleReady: (next) => socket.sendSetReady(next),
     onStartGame: () => socket.sendStartGame(),
-    onChangeLevel: (levelId) => socket.sendLobbySettings(levelId, world.difficulty),
-    onChangeDifficulty: (d) => socket.sendLobbySettings(world.levelId, d),
+    onChangeRun: (runId) => socket.sendLobbySettings(runId, world.difficulty),
+    onChangeDifficulty: (d) => socket.sendLobbySettings(world.runId, d),
     onGenerateInvite: async (uses) => {
       const sessionKey = socket.status().sessionKey;
       if (!sessionKey) throw new Error('not connected yet');
@@ -90,6 +92,7 @@ async function bootstrap(): Promise<void> {
           .then(() => {
             renderer.playerRenderer.setLocalPlayer(world.localPlayerId);
             hud = new DebugHud();
+            stageHud = new StageHud();
             codeBanner = lobby.showRoomCode(roomCode || 'NEW');
             startLoop();
           })
@@ -259,10 +262,18 @@ async function bootstrap(): Promise<void> {
         hostId: world.hostId,
         localPlayerId: world.localPlayerId,
         roomCode,
-        levelId: world.levelId,
+        runId: world.runId,
         difficulty: world.difficulty,
         maxPlayers: world.maxPlayers,
         players: Array.from(world.players.values()),
+      });
+      stageHud?.update({
+        phase: world.phase,
+        stage: world.getCurrentStage(),
+        phaseDef: world.getCurrentPhase(),
+        stageIndex: world.currentStageIndex,
+        totalStages: world.getRun().stageSequence.length,
+        phaseElapsedS: world.phaseElapsedS,
       });
 
       // FPS sample

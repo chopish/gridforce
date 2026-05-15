@@ -2,7 +2,7 @@ import { performance } from 'node:perf_hooks';
 
 import {
   DEFAULT_DIFFICULTY,
-  DEFAULT_LEVEL_ID,
+  DEFAULT_RUN_ID,
   ErrorCode,
   ErrorMsg,
   MAX_PLAYERS_PER_ROOM,
@@ -13,17 +13,21 @@ import {
   SERVER_TICK_DT_S,
   SnapshotMsg,
   WelcomeMsg,
-  createDefaultGrid,
+  getRun,
+  getRunOrDefault,
+  getStage,
   isValidDifficulty,
-  isValidLevelId,
+  isValidRunId,
   newPlayerState,
   stepPlayer,
   type DifficultyValue,
   type GridDef,
   type NpcState,
+  type PhaseDef,
   type PlayerId,
   type PlayerState,
   type RoomPhase,
+  type RunDef,
 } from '@gridforce/shared';
 
 import type { Connection } from './Connection.js';
@@ -69,7 +73,6 @@ export interface RoomOptions {
 }
 
 export class Room {
-  readonly grid: GridDef = createDefaultGrid();
   readonly pilots = new Map<PlayerId, Pilot>();
   readonly states = new Map<PlayerId, PlayerState>();
 
@@ -81,15 +84,37 @@ export class Room {
   // 'lobby' on creation. Host transitions to 'playing' via StartGame, after
   // which physics steps run. New rooms always start in lobby — Phase 0 has
   // no concept of "rejoining a game in progress with no waiting room".
+  // 'run-end' is reached when the final stage's final phase elapses; the
+  // room sits there until torn down.
   phase: RoomPhase = 'lobby';
   // PlayerId of the human host, or NO_HOST (0xff) if there's no human in
   // the room. Bots cannot be host. Promotion happens automatically: first
   // human to join becomes host; on host leave the next human is promoted.
   hostId: PlayerId = NO_HOST;
   // Pre-game selections, settable from the lobby UI by the host. Defaults
-  // are the only Phase 0 level + Normal difficulty.
-  levelId: string = DEFAULT_LEVEL_ID;
+  // are the only Phase 0 run + Normal difficulty.
+  runId: string = DEFAULT_RUN_ID;
   difficulty: DifficultyValue = DEFAULT_DIFFICULTY;
+  // Active run state. In lobby, this points at the run the host has
+  // selected so the lobby UI's "first stage's grid" is correct; on
+  // startGame() it's re-resolved (in case the runId mutated mid-lobby)
+  // and the indices reset to 0.
+  private run: RunDef = getRun(DEFAULT_RUN_ID);
+  private currentStageIndex = 0;
+  private currentPhaseIndex = 0;
+  private phaseElapsedS = 0;
+
+  // The active stage's grid. Derived so a stage advance during play
+  // automatically swaps it without rewiring every consumer.
+  get grid(): GridDef {
+    return getStage(this.run.stageSequence[this.currentStageIndex]!).grid;
+  }
+
+  private currentPhaseDef(): PhaseDef {
+    return getStage(this.run.stageSequence[this.currentStageIndex]!).phaseSequence[
+      this.currentPhaseIndex
+    ]!;
+  }
   // Wandering NPCs spawned by the host as a netcode stress test. Empty
   // by default — host opts in via SetNpcCount keybinds.
   readonly npcs = new Map<number, Npc>();
@@ -204,10 +229,53 @@ export class Room {
   // (host may want to start with some still flipping the toggle); the host
   // has the final word.
   startGame(playerId: PlayerId): boolean {
-    if (this.phase === 'playing') return false;
+    if (this.phase !== 'lobby') return false;
     if (playerId !== this.hostId) return false;
     this.phase = 'playing';
+    // Resolve the (possibly host-changed) runId into a RunDef and reset the
+    // walk to stage 0 / phase 0. Falling back to the default protects
+    // against a stale-but-non-empty runId reaching this point if validation
+    // ever slips upstream.
+    this.run = getRunOrDefault(this.runId);
+    this.currentStageIndex = 0;
+    this.currentPhaseIndex = 0;
+    this.phaseElapsedS = 0;
     return true;
+  }
+
+  // Advance the phase clock to the next phase. Public so future gameplay
+  // code can drive event-driven phases (PhaseDef.durationS === null).
+  // Called internally each tick when a timed phase elapses.
+  advancePhase(): void {
+    if (this.phase !== 'playing') return;
+    const stage = getStage(this.run.stageSequence[this.currentStageIndex]!);
+    const nextPhaseIndex = this.currentPhaseIndex + 1;
+    if (nextPhaseIndex >= stage.phaseSequence.length) {
+      this.advanceStage();
+      return;
+    }
+    this.currentPhaseIndex = nextPhaseIndex;
+    this.phaseElapsedS = 0;
+  }
+
+  private advanceStage(): void {
+    const nextStageIndex = this.currentStageIndex + 1;
+    if (nextStageIndex >= this.run.stageSequence.length) {
+      this.phase = 'run-end';
+      this.phaseElapsedS = 0;
+      return;
+    }
+    this.currentStageIndex = nextStageIndex;
+    this.currentPhaseIndex = 0;
+    this.phaseElapsedS = 0;
+    // Re-centre players on the new stage's grid so a smaller arena doesn't
+    // strand someone outside the bounds. The `grid` getter already reflects
+    // the new stage by the time we reach here.
+    let slot = 0;
+    for (const [id, state] of this.states) {
+      const { x, y } = spawnPosition(this.grid, slot++);
+      this.states.set(id, { ...state, x, y });
+    }
   }
 
   // Host-only stress-test command. Spawns or removes NPCs to reach the
@@ -236,17 +304,23 @@ export class Room {
     return this.npcs.size;
   }
 
-  // Host-only: update level + difficulty selection. Both are validated
+  // Host-only: update run + difficulty selection. Both are validated
   // against the shared lists; invalid values silently leave the previous
   // selection untouched (the wire format is too lossy to round-trip an
   // error code, and the client driving this should be sending valid
   // values from a dropdown anyway). Returns true if anything changed.
-  setLobbySettings(playerId: PlayerId, levelId: string, difficulty: number): boolean {
+  setLobbySettings(playerId: PlayerId, runId: string, difficulty: number): boolean {
     if (this.phase !== 'lobby') return false;
     if (playerId !== this.hostId) return false;
     let changed = false;
-    if (isValidLevelId(levelId) && levelId !== this.levelId) {
-      this.levelId = levelId;
+    if (isValidRunId(runId) && runId !== this.runId) {
+      this.runId = runId;
+      // Refresh the active RunDef + reset to stage 0 so the lobby preview
+      // (e.g. grid getter) reflects the new run's first stage immediately.
+      this.run = getRun(runId);
+      this.currentStageIndex = 0;
+      this.currentPhaseIndex = 0;
+      this.phaseElapsedS = 0;
       changed = true;
     }
     if (isValidDifficulty(difficulty) && difficulty !== this.difficulty) {
@@ -306,7 +380,10 @@ export class Room {
         phase: this.phase,
         hostId: this.hostId,
         difficulty: this.difficulty,
-        levelId: this.levelId,
+        runId: this.runId,
+        currentStageIndex: this.currentStageIndex,
+        currentPhaseIndex: this.currentPhaseIndex,
+        phaseElapsedS: this.phaseElapsedS,
         maxPlayers: this.maxPlayers,
         sessionKey: conn.sessionKey,
         players: Array.from(this.states.values()),
@@ -387,6 +464,14 @@ export class Room {
         npc.step(SERVER_TICK_DT_S, this.tick, this.grid);
       }
     }
+
+    // Phase clock. Open-ended phases (durationS === null) wait for an
+    // explicit advancePhase() call from gameplay code.
+    this.phaseElapsedS += SERVER_TICK_DT_S;
+    const cur = this.currentPhaseDef();
+    if (cur.durationS !== null && this.phaseElapsedS >= cur.durationS) {
+      this.advancePhase();
+    }
   }
 
   // Lobby tick: drain inputs to keep ackInputTick advancing (so client-side
@@ -420,7 +505,10 @@ export class Room {
         phase: this.phase,
         hostId: this.hostId,
         difficulty: this.difficulty,
-        levelId: this.levelId,
+        runId: this.runId,
+        currentStageIndex: this.currentStageIndex,
+        currentPhaseIndex: this.currentPhaseIndex,
+        phaseElapsedS: this.phaseElapsedS,
         players: visible,
         npcs: npcStates,
       });

@@ -1,5 +1,5 @@
 import { SCHEMA_VERSION } from '../../constants.js';
-import type { NpcState, PlayerState, SnapshotPayload } from '../../types.js';
+import { RoomPhaseValue, type NpcState, type PlayerState, type RoomPhase, type SnapshotPayload } from '../../types.js';
 import { getEntityEncoder, registerEntityEncoder } from '../entities/registry.js';
 import type { BinaryReader } from '../wire.js';
 import { BinaryWriter, EntityType, MessageType, writeHeader } from '../wire.js';
@@ -13,15 +13,30 @@ void registerEntityEncoder;
 //   f64 serverTimeMs
 //   i32 ackInputTick
 //   u32 inputAckBitmask
-//   u8  phase                (0=lobby, 1=playing)
+//   u8  phase                (0=lobby, 1=playing, 2=run-end)
 //   u8  hostId               (0xff if no human host)
 //   u8  difficulty           (DifficultyValue enum)
-//   string levelId
+//   string runId
+//   u8  currentStageIndex
+//   u8  currentPhaseIndex
+//   f32 phaseElapsedS
 //   u8  groupCount
 //   for each group:
 //     u8 entityType
 //     varuint count
 //     [entityType-specific payload]
+function encodePhase(p: RoomPhase): number {
+  if (p === 'playing') return RoomPhaseValue.Playing;
+  if (p === 'run-end') return RoomPhaseValue.RunEnd;
+  return RoomPhaseValue.Lobby;
+}
+
+function decodePhase(v: number): RoomPhase {
+  if (v === RoomPhaseValue.Playing) return 'playing';
+  if (v === RoomPhaseValue.RunEnd) return 'run-end';
+  return 'lobby';
+}
+
 export function encode(p: SnapshotPayload): Uint8Array {
   const w = new BinaryWriter(256);
   writeHeader(w, MessageType.Snapshot, SCHEMA_VERSION);
@@ -29,10 +44,13 @@ export function encode(p: SnapshotPayload): Uint8Array {
   w.f64(p.serverTimeMs);
   w.i32(p.ackInputTick | 0);
   w.u32(p.inputAckBitmask >>> 0);
-  w.u8(p.phase === 'playing' ? 1 : 0);
+  w.u8(encodePhase(p.phase));
   w.u8(p.hostId & 0xff);
   w.u8(p.difficulty & 0xff);
-  w.string(p.levelId);
+  w.string(p.runId);
+  w.u8(p.currentStageIndex & 0xff);
+  w.u8(p.currentPhaseIndex & 0xff);
+  w.f32(p.phaseElapsedS);
 
   // Group count is dynamic — Player is always present, NPC only when any
   // NPCs are spawned (saves the 2-byte group header in the empty case).
@@ -59,10 +77,13 @@ export function decode(r: BinaryReader): SnapshotPayload {
   const serverTimeMs = r.f64();
   const ackInputTick = r.i32();
   const inputAckBitmask = r.u32();
-  const phase: 'lobby' | 'playing' = r.u8() === 1 ? 'playing' : 'lobby';
+  const phase = decodePhase(r.u8());
   const hostId = r.u8();
   const difficulty = r.u8();
-  const levelId = r.string();
+  const runId = r.string();
+  const currentStageIndex = r.u8();
+  const currentPhaseIndex = r.u8();
+  const phaseElapsedS = r.f32();
 
   const groupCount = r.u8();
   const players: PlayerState[] = [];
@@ -99,7 +120,10 @@ export function decode(r: BinaryReader): SnapshotPayload {
     phase,
     hostId,
     difficulty,
-    levelId,
+    runId,
+    currentStageIndex,
+    currentPhaseIndex,
+    phaseElapsedS,
     players,
     npcs,
   };

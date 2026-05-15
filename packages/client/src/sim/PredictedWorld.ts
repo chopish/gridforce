@@ -8,11 +8,17 @@ import {
   SERVER_TICK_DT_S,
   type GridDef,
   type NpcState,
+  type PhaseDef,
   type PlayerId,
   type PlayerInput,
   type PlayerState,
+  type RoomPhase,
+  type RunDef,
   type SnapshotPayload,
+  type StageDef,
   type WelcomePayload,
+  getRunOrDefault,
+  getStage,
   newPlayerState,
   stepPlayer,
 } from '@gridforce/shared';
@@ -47,13 +53,17 @@ export class PredictedWorld {
   // Mirrored from snapshot/Welcome. UI gates ready toggles + start button on
   // these. Defaults to 'lobby' so a stale-state glance during connect doesn't
   // show the playfield as live before we've actually heard from the server.
-  phase: 'lobby' | 'playing' = 'lobby';
+  phase: RoomPhase = 'lobby';
   hostId: PlayerId = 0xff;
   // Mirrored from server snapshots. Surfaced in the lobby UI so dropdowns
   // match what the server actually has.
-  levelId = '';
+  runId = '';
   difficulty = 1;
   maxPlayers = 4;
+  // Active run progress, mirrored from snapshots. Drives StageHud.
+  currentStageIndex = 0;
+  currentPhaseIndex = 0;
+  phaseElapsedS = 0;
 
   // Latest server-known NPC states. The interpolator owns the small
   // ring buffer + per-arrival jitter tracking that smooths render-time
@@ -156,9 +166,12 @@ export class PredictedWorld {
     this.localPlayerId = w.yourPlayerId;
     this.phase = w.phase;
     this.hostId = w.hostId;
-    this.levelId = w.levelId;
+    this.runId = w.runId;
     this.difficulty = w.difficulty;
     this.maxPlayers = w.maxPlayers;
+    this.currentStageIndex = w.currentStageIndex;
+    this.currentPhaseIndex = w.currentPhaseIndex;
+    this.phaseElapsedS = w.phaseElapsedS;
     // Lead the server tick from the start: by the time our first input
     // reaches the server, the server has already advanced past startTick by
     // ~RTT/2 ticks. Tagging from (startTick + lead) ensures the input lands
@@ -227,8 +240,11 @@ export class PredictedWorld {
     this.diagnostics.serverTick = snap.tick;
     this.phase = snap.phase;
     this.hostId = snap.hostId;
-    this.levelId = snap.levelId;
+    this.runId = snap.runId;
     this.difficulty = snap.difficulty;
+    this.currentStageIndex = snap.currentStageIndex;
+    this.currentPhaseIndex = snap.currentPhaseIndex;
+    this.phaseElapsedS = snap.phaseElapsedS;
 
     // Lead maintenance. Two regimes:
     //   1. predictedTick has fallen below MIN_SAFE_LEAD (or even past the
@@ -422,6 +438,23 @@ export class PredictedWorld {
     fn: (id: number, x: number, y: number, facing: number) => void,
   ): void {
     this.npcInterp.forEachRender(nowMs, fn);
+  }
+
+  // Resolved run / stage / phase definitions. `runId` may be empty briefly
+  // during connect; fall back to the default run so consumers don't have
+  // to null-check.
+  getRun(): RunDef {
+    return getRunOrDefault(this.runId);
+  }
+  getCurrentStage(): StageDef {
+    const run = this.getRun();
+    const idx = Math.min(this.currentStageIndex, run.stageSequence.length - 1);
+    return getStage(run.stageSequence[idx]!);
+  }
+  getCurrentPhase(): PhaseDef {
+    const stage = this.getCurrentStage();
+    const idx = Math.min(this.currentPhaseIndex, stage.phaseSequence.length - 1);
+    return stage.phaseSequence[idx]!;
   }
 }
 

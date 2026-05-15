@@ -7,12 +7,12 @@ export function encode(p: SetLobbySettingsPayload): Uint8Array {
   const w = new BinaryWriter(48);
   writeHeader(w, MessageType.SetLobbySettings, SCHEMA_VERSION);
   w.u8(p.difficulty & 0xff);
-  w.string(p.levelId);
+  w.string(p.runId);
   return w.finish();
 }
 
 export function decode(r: BinaryReader): SetLobbySettingsPayload {
   const difficulty = r.u8();
-  const levelId = r.string();
-  return { difficulty, levelId };
+  const runId = r.string();
+  return { difficulty, runId };
 }

@@ -4,38 +4,39 @@
 //
 // Two-column layout:
 //   left  — title, room meta, player roster (host crown + ready chips)
-//   right — settings (level / difficulty / max players), invite generator
+//   right — settings (run / difficulty / max players), invite generator
 //   bottom — Ready / Start Game (host only)
 //
 // The screen is data-driven: main.ts calls update() each frame with the
-// latest mirror of phase/hostId/levelId/difficulty/players. Any change
+// latest mirror of phase/hostId/runId/difficulty/players. Any change
 // rebuilds the affected DOM (the renderer is small enough that we don't
 // bother with VDOM tricks — a signature compare gates rebuilds).
 
 import {
   DIFFICULTY_NAMES,
   Difficulty,
-  LEVELS,
+  RUNS,
   type DifficultyValue,
   type PlayerId,
   type PlayerState,
+  type RoomPhase,
 } from '@gridforce/shared';
 
 export interface LobbyOverlayCallbacks {
   onToggleReady(next: boolean): void;
   onStartGame(): void;
-  onChangeLevel(levelId: string): void;
+  onChangeRun(runId: string): void;
   onChangeDifficulty(value: DifficultyValue): void;
   // Returns the shareable URL for a fresh invite. Throws on error.
   onGenerateInvite(maxUses: number): Promise<string>;
 }
 
 export interface LobbyOverlayState {
-  phase: 'lobby' | 'playing';
+  phase: RoomPhase;
   hostId: PlayerId;
   localPlayerId: PlayerId;
   roomCode: string;
-  levelId: string;
+  runId: string;
   difficulty: number;
   maxPlayers: number;
   players: PlayerState[];
@@ -53,8 +54,8 @@ export class LobbyOverlay {
   private subtitle: HTMLDivElement;
   private rosterList: HTMLDivElement;
   private rosterCount: HTMLSpanElement;
-  private levelSelect!: HTMLSelectElement;
-  private levelDescription: HTMLDivElement;
+  private runSelect!: HTMLSelectElement;
+  private runDescription: HTMLDivElement;
   private difficultySelect!: HTMLSelectElement;
   private settingsLockedNote: HTMLDivElement;
   private maxPlayersValue: HTMLSpanElement;
@@ -113,10 +114,10 @@ export class LobbyOverlay {
     settingsTitle.textContent = 'Settings';
     right.appendChild(settingsTitle);
 
-    right.appendChild(this.makeFieldRow('Level', this.levelSelectBuild()));
-    this.levelDescription = document.createElement('div');
-    this.levelDescription.className = 'pl-field-help';
-    right.appendChild(this.levelDescription);
+    right.appendChild(this.makeFieldRow('Run', this.runSelectBuild()));
+    this.runDescription = document.createElement('div');
+    this.runDescription.className = 'pl-field-help';
+    right.appendChild(this.runDescription);
 
     right.appendChild(this.makeFieldRow('Difficulty', this.difficultySelectBuild()));
 
@@ -211,7 +212,9 @@ export class LobbyOverlay {
   }
 
   update(s: LobbyOverlayState): void {
-    if (s.phase === 'playing') {
+    // 'playing' AND 'run-end' both hide the lobby overlay. The StageHud /
+    // run-end panel takes the screen in those phases.
+    if (s.phase !== 'lobby') {
       this.root.style.display = 'none';
       document.body.removeAttribute('data-phase');
       return;
@@ -229,7 +232,7 @@ export class LobbyOverlay {
       s.hostId,
       s.localPlayerId,
       s.roomCode,
-      s.levelId,
+      s.runId,
       s.difficulty,
       s.maxPlayers,
       localReady,
@@ -261,22 +264,24 @@ export class LobbyOverlay {
     }
 
     // Selectors. Mirror server-canonical values; host can edit, guests can't.
-    this.levelSelect.value = s.levelId;
-    if (this.levelSelect.value !== s.levelId) {
-      // Server picked a level we don't know about (forward compat). Show the
+    this.runSelect.value = s.runId;
+    if (this.runSelect.value !== s.runId) {
+      // Server picked a run we don't know about (forward compat). Show the
       // raw id so the host at least sees what's selected.
       const opt = document.createElement('option');
-      opt.value = s.levelId;
-      opt.textContent = s.levelId;
-      this.levelSelect.appendChild(opt);
-      this.levelSelect.value = s.levelId;
+      opt.value = s.runId;
+      opt.textContent = s.runId;
+      this.runSelect.appendChild(opt);
+      this.runSelect.value = s.runId;
     }
-    const knownLevel = LEVELS.find((l) => l.id === s.levelId);
-    this.levelDescription.textContent = knownLevel ? knownLevel.description : '';
+    const knownRun = RUNS[s.runId];
+    this.runDescription.textContent = knownRun
+      ? `${knownRun.stageSequence.length} stage${knownRun.stageSequence.length === 1 ? '' : 's'}`
+      : '';
     this.difficultySelect.value = String(s.difficulty);
     this.maxPlayersValue.textContent = String(s.maxPlayers);
 
-    this.levelSelect.disabled = !isHost;
+    this.runSelect.disabled = !isHost;
     this.difficultySelect.disabled = !isHost;
     this.settingsLockedNote.style.display = isHost ? 'none' : '';
 
@@ -331,8 +336,8 @@ export class LobbyOverlay {
       this.readyBtn.classList.toggle('on', desired);
     });
     this.startBtn.addEventListener('click', () => this.cb.onStartGame());
-    this.levelSelect.addEventListener('change', () => {
-      this.cb.onChangeLevel(this.levelSelect.value);
+    this.runSelect.addEventListener('change', () => {
+      this.cb.onChangeRun(this.runSelect.value);
     });
     this.difficultySelect.addEventListener('change', () => {
       const v = Number(this.difficultySelect.value) as DifficultyValue;
@@ -377,16 +382,16 @@ export class LobbyOverlay {
     return row;
   }
 
-  private levelSelectBuild(): HTMLSelectElement {
-    this.levelSelect = document.createElement('select');
-    this.levelSelect.className = 'pl-select';
-    for (const l of LEVELS) {
+  private runSelectBuild(): HTMLSelectElement {
+    this.runSelect = document.createElement('select');
+    this.runSelect.className = 'pl-select';
+    for (const r of Object.values(RUNS)) {
       const opt = document.createElement('option');
-      opt.value = l.id;
-      opt.textContent = l.name;
-      this.levelSelect.appendChild(opt);
+      opt.value = r.id;
+      opt.textContent = r.displayName;
+      this.runSelect.appendChild(opt);
     }
-    return this.levelSelect;
+    return this.runSelect;
   }
 
   private difficultySelectBuild(): HTMLSelectElement {

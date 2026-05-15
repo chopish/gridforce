@@ -161,8 +161,8 @@ export class Socket {
     this.send(StartGameMsg.encode({}), 'reliable');
   }
 
-  sendLobbySettings(levelId: string, difficulty: number): void {
-    this.send(SetLobbySettingsMsg.encode({ levelId, difficulty }), 'reliable');
+  sendLobbySettings(runId: string, difficulty: number): void {
+    this.send(SetLobbySettingsMsg.encode({ runId, difficulty }), 'reliable');
   }
 
   sendSetNpcCount(count: number): void {

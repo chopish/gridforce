@@ -1,8 +1,20 @@
 import { SCHEMA_VERSION } from '../../constants.js';
-import type { PlayerState, WelcomePayload } from '../../types.js';
+import { RoomPhaseValue, type PlayerState, type RoomPhase, type WelcomePayload } from '../../types.js';
 import { PlayerEncoder } from '../entities/PlayerEncoder.js';
 import type { BinaryReader } from '../wire.js';
 import { BinaryWriter, MessageType, writeHeader } from '../wire.js';
+
+function encodePhase(p: RoomPhase): number {
+  if (p === 'playing') return RoomPhaseValue.Playing;
+  if (p === 'run-end') return RoomPhaseValue.RunEnd;
+  return RoomPhaseValue.Lobby;
+}
+
+function decodePhase(v: number): RoomPhase {
+  if (v === RoomPhaseValue.Playing) return 'playing';
+  if (v === RoomPhaseValue.RunEnd) return 'run-end';
+  return 'lobby';
+}
 
 export function encode(p: WelcomePayload): Uint8Array {
   const w = new BinaryWriter(128);
@@ -13,10 +25,13 @@ export function encode(p: WelcomePayload): Uint8Array {
   w.u16(p.grid.panelSize);
   w.u32(p.startTick >>> 0);
   w.f64(p.serverTimeMs);
-  w.u8(p.phase === 'playing' ? 1 : 0);
+  w.u8(encodePhase(p.phase));
   w.u8(p.hostId & 0xff);
   w.u8(p.difficulty & 0xff);
-  w.string(p.levelId);
+  w.string(p.runId);
+  w.u8(p.currentStageIndex & 0xff);
+  w.u8(p.currentPhaseIndex & 0xff);
+  w.f32(p.phaseElapsedS);
   w.u8(p.maxPlayers & 0xff);
   w.string(p.sessionKey);
   w.varuint(p.players.length);
@@ -31,10 +46,13 @@ export function decode(r: BinaryReader): WelcomePayload {
   const panelSize = r.u16();
   const startTick = r.u32();
   const serverTimeMs = r.f64();
-  const phase: 'lobby' | 'playing' = r.u8() === 1 ? 'playing' : 'lobby';
+  const phase = decodePhase(r.u8());
   const hostId = r.u8();
   const difficulty = r.u8();
-  const levelId = r.string();
+  const runId = r.string();
+  const currentStageIndex = r.u8();
+  const currentPhaseIndex = r.u8();
+  const phaseElapsedS = r.f32();
   const maxPlayers = r.u8();
   const sessionKey = r.string();
   const count = r.varuint();
@@ -48,7 +66,10 @@ export function decode(r: BinaryReader): WelcomePayload {
     phase,
     hostId,
     difficulty,
-    levelId,
+    runId,
+    currentStageIndex,
+    currentPhaseIndex,
+    phaseElapsedS,
     maxPlayers,
     sessionKey,
     players,

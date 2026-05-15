@@ -71,7 +71,10 @@ test('Welcome round-trip', () => {
     phase: 'lobby' as const,
     hostId: 0,
     difficulty: 1,
-    levelId: 'test-grid',
+    runId: 'test-run',
+    currentStageIndex: 0,
+    currentPhaseIndex: 0,
+    phaseElapsedS: 0,
     maxPlayers: 4,
     sessionKey: 'sess-abc123',
     players: [
@@ -89,7 +92,10 @@ test('Welcome round-trip', () => {
   assert.equal(w.phase, 'lobby');
   assert.equal(w.hostId, 0);
   assert.equal(w.difficulty, 1);
-  assert.equal(w.levelId, 'test-grid');
+  assert.equal(w.runId, 'test-run');
+  assert.equal(w.currentStageIndex, 0);
+  assert.equal(w.currentPhaseIndex, 0);
+  assert.equal(w.phaseElapsedS, 0);
   assert.equal(w.sessionKey, 'sess-abc123');
   assert.equal(w.players.length, 2);
   assert.equal(w.players[0]!.name, 'alice');
@@ -177,7 +183,10 @@ test('Snapshot round-trip with multiple players, ack bitmask, dash timers', () =
     phase: 'playing' as const,
     hostId: 0,
     difficulty: 2,
-    levelId: 'test-grid',
+    runId: 'test-run',
+    currentStageIndex: 0,
+    currentPhaseIndex: 0,
+    phaseElapsedS: 1.25,
     players,
     npcs: [],
   };
@@ -191,7 +200,11 @@ test('Snapshot round-trip with multiple players, ack bitmask, dash timers', () =
   assert.equal(s.phase, 'playing');
   assert.equal(s.hostId, 0);
   assert.equal(s.difficulty, 2);
-  assert.equal(s.levelId, 'test-grid');
+  assert.equal(s.runId, 'test-run');
+  assert.equal(s.currentStageIndex, 0);
+  assert.equal(s.currentPhaseIndex, 0);
+  // f32 precision: round-trip should be exact for this value.
+  assert.ok(Math.abs(s.phaseElapsedS - 1.25) < 1e-6);
   assert.equal(s.players.length, players.length);
   // Idle player: both timers 0.
   assert.equal(s.players[0]!.dashCooldownS, 0);
@@ -214,7 +227,10 @@ test('Snapshot handles zero players', () => {
       phase: 'lobby',
       hostId: 0xff,
       difficulty: 1,
-      levelId: 'test-grid',
+      runId: 'test-run',
+      currentStageIndex: 0,
+      currentPhaseIndex: 0,
+      phaseElapsedS: 0,
       players: [],
       npcs: [],
     }),
@@ -243,7 +259,10 @@ test('Snapshot encodes NPC group when npcs are present', () => {
       phase: 'playing',
       hostId: 0,
       difficulty: 1,
-      levelId: 'test-grid',
+      runId: 'test-run',
+      currentStageIndex: 0,
+      currentPhaseIndex: 0,
+      phaseElapsedS: 0,
       players: [],
       npcs,
     }),

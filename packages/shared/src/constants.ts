@@ -25,7 +25,12 @@
 //       RtcAnswer, RtcIce) carry SDP + ICE between client and server
 //       over the existing WebSocket. Snapshots/inputs migrate to the
 //       DataChannel once it opens; WebSocket stays for control.
-export const SCHEMA_VERSION = 9;
+//  v10: Run/Stage/Phase framework. Snapshot/Welcome/SetLobbySettings
+//       rename `levelId` → `runId`. Snapshot + Welcome additionally
+//       carry currentStageIndex (u8), currentPhaseIndex (u8), and
+//       phaseElapsedS (f32). RoomPhase gains a third value `run-end`
+//       (encoded as u8 = 2) for the post-final-phase state.
+export const SCHEMA_VERSION = 10;
 
 // Tick rates
 export const SERVER_TICK_HZ = 30;

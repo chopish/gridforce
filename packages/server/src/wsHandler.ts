@@ -244,7 +244,7 @@ function handleConnectionMessage(
       return;
     }
     case MessageType.SetLobbySettings: {
-      room.setLobbySettings(conn.playerId, decoded.payload.levelId, decoded.payload.difficulty);
+      room.setLobbySettings(conn.playerId, decoded.payload.runId, decoded.payload.difficulty);
       return;
     }
     case MessageType.SetNpcCount: {

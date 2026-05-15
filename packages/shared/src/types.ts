@@ -48,12 +48,15 @@ export interface WorldState {
   players: PlayerState[];
 }
 
-// Room phase. 'lobby' = pre-game ready-up; 'playing' = sim runs.
+// Room phase. 'lobby' = pre-game ready-up; 'playing' = sim runs; 'run-end'
+// = the final stage's final phase has elapsed and the run is over (clients
+// show a "Run Complete" panel; the room sits here until torn down).
 // Wire encoding: u8 with values matching RoomPhaseValue below.
-export type RoomPhase = 'lobby' | 'playing';
+export type RoomPhase = 'lobby' | 'playing' | 'run-end';
 export const RoomPhaseValue = {
   Lobby: 0,
   Playing: 1,
+  RunEnd: 2,
 } as const;
 
 export interface SnapshotPayload {
@@ -71,7 +74,15 @@ export interface SnapshotPayload {
   // client gets them on first delivery without a separate sync message.
   // Snapshot-rate cost is ~12 bytes/snap which is negligible.
   difficulty: number; // DifficultyValue
-  levelId: string;
+  runId: string;
+  // Index into the active run's stageSequence. 0 in lobby.
+  currentStageIndex: number;
+  // Index into the active stage's phaseSequence. 0 in lobby.
+  currentPhaseIndex: number;
+  // Seconds elapsed in the current phase. 0 in lobby; resets on each phase
+  // entry. Combined with PhaseDef.durationS this drives the StageHud
+  // countdown without any extra messages.
+  phaseElapsedS: number;
   players: PlayerState[];
   // Wandering NPCs (entity stress / forward-design slot for game NPCs).
   // Empty when none are spawned. Per-NPC cost on the wire is ~8 bytes,
@@ -89,7 +100,12 @@ export interface WelcomePayload {
   phase: RoomPhase;
   hostId: PlayerId;
   difficulty: number;
-  levelId: string;
+  runId: string;
+  // Active run's current position. Mirrors the snapshot fields so a late
+  // joiner doesn't have to wait a snapshot tick to know where they are.
+  currentStageIndex: number;
+  currentPhaseIndex: number;
+  phaseElapsedS: number;
   // Cap on humans + bots in this room. Static for the room's lifetime.
   // Surfaced to the client so the lobby UI can show "X/N" and bound the
   // invite-uses dropdown without a separate /api round-trip.
@@ -117,10 +133,10 @@ export interface SetReadyPayload {
 export type StartGamePayload = Record<string, never>;
 
 // Host-only mid-lobby tweak. Server validates that the sender is the
-// current hostId, that levelId is in the LEVELS list, and that
-// difficulty is a known enum value before applying.
+// current hostId, that runId is in the RUNS list, and that difficulty
+// is a known enum value before applying.
 export interface SetLobbySettingsPayload {
-  levelId: string;
+  runId: string;
   difficulty: number;
 }
 
