@@ -54,9 +54,6 @@ export const CLIENT_PREDICT_DT_S = SERVER_TICK_DT_S;
 // Player movement
 export const PLAYER_RADIUS = 12;
 export const PLAYER_MOVE_SPEED = 220;
-export const PLAYER_DASH_SPEED = 700;
-export const PLAYER_DASH_DURATION_S = 0.18;
-export const PLAYER_DASH_COOLDOWN_S = 0.65;
 
 // Sprint: hold shift to walk this much faster. Applies only to walk
 // speed; panel-jump is instantaneous so the multiplier never compounds.
