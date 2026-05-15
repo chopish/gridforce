@@ -239,11 +239,11 @@ async function bootstrap(): Promise<void> {
       renderer.playerRenderer.update(ids, (id) => {
         if (id === world.localPlayerId) {
           const v = world.visualLocalPosition(alpha);
-          return { x: v.x, y: v.y, facing: v.facing, dashing: false };
+          return { x: v.x, y: v.y, facing: v.facing };
         }
         const sample = world.remoteInterp.sample(id, now);
         if (!sample) return null;
-        return { ...sample, dashing: false };
+        return sample;
       });
 
       // Resync banner. Show whenever rtt is unpopulated, hide the moment

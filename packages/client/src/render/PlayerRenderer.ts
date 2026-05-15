@@ -31,7 +31,7 @@ export class PlayerRenderer {
   // "remove this sprite" (player has left).
   update(
     ids: Iterable<PlayerId>,
-    getRender: (id: PlayerId) => { x: number; y: number; facing: number; dashing: boolean } | null,
+    getRender: (id: PlayerId) => { x: number; y: number; facing: number } | null,
   ): void {
     const seen = new Set<PlayerId>();
     for (const id of ids) {
@@ -47,7 +47,6 @@ export class PlayerRenderer {
       s.bodyRoot.x = r.x;
       s.bodyRoot.y = r.y;
       s.bodyRoot.rotation = r.facing;
-      s.body.alpha = r.dashing ? 0.6 : 1;
     }
     // Remove sprites for players no longer present.
     for (const [id, s] of this.sprites) {

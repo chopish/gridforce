@@ -273,7 +273,7 @@ export class PredictedWorld {
     } else if (this.predictedTick < snap.tick + this.targetLead) {
       // Lead grew (RTT rose). Bump predictedTick up to targetLead. CRUCIAL:
       // advance the local player's stepPlayer state for the skipped ticks
-      // with idle input so dashRemainingS / dashCooldownS / movement-state
+      // with idle input so panelJumpCooldownS / movement-state
       // stay consistent with the new predictedTick. Server treated these
       // ticks as idle (we never sent inputs for them) so client must too.
       // Without this, dash/cooldown timers freeze for the skip duration
