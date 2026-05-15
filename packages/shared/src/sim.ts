@@ -23,6 +23,9 @@ export function newPlayerState(id: number, x: number, y: number, name = ''): Pla
     stateSeq: 0,
     name,
     ready: false,
+    carbon: 0,
+    shockCooldownS: 0,
+    repairProgressS: 0,
   };
 }
 
@@ -127,5 +130,9 @@ export function stepPlayer(
     // Roster metadata is opaque to the sim — pass through unchanged.
     name: state.name,
     ready: state.ready,
+    // Electrical-defense fields are opaque to the base sim — pass through unchanged.
+    carbon: state.carbon,
+    shockCooldownS: state.shockCooldownS,
+    repairProgressS: state.repairProgressS,
   };
 }

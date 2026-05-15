@@ -38,6 +38,9 @@ export interface PlayerState {
   // roster meta into separate snapshot groups.
   name: string;
   ready: boolean;
+  carbon: number;           // 0..99
+  shockCooldownS: number;   // 0..SHOCK_COOLDOWN_S
+  repairProgressS: number;  // 0..REPAIR_DURATION_S
 }
 
 export interface GridDef {

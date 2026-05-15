@@ -21,15 +21,18 @@ function unquantizeFacing(q: number): number {
   return (q / 256) * TWO_PI;
 }
 
-// One player entity (variable, ~16 + name bytes):
-//   u8  id                       (1)
-//   f32 x                        (4)
-//   f32 y                        (4)
-//   u8  facingQ                  (1)
-//   u8  flags                    (1)   bit1=READY (bit0 reserved, was DASHING)
-//   u8  panelJumpCooldownQ       (1)   seconds × 255, saturating at 1.0s
-//   u32 stateSeq                 (4)
-//   string name                  (varint length + utf8)
+// One player entity (variable, ~19 + name bytes):
+//   u8  id
+//   f32 x
+//   f32 y
+//   u8  facingQ
+//   u8  flags             bit1=READY
+//   u8  panelJumpCooldownQ
+//   u32 stateSeq
+//   u8  carbon            (0..99 clamped)
+//   u8  shockCooldownQ    (quantizeTimer; saturates at 1.0s)
+//   u8  repairProgressQ   (quantizeTimer; saturates at 1.0s)
+//   string name
 const TIMER_SCALE = 255; // 1 second resolved at ~3.9 ms per step
 
 function quantizeTimer(s: number): number {
@@ -59,6 +62,9 @@ export const PlayerEncoder: EntityEncoder<PlayerState> = {
     w.u8(flags);
     w.u8(quantizeTimer(p.panelJumpCooldownS));
     w.u32(p.stateSeq >>> 0);
+    w.u8(Math.max(0, Math.min(99, p.carbon)) & 0xff);
+    w.u8(quantizeTimer(p.shockCooldownS));
+    w.u8(quantizeTimer(p.repairProgressS));
     w.string(p.name);
   },
   decode(r) {
@@ -69,8 +75,11 @@ export const PlayerEncoder: EntityEncoder<PlayerState> = {
     const flags = r.u8();
     const panelJumpCooldownS = unquantizeTimer(r.u8());
     const stateSeq = r.u32();
+    const carbon = r.u8();
+    const shockCooldownS = unquantizeTimer(r.u8());
+    const repairProgressS = unquantizeTimer(r.u8());
     const name = r.string();
     const ready = (flags & PLAYER_FLAG_READY) !== 0;
-    return { id, x, y, facing, panelJumpCooldownS, stateSeq, name, ready };
+    return { id, x, y, facing, panelJumpCooldownS, stateSeq, name, ready, carbon, shockCooldownS, repairProgressS };
   },
 };

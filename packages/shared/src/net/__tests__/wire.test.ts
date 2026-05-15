@@ -365,3 +365,45 @@ test('Schema mismatch is detected via decodeMessage', () => {
   const bad = new Uint8Array([/*type*/ 0x82, 0x00, /*schema*/ 0xff, 0x00]);
   assert.throws(() => decodeMessage(bad), SchemaMismatchError);
 });
+
+test('PlayerEncoder round-trips carbon + shockCooldownS + repairProgressS', () => {
+  const players = [
+    {
+      ...newPlayerState(0, 100, 100, 'a'),
+      facing: 0,
+      stateSeq: 1,
+      carbon: 5,
+      shockCooldownS: 0.15,
+      repairProgressS: 0.8,
+    },
+    {
+      ...newPlayerState(1, 200, 200, 'b'),
+      facing: 0,
+      stateSeq: 2,
+      carbon: 99,
+      shockCooldownS: 0,
+      repairProgressS: 0,
+    },
+  ];
+  const dec = decodeMessage(SnapshotMsg.encode({
+    tick: 1,
+    serverTimeMs: 0,
+    ackInputTick: -1,
+    inputAckBitmask: 0,
+    phase: 'playing',
+    hostId: 0,
+    difficulty: 1,
+    runId: 'test-run',
+    currentStageIndex: 0,
+    currentPhaseIndex: 0,
+    phaseElapsedS: 0,
+    players,
+    npcs: [],
+  }));
+  assert.equal(dec.type, MessageType.Snapshot);
+  const s = dec.payload;
+  assert.equal(s.players[0]!.carbon, 5);
+  assert.ok(Math.abs(s.players[0]!.shockCooldownS - 0.15) < 0.01, 'shock cooldown quantization');
+  assert.ok(Math.abs(s.players[0]!.repairProgressS - 0.8) < 0.01, 'repair progress quantization');
+  assert.equal(s.players[1]!.carbon, 99);
+});
