@@ -1,6 +1,6 @@
 import { SCHEMA_VERSION } from '../../constants.js';
 import { encodeRle, decodeRle } from '../../panels.js';
-import { RoomPhaseValue, type NpcState, type PlayerState, type RoomPhase, type SnapshotPayload } from '../../types.js';
+import { RoomPhaseValue, type CrawlerState, type NpcState, type PlayerState, type RoomPhase, type SnapshotPayload } from '../../types.js';
 import { getEntityEncoder, registerEntityEncoder } from '../entities/registry.js';
 import type { BinaryReader } from '../wire.js';
 import { BinaryWriter, EntityType, MessageType, writeHeader } from '../wire.js';
@@ -56,10 +56,14 @@ export function encode(p: SnapshotPayload): Uint8Array {
   w.u16(p.panelRows);
   encodeRle(w, p.panelStates);
 
-  // Group count is dynamic — Player is always present, NPC only when any
-  // NPCs are spawned (saves the 2-byte group header in the empty case).
+  // Group count is dynamic — Player is always present; NPC and Crawler
+  // groups are omitted when empty (saves the 2-byte group header each).
   const hasNpcs = p.npcs.length > 0;
-  w.u8(hasNpcs ? 2 : 1);
+  const hasCrawlers = p.crawlers.length > 0;
+  let groupCount = 1; // Player always present
+  if (hasNpcs) groupCount++;
+  if (hasCrawlers) groupCount++;
+  w.u8(groupCount);
   w.u8(EntityType.Player);
   w.varuint(p.players.length);
   const playerEnc = getEntityEncoder(EntityType.Player);
@@ -71,6 +75,13 @@ export function encode(p: SnapshotPayload): Uint8Array {
     const npcEnc = getEntityEncoder(EntityType.NPC);
     if (!npcEnc) throw new Error('NPC encoder not registered');
     for (const n of p.npcs) npcEnc.encode(w, n);
+  }
+  if (hasCrawlers) {
+    w.u8(EntityType.Crawler);
+    w.varuint(p.crawlers.length);
+    const crawlerEnc = getEntityEncoder(EntityType.Crawler);
+    if (!crawlerEnc) throw new Error('Crawler encoder not registered');
+    for (const c of p.crawlers) crawlerEnc.encode(w, c);
   }
 
   return w.finish();
@@ -95,6 +106,7 @@ export function decode(r: BinaryReader): SnapshotPayload {
   const groupCount = r.u8();
   const players: PlayerState[] = [];
   const npcs: NpcState[] = [];
+  const crawlers: CrawlerState[] = [];
   for (let g = 0; g < groupCount; g++) {
     // u8 is a number on the wire; comparing against the EntityType enum
     // is safe because the enum is numeric and getEntityEncoder is the
@@ -113,6 +125,8 @@ export function decode(r: BinaryReader): SnapshotPayload {
       for (let i = 0; i < count; i++) players.push(enc.decode(r) as PlayerState);
     } else if (entityType === EntityType.NPC) {
       for (let i = 0; i < count; i++) npcs.push(enc.decode(r) as NpcState);
+    } else if (entityType === EntityType.Crawler) {
+      for (let i = 0; i < count; i++) crawlers.push(enc.decode(r) as CrawlerState);
     } else {
       for (let i = 0; i < count; i++) enc.decode(r);
     }
@@ -136,5 +150,6 @@ export function decode(r: BinaryReader): SnapshotPayload {
     panelRows,
     players,
     npcs,
+    crawlers,
   };
 }

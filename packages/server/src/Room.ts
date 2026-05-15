@@ -1,8 +1,12 @@
 import { performance } from 'node:perf_hooks';
 
 import {
+  CRAWLER_SPAWN_INTERVAL_S,
+  MAX_ALIVE_CRAWLERS,
+  CrawlerAIState,
   DEFAULT_DIFFICULTY,
   DEFAULT_RUN_ID,
+  EntityType,
   ErrorCode,
   ErrorMsg,
   GRID_COLS,
@@ -22,7 +26,10 @@ import {
   isValidDifficulty,
   isValidRunId,
   newPlayerState,
+  stepCrawler,
   stepPlayer,
+  type CrawlerState,
+  type CrawlerStepContext,
   type DifficultyValue,
   type GridDef,
   type NpcState,
@@ -123,6 +130,12 @@ export class Room {
   // by default — host opts in via SetNpcCount keybinds.
   readonly npcs = new Map<number, Npc>();
   private nextNpcId = 0;
+
+  // B1 electrical-defense crawlers. Spawned automatically while playing.
+  readonly crawlers = new Map<number, CrawlerState>();
+  private nextCrawlerId = 0;
+  private crawlerSpawnAccum = 0;
+  private readonly attackTimers = new Map<number, number>();
 
   tick = 0;
   private nextPlayerId: PlayerId = 0;
@@ -245,6 +258,10 @@ export class Room {
     this.currentPhaseIndex = 0;
     this.phaseElapsedS = 0;
     this.panelStates = allLive(this.grid.cols, this.grid.rows);
+    this.crawlers.clear();
+    this.nextCrawlerId = 0;
+    this.crawlerSpawnAccum = 0;
+    this.attackTimers.clear();
     // Re-centre all players on the active stage's grid. Pre-game they sat
     // at spawn positions sized to whatever grid was active at join time,
     // which can be wrong if the host swapped runs mid-lobby.
@@ -467,6 +484,44 @@ export class Room {
     this.scheduleNext();
   };
 
+  private spawnCrawler(): void {
+    if (this.crawlers.size >= MAX_ALIVE_CRAWLERS) return;
+    const { cols, rows, panelSize } = this.grid;
+    const edge = Math.floor(Math.random() * 4); // 0=top, 1=right, 2=bottom, 3=left
+    let cx: number, cy: number, x: number, y: number, facing: number;
+    if (edge === 0) {
+      cx = Math.floor(Math.random() * cols);
+      cy = 0;
+      x = cx * panelSize + panelSize / 2;
+      y = -panelSize / 2;
+      facing = Math.PI / 2; // facing south (+y)
+    } else if (edge === 1) {
+      cx = cols - 1;
+      cy = Math.floor(Math.random() * rows);
+      x = cols * panelSize + panelSize / 2;
+      y = cy * panelSize + panelSize / 2;
+      facing = Math.PI; // facing west (-x)
+    } else if (edge === 2) {
+      cx = Math.floor(Math.random() * cols);
+      cy = rows - 1;
+      x = cx * panelSize + panelSize / 2;
+      y = rows * panelSize + panelSize / 2;
+      facing = -Math.PI / 2; // facing north (-y)
+    } else {
+      cx = 0;
+      cy = Math.floor(Math.random() * rows);
+      x = -panelSize / 2;
+      y = cy * panelSize + panelSize / 2;
+      facing = 0; // facing east (+x)
+    }
+    const id = this.nextCrawlerId++ & 0xffff;
+    this.crawlers.set(id, {
+      id, x, y, facing, hp: 1,
+      targetCx: cx, targetCy: cy,
+      ai: CrawlerAIState.APPROACHING,
+    });
+  }
+
   private physicsStep(): void {
     for (const [id, state] of this.states) {
       const pilot = this.pilots.get(id);
@@ -479,6 +534,29 @@ export class Room {
         npc.step(SERVER_TICK_DT_S, this.tick, this.grid);
       }
     }
+
+    // B1 Crawler spawner — continuous trickle while playing.
+    this.crawlerSpawnAccum += SERVER_TICK_DT_S;
+    if (this.crawlerSpawnAccum >= CRAWLER_SPAWN_INTERVAL_S) {
+      this.crawlerSpawnAccum -= CRAWLER_SPAWN_INTERVAL_S;
+      this.spawnCrawler();
+    }
+
+    // Step all crawlers.
+    const ctx: CrawlerStepContext = {
+      panels: this.panelStates,
+      attackTimers: this.attackTimers,
+      cityHpDelta: 0,
+    };
+    for (const [id, c] of this.crawlers) {
+      const next = stepCrawler(c, SERVER_TICK_DT_S, this.grid, ctx);
+      if (next.hp <= 0) {
+        this.crawlers.delete(id);
+      } else {
+        this.crawlers.set(id, next);
+      }
+    }
+    // ctx.cityHpDelta accumulates exits; B1 ignores it (B2 wires up city HP).
 
     // Phase clock. Open-ended phases (durationS === null) wait for an
     // explicit advancePhase() call from gameplay code.
@@ -529,6 +607,7 @@ export class Room {
         panelRows: this.grid.rows,
         players: visible,
         npcs: npcStates,
+        crawlers: Array.from(this.crawlers.values()),
       });
       // Snapshots are loss-tolerant: a newer one supersedes any in flight.
       // Route via the unreliable channel so high-latency clients aren't

@@ -120,6 +120,9 @@ export interface SnapshotPayload {
   // but the budget is for the empty-room case; entity load is the lever
   // AOI will eventually claw back.
   npcs: NpcState[];
+  // B1 electrical-defense crawlers. Empty before startGame; the spawner
+  // adds one per CRAWLER_SPAWN_INTERVAL_S up to MAX_ALIVE_CRAWLERS.
+  crawlers: CrawlerState[];
 }
 
 export interface WelcomePayload {
