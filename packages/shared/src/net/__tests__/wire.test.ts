@@ -128,6 +128,7 @@ test('Input round-trip with single input', () => {
   assert.ok(Math.abs(p.mx - input.mx) < 1e-6);
   assert.ok(Math.abs(p.my - input.my) < 1e-6);
   assert.equal(p.dash, input.dash);
+  assert.equal(p.sprint, input.sprint);
 });
 
 test('Input round-trip with redundancy window (3 ticks)', () => {

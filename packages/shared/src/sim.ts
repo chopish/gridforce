@@ -44,6 +44,7 @@ export function stepPlayer(
   let mx = 0;
   let my = 0;
   let wantDash = false;
+  let sprint = false;
   if (input) {
     mx = clamp(input.mx, -1, 1);
     my = clamp(input.my, -1, 1);
@@ -53,6 +54,7 @@ export function stepPlayer(
       my /= mag;
     }
     wantDash = !!input.dash;
+    sprint = !!input.sprint;
   }
 
   if (dashCooldownS > 0) dashCooldownS = Math.max(0, dashCooldownS - dt);
@@ -75,7 +77,7 @@ export function stepPlayer(
       vy = Math.sin(facing) * PLAYER_DASH_SPEED;
     }
   } else {
-    const walk = input?.sprint ? PLAYER_MOVE_SPEED * PLAYER_SPRINT_MULTIPLIER : PLAYER_MOVE_SPEED;
+    const walk = sprint ? PLAYER_MOVE_SPEED * PLAYER_SPRINT_MULTIPLIER : PLAYER_MOVE_SPEED;
     vx = mx * walk;
     vy = my * walk;
   }
