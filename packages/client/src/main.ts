@@ -180,6 +180,7 @@ async function bootstrap(): Promise<void> {
     let accumulator = 0;
     let frameSamples = 0;
     let frameSampleStart = last;
+    let lastRenderedStageIndex = -1;
     // "resyncing…" banner is shown while rtt EWMA is unpopulated (=0). This
     // happens at startup before the first pong and again after visibility
     // restore (resetRttForVisibilityRestore zeros it). On bad-profile
@@ -233,18 +234,27 @@ async function bootstrap(): Promise<void> {
       });
       renderer.npcRenderer.endFrame();
 
+      // React to stage transitions (including the very first frame).
+      if (world.currentStageIndex !== lastRenderedStageIndex) {
+        renderer.setGrid(world.getCurrentStage().grid);
+        lastRenderedStageIndex = world.currentStageIndex;
+      }
+
       // Render players: local from prediction, remotes from interpolator.
+      const me = world.visualLocalPosition(alpha);
       const ids: PlayerId[] = [];
       for (const id of world.players.keys()) ids.push(id);
       renderer.playerRenderer.update(ids, (id) => {
         if (id === world.localPlayerId) {
-          const v = world.visualLocalPosition(alpha);
-          return { x: v.x, y: v.y, facing: v.facing };
+          return { x: me.x, y: me.y, facing: me.facing };
         }
         const sample = world.remoteInterp.sample(id, now);
         if (!sample) return null;
         return sample;
       });
+
+      // Camera follows the local player.
+      renderer.tick(dt * 1000, me.x, me.y);
 
       // Resync banner. Show whenever rtt is unpopulated, hide the moment
       // a valid pong repopulates it — instant on/off, no fade, no hold.
