@@ -8,6 +8,8 @@ import {
   CRAWLER_SPAWN_INTERVAL_S,
   MAX_ALIVE_CRAWLERS,
   SHOCK_COOLDOWN_S,
+  REPAIR_DURATION_S,
+  REPAIR_CARBON_COST,
   CrawlerAIState,
   DEFAULT_DIFFICULTY,
   DEFAULT_RUN_ID,
@@ -581,6 +583,29 @@ export class Room {
         if (cur.shockCooldownS > 0) {
           cur = { ...cur, shockCooldownS: Math.max(0, cur.shockCooldownS - SERVER_TICK_DT_S) };
         }
+      }
+      // Repair (DAMAGED -> LIVE only in B1; rebuild lands in B2).
+      if (input && input.repair && cur.carbon > 0) {
+        const cx = Math.floor(cur.x / this.grid.panelSize);
+        const cy = Math.floor(cur.y / this.grid.panelSize);
+        if (cx >= 0 && cx < this.grid.cols && cy >= 0 && cy < this.grid.rows) {
+          const idx = indexOf(this.grid.cols, cx, cy);
+          if (this.panelStates[idx] === PanelState.DAMAGED) {
+            const newProgress = cur.repairProgressS + SERVER_TICK_DT_S;
+            if (newProgress >= REPAIR_DURATION_S) {
+              this.panelStates[idx] = PanelState.LIVE;
+              cur = { ...cur, carbon: cur.carbon - REPAIR_CARBON_COST, repairProgressS: 0 };
+            } else {
+              cur = { ...cur, repairProgressS: newProgress };
+            }
+          } else {
+            // Not on a DAMAGED tile; reset progress.
+            cur = { ...cur, repairProgressS: 0 };
+          }
+        }
+      } else {
+        // Input not held OR no carbon — reset.
+        cur = { ...cur, repairProgressS: 0 };
       }
       this.states.set(id, cur);
     }
