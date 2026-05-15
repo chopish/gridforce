@@ -19,6 +19,10 @@ export class GridRenderer {
     this.draw(grid);
   }
 
+  rebuild(grid: GridDef): void {
+    this.draw(grid);
+  }
+
   private draw(grid: GridDef): void {
     const { cols, rows, panelSize: ps } = grid;
     const w = cols * ps;
