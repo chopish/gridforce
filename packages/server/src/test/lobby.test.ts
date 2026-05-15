@@ -82,7 +82,7 @@ async function startHostedPrivateRoom(
     roomCode: created.code,
     name: 'host',
     accessKey: created.hostAccessKey,
-    drive: () => ({ mx: 0, my: 0, dash: false }),
+    drive: () => ({ mx: 0, my: 0, dash: false, sprint: false }),
   });
   await host.connect();
   // Welcome has been processed by now, so sessionKey is populated.
@@ -194,7 +194,7 @@ test('non-host session cannot create invites', async () => {
       roomCode: redeemed.body.code,
       name: 'guest',
       accessKey: redeemed.body.accessKey,
-      drive: () => ({ mx: 0, my: 0, dash: false }),
+      drive: () => ({ mx: 0, my: 0, dash: false, sprint: false }),
     });
     await guest.connect();
     assert.ok(guest.sessionKey);
@@ -269,7 +269,7 @@ test('invite usesRemaining decrements on actual WS join', async () => {
       roomCode: redeemed.body.code,
       name: 'guest',
       accessKey: redeemed.body.accessKey,
-      drive: () => ({ mx: 0, my: 0, dash: false }),
+      drive: () => ({ mx: 0, my: 0, dash: false, sprint: false }),
     });
     await guest.connect();
     guest.start();
@@ -300,7 +300,7 @@ test('private room rejects WS join without access key', async () => {
       url: h.wsUrl,
       roomCode: created.code,
       name: 'noauth',
-      drive: () => ({ mx: 0, my: 0, dash: false }),
+      drive: () => ({ mx: 0, my: 0, dash: false, sprint: false }),
     });
     let connectFailed = false;
     try {
@@ -328,7 +328,7 @@ test('unknown room codes are rejected (no auto-create)', async () => {
       url: h.wsUrl,
       roomCode: 'NOPE',
       name: 'x',
-      drive: () => ({ mx: 0, my: 0, dash: false }),
+      drive: () => ({ mx: 0, my: 0, dash: false, sprint: false }),
     });
     try {
       await client.connect();

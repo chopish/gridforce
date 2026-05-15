@@ -158,12 +158,12 @@ async function runProfile(
   };
 }
 
-function makeDrive(seed: number): (tick: number) => { mx: number; my: number; dash: boolean } {
+function makeDrive(seed: number): (tick: number) => { mx: number; my: number; dash: boolean; sprint: boolean } {
   // Each client circles with a different phase so they don't all stack.
   const phase = (seed / CLIENT_COUNT) * Math.PI * 2;
   return (tick: number) => {
     const theta = phase + (tick / 180) * Math.PI * 2;
-    return { mx: Math.cos(theta), my: Math.sin(theta), dash: false };
+    return { mx: Math.cos(theta), my: Math.sin(theta), dash: false, sprint: false };
   };
 }
 
@@ -250,7 +250,7 @@ test('late-joining client can actually move', { timeout: 15_000 }, async () => {
       url,
       roomCode,
       name: 'warm',
-      drive: () => ({ mx: 0, my: 0, dash: false }), // idle
+      drive: () => ({ mx: 0, my: 0, dash: false, sprint: false }), // idle
     });
     await warmup.connect();
     warmup.start();
@@ -262,7 +262,7 @@ test('late-joining client can actually move', { timeout: 15_000 }, async () => {
       url,
       roomCode,
       name: 'late',
-      drive: () => ({ mx: 1, my: 0, dash: false }),
+      drive: () => ({ mx: 1, my: 0, dash: false, sprint: false }),
     });
     await late.connect();
     const spawnX = late.getStats().finalLocalPosition.x;

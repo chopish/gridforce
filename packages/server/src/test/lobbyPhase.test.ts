@@ -58,7 +58,7 @@ test('Room defaults to lobby phase; first joiner becomes host', async () => {
       url: h.wsUrl,
       roomCode: room.code,
       name: 'host',
-      drive: () => ({ mx: 0, my: 0, dash: false }),
+      drive: () => ({ mx: 0, my: 0, dash: false, sprint: false }),
     });
     await c.connect();
     await new Promise<void>((r) => setTimeout(r, 200));
@@ -80,7 +80,7 @@ test('Player movement is frozen in lobby phase', async () => {
       roomCode: room.code,
       name: 'a',
       // Drive hard to the right; in lobby the server must ignore the input.
-      drive: () => ({ mx: 1, my: 0, dash: false }),
+      drive: () => ({ mx: 1, my: 0, dash: false, sprint: false }),
     });
     await c.connect();
     const startX = c.getStats().finalLocalPosition.x;
@@ -116,7 +116,7 @@ test('startGame is host-only; a non-host call is rejected', async () => {
       url: h.wsUrl,
       roomCode: room.code,
       name: 'host',
-      drive: () => ({ mx: 0, my: 0, dash: false }),
+      drive: () => ({ mx: 0, my: 0, dash: false, sprint: false }),
     });
     await a.connect();
     await new Promise<void>((r) => setTimeout(r, 200));
@@ -147,7 +147,7 @@ test('host promotion: when host leaves, lowest-id remaining human takes over', a
       url: h.wsUrl,
       roomCode: room.code,
       name: 'a',
-      drive: () => ({ mx: 0, my: 0, dash: false }),
+      drive: () => ({ mx: 0, my: 0, dash: false, sprint: false }),
     });
     await a.connect();
     await new Promise<void>((r) => setTimeout(r, 100));
@@ -157,7 +157,7 @@ test('host promotion: when host leaves, lowest-id remaining human takes over', a
       url: h.wsUrl,
       roomCode: room.code,
       name: 'b',
-      drive: () => ({ mx: 0, my: 0, dash: false }),
+      drive: () => ({ mx: 0, my: 0, dash: false, sprint: false }),
     });
     await b.connect();
     await new Promise<void>((r) => setTimeout(r, 100));
@@ -194,7 +194,7 @@ test('setReady toggles the pilot flag and is reflected in PlayerState', async ()
       url: h.wsUrl,
       roomCode: room.code,
       name: 'a',
-      drive: () => ({ mx: 0, my: 0, dash: false }),
+      drive: () => ({ mx: 0, my: 0, dash: false, sprint: false }),
     });
     await c.connect();
     await new Promise<void>((r) => setTimeout(r, 100));
@@ -218,7 +218,7 @@ test('startGame is idempotent: second call while playing returns false', async (
       url: h.wsUrl,
       roomCode: room.code,
       name: 'a',
-      drive: () => ({ mx: 0, my: 0, dash: false }),
+      drive: () => ({ mx: 0, my: 0, dash: false, sprint: false }),
     });
     await c.connect();
     await new Promise<void>((r) => setTimeout(r, 100));
@@ -241,7 +241,7 @@ test('setLobbySettings: host can change run and difficulty', async () => {
       url: h.wsUrl,
       roomCode: room.code,
       name: 'a',
-      drive: () => ({ mx: 0, my: 0, dash: false }),
+      drive: () => ({ mx: 0, my: 0, dash: false, sprint: false }),
     });
     await c.connect();
     await new Promise<void>((r) => setTimeout(r, 100));
@@ -273,14 +273,14 @@ test('setLobbySettings: non-host call is rejected', async () => {
       url: h.wsUrl,
       roomCode: room.code,
       name: 'host',
-      drive: () => ({ mx: 0, my: 0, dash: false }),
+      drive: () => ({ mx: 0, my: 0, dash: false, sprint: false }),
     });
     await host.connect();
     guest = new TestClient({
       url: h.wsUrl,
       roomCode: room.code,
       name: 'guest',
-      drive: () => ({ mx: 0, my: 0, dash: false }),
+      drive: () => ({ mx: 0, my: 0, dash: false, sprint: false }),
     });
     await guest.connect();
     await new Promise<void>((r) => setTimeout(r, 100));
@@ -305,7 +305,7 @@ test('setNpcCount: host can spawn and clear NPCs', async () => {
       url: h.wsUrl,
       roomCode: room.code,
       name: 'host',
-      drive: () => ({ mx: 0, my: 0, dash: false }),
+      drive: () => ({ mx: 0, my: 0, dash: false, sprint: false }),
     });
     await c.connect();
     await new Promise<void>((r) => setTimeout(r, 100));
@@ -341,7 +341,7 @@ test('setNpcCount: clamps above MAX_NPCS_PER_ROOM', async () => {
       url: h.wsUrl,
       roomCode: room.code,
       name: 'host',
-      drive: () => ({ mx: 0, my: 0, dash: false }),
+      drive: () => ({ mx: 0, my: 0, dash: false, sprint: false }),
     });
     await c.connect();
     await new Promise<void>((r) => setTimeout(r, 100));
@@ -370,14 +370,14 @@ test('setNpcCount: non-host call is ignored', async () => {
       url: h.wsUrl,
       roomCode: room.code,
       name: 'host',
-      drive: () => ({ mx: 0, my: 0, dash: false }),
+      drive: () => ({ mx: 0, my: 0, dash: false, sprint: false }),
     });
     await host.connect();
     guest = new TestClient({
       url: h.wsUrl,
       roomCode: room.code,
       name: 'guest',
-      drive: () => ({ mx: 0, my: 0, dash: false }),
+      drive: () => ({ mx: 0, my: 0, dash: false, sprint: false }),
     });
     await guest.connect();
     await new Promise<void>((r) => setTimeout(r, 100));
@@ -404,7 +404,7 @@ test('setLobbySettings: rejected after game has started', async () => {
       url: h.wsUrl,
       roomCode: room.code,
       name: 'a',
-      drive: () => ({ mx: 0, my: 0, dash: false }),
+      drive: () => ({ mx: 0, my: 0, dash: false, sprint: false }),
     });
     await c.connect();
     await new Promise<void>((r) => setTimeout(r, 100));

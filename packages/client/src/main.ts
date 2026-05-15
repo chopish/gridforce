@@ -204,7 +204,7 @@ async function bootstrap(): Promise<void> {
         // bookkeeping advances and a clean transition into 'playing' has
         // accurate predictedTick.
         const raw = inputs.sample();
-        const sample = world.phase === 'lobby' ? { mx: 0, my: 0, dash: false } : raw;
+        const sample = world.phase === 'lobby' ? { mx: 0, my: 0, dash: false, sprint: false } : raw;
         const inp = world.step({ ...sample, clientTimeMs: now });
         socket.sendInput(inp);
         accumulator -= SERVER_TICK_DT_MS;

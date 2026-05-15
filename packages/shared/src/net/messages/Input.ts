@@ -3,7 +3,8 @@ import type { PlayerInput } from '../../types.js';
 import type { BinaryReader } from '../wire.js';
 import { BinaryWriter, MessageType, writeHeader } from '../wire.js';
 
-const BUTTON_DASH = 1 << 0;
+const BUTTON_DASH   = 1 << 0;
+const BUTTON_SPRINT = 1 << 1;
 
 // Wire format:
 //   u8 count                  (1..INPUT_MSG_MAX_COUNT)
@@ -11,7 +12,7 @@ const BUTTON_DASH = 1 << 0;
 //     u32 tick
 //     f64 clientTimeMs
 //     f32 mx, f32 my
-//     u8  buttons              (bit 0 = dash)
+//     u8  buttons              (bit 0 = dash, bit 1 = sprint)
 //
 // The count carries the redundancy window — the client packs the last N
 // inputs in each frame so a single lost packet doesn't lose an input.
@@ -31,7 +32,7 @@ export function encode(inputs: PlayerInput[]): Uint8Array {
     w.f64(p.clientTimeMs);
     w.f32(p.mx);
     w.f32(p.my);
-    w.u8(p.dash ? BUTTON_DASH : 0);
+    w.u8((p.dash ? BUTTON_DASH : 0) | (p.sprint ? BUTTON_SPRINT : 0));
   }
   return w.finish();
 }
@@ -52,7 +53,14 @@ export function decode(r: BinaryReader): PlayerInput[] {
     const mx = r.f32();
     const my = r.f32();
     const buttons = r.u8();
-    out[i] = { tick, clientTimeMs, mx, my, dash: (buttons & BUTTON_DASH) !== 0 };
+    out[i] = {
+      tick,
+      clientTimeMs,
+      mx,
+      my,
+      dash: (buttons & BUTTON_DASH) !== 0,
+      sprint: (buttons & BUTTON_SPRINT) !== 0,
+    };
   }
   return out;
 }

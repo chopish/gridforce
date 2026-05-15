@@ -7,6 +7,7 @@ import {
   PLAYER_DASH_DURATION_S,
   PLAYER_MOVE_SPEED,
   PLAYER_RADIUS,
+  PLAYER_SPRINT_MULTIPLIER,
 } from './constants.js';
 import { createDefaultGrid } from './grid.js';
 import { mulberry32 } from './rng.js';
@@ -28,7 +29,7 @@ test('idle player stays put', () => {
 test('movement integrates at expected speed', () => {
   const grid = createDefaultGrid();
   let p: PlayerState = newPlayerState(0, 200, 200);
-  const input: PlayerInput = { tick: 0, clientTimeMs: 0, mx: 1, my: 0, dash: false };
+  const input: PlayerInput = { tick: 0, clientTimeMs: 0, mx: 1, my: 0, dash: false, sprint: false };
   const seconds = 1;
   const steps = Math.round(seconds / CLIENT_PREDICT_DT_S);
   for (let i = 0; i < steps; i++) p = stepPlayer(p, input, CLIENT_PREDICT_DT_S, grid);
@@ -41,7 +42,7 @@ test('input is normalised to unit circle', () => {
   const grid = createDefaultGrid();
   let p: PlayerState = newPlayerState(0, 200, 200);
   // (3,4) → magnitude 5; should be normalised to (0.6, 0.8).
-  const input: PlayerInput = { tick: 0, clientTimeMs: 0, mx: 3, my: 4, dash: false };
+  const input: PlayerInput = { tick: 0, clientTimeMs: 0, mx: 3, my: 4, dash: false, sprint: false };
   const seconds = 1;
   const steps = Math.round(seconds / CLIENT_PREDICT_DT_S);
   for (let i = 0; i < steps; i++) p = stepPlayer(p, input, CLIENT_PREDICT_DT_S, grid);
@@ -53,7 +54,7 @@ test('input is normalised to unit circle', () => {
 test('clamps to world bounds', () => {
   const grid = createDefaultGrid();
   let p: PlayerState = newPlayerState(0, 50, 50);
-  const input: PlayerInput = { tick: 0, clientTimeMs: 0, mx: -1, my: -1, dash: false };
+  const input: PlayerInput = { tick: 0, clientTimeMs: 0, mx: -1, my: -1, dash: false, sprint: false };
   for (let i = 0; i < 600; i++) p = stepPlayer(p, input, CLIENT_PREDICT_DT_S, grid);
   assert.equal(p.x, PLAYER_RADIUS);
   assert.equal(p.y, PLAYER_RADIUS);
@@ -62,7 +63,7 @@ test('clamps to world bounds', () => {
 test('dash starts only when cooldown is zero, then enters cooldown', () => {
   const grid = createDefaultGrid();
   let p: PlayerState = newPlayerState(0, 400, 400);
-  const dashIn: PlayerInput = { tick: 0, clientTimeMs: 0, mx: 1, my: 0, dash: true };
+  const dashIn: PlayerInput = { tick: 0, clientTimeMs: 0, mx: 1, my: 0, dash: true, sprint: false };
   p = stepPlayer(p, dashIn, CLIENT_PREDICT_DT_S, grid);
   assert.ok(p.dashRemainingS > 0);
   assert.ok(p.dashCooldownS > 0);
@@ -84,7 +85,7 @@ test('dash starts only when cooldown is zero, then enters cooldown', () => {
   for (let i = 0; i < ticksRemaining; i++) {
     p = stepPlayer(
       p,
-      { tick: 0, clientTimeMs: 0, mx: 1, my: 0, dash: false },
+      { tick: 0, clientTimeMs: 0, mx: 1, my: 0, dash: false, sprint: false },
       CLIENT_PREDICT_DT_S,
       grid,
     );
@@ -105,6 +106,7 @@ test('replay is deterministic — same input sequence yields identical state', (
       mx: rng() * 2 - 1,
       my: rng() * 2 - 1,
       dash: rng() > 0.99,
+      sprint: false,
     });
   }
 
@@ -117,4 +119,41 @@ test('replay is deterministic — same input sequence yields identical state', (
   const a = run();
   const b = run();
   assert.deepEqual(a, b, 'two independent replays must match exactly');
+});
+
+test('sprint scales walk speed by PLAYER_SPRINT_MULTIPLIER', () => {
+  const grid = createDefaultGrid();
+  // Spawn somewhere away from walls so the clamp doesn't truncate the path.
+  let state = newPlayerState(0, grid.cols * grid.panelSize / 2, grid.rows * grid.panelSize / 2);
+  const dt = 1 / 30;
+  const N = 30;
+  for (let i = 0; i < N; i++) {
+    state = stepPlayer(
+      state,
+      { tick: i, clientTimeMs: 0, mx: 1, my: 0, dash: false, sprint: true },
+      dt,
+      grid,
+    );
+  }
+  const expected = grid.cols * grid.panelSize / 2 + PLAYER_MOVE_SPEED * PLAYER_SPRINT_MULTIPLIER * dt * N;
+  assert.ok(
+    Math.abs(state.x - expected) < 0.5,
+    `sprint distance: got ${state.x}, expected ~${expected}`,
+  );
+});
+
+test('walk speed unchanged when sprint=false', () => {
+  const grid = createDefaultGrid();
+  let state = newPlayerState(0, grid.cols * grid.panelSize / 2, grid.rows * grid.panelSize / 2);
+  const dt = 1 / 30;
+  for (let i = 0; i < 30; i++) {
+    state = stepPlayer(
+      state,
+      { tick: i, clientTimeMs: 0, mx: 1, my: 0, dash: false, sprint: false },
+      dt,
+      grid,
+    );
+  }
+  const expected = grid.cols * grid.panelSize / 2 + PLAYER_MOVE_SPEED * dt * 30;
+  assert.ok(Math.abs(state.x - expected) < 0.5);
 });

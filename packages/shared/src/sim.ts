@@ -4,6 +4,7 @@ import {
   PLAYER_DASH_SPEED,
   PLAYER_MOVE_SPEED,
   PLAYER_RADIUS,
+  PLAYER_SPRINT_MULTIPLIER,
 } from './constants.js';
 import type { GridDef, PlayerInput, PlayerState } from './types.js';
 
@@ -74,8 +75,9 @@ export function stepPlayer(
       vy = Math.sin(facing) * PLAYER_DASH_SPEED;
     }
   } else {
-    vx = mx * PLAYER_MOVE_SPEED;
-    vy = my * PLAYER_MOVE_SPEED;
+    const walk = input?.sprint ? PLAYER_MOVE_SPEED * PLAYER_SPRINT_MULTIPLIER : PLAYER_MOVE_SPEED;
+    vx = mx * walk;
+    vy = my * walk;
   }
 
   x += vx * dt;
