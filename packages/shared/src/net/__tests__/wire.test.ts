@@ -178,22 +178,11 @@ test('Input encoding rejects empty + over-cap counts', () => {
   assert.throws(() => InputMsg.encode(tooMany), /out of range/);
 });
 
-test('Snapshot round-trip with multiple players, ack bitmask, dash timers', () => {
+test('Snapshot round-trip with cooldown timer', () => {
   const players = [
     { ...newPlayerState(0, 50, 60), facing: 0, stateSeq: 1 },
-    {
-      ...newPlayerState(1, 70, 80),
-      facing: Math.PI,
-      stateSeq: 2,
-      dashCooldownS: 0.4,
-    },
-    {
-      ...newPlayerState(2, 90, 100),
-      facing: -Math.PI / 2,
-      stateSeq: 3,
-      dashCooldownS: 0.65,
-      dashRemainingS: 0.12,
-    },
+    { ...newPlayerState(1, 70, 80), facing: Math.PI, stateSeq: 2, panelJumpCooldownS: 0.4 },
+    { ...newPlayerState(2, 90, 100), facing: -Math.PI / 2, stateSeq: 3, panelJumpCooldownS: 0.65 },
   ];
   const payload = {
     tick: 9999,
@@ -226,15 +215,12 @@ test('Snapshot round-trip with multiple players, ack bitmask, dash timers', () =
   // f32 precision: round-trip should be exact for this value.
   assert.ok(Math.abs(s.phaseElapsedS - 1.25) < 1e-6);
   assert.equal(s.players.length, players.length);
-  // Idle player: both timers 0.
-  assert.equal(s.players[0]!.dashCooldownS, 0);
-  assert.equal(s.players[0]!.dashRemainingS, 0);
+  // Idle player: cooldown is 0.
+  assert.equal(s.players[0]!.panelJumpCooldownS, 0);
   // Cooling-down player: cooldown round-trips with ~4ms quantization.
-  assert.ok(Math.abs(s.players[1]!.dashCooldownS - 0.4) < 0.005, 'cooldown precision');
-  assert.equal(s.players[1]!.dashRemainingS, 0);
-  // Mid-dash player: both timers preserved.
-  assert.ok(Math.abs(s.players[2]!.dashCooldownS - 0.65) < 0.005, 'mid-dash cooldown');
-  assert.ok(Math.abs(s.players[2]!.dashRemainingS - 0.12) < 0.005, 'mid-dash remaining');
+  assert.ok(Math.abs(s.players[1]!.panelJumpCooldownS - 0.4) < 0.005, 'cooldown precision');
+  // Second cooling-down player: cooldown precision.
+  assert.ok(Math.abs(s.players[2]!.panelJumpCooldownS - 0.65) < 0.005, 'cooldown precision');
 });
 
 test('Snapshot handles zero players', () => {

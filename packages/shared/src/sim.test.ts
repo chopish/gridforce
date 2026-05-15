@@ -9,6 +9,8 @@ import {
   PLAYER_RADIUS,
   PLAYER_SPRINT_MULTIPLIER,
 } from './constants.js';
+// PLAYER_DASH_COOLDOWN_S and PLAYER_DASH_DURATION_S are used by the skipped
+// dash-burst test below; they stay in constants.ts until Task 4 removes them.
 import { createDefaultGrid } from './grid.js';
 import { mulberry32 } from './rng.js';
 import { newPlayerState, stepPlayer } from './sim.js';
@@ -20,8 +22,7 @@ test('idle player stays put', () => {
   for (let i = 0; i < 60; i++) p = stepPlayer(p, null, CLIENT_PREDICT_DT_S, grid);
   assert.equal(p.x, 200);
   assert.equal(p.y, 200);
-  assert.equal(p.dashCooldownS, 0);
-  assert.equal(p.dashRemainingS, 0);
+  assert.equal(p.panelJumpCooldownS, 0);
   // stateSeq should advance every step
   assert.equal(p.stateSeq, 60);
 });
@@ -60,9 +61,12 @@ test('clamps to world bounds', () => {
   assert.equal(p.y, PLAYER_RADIUS);
 });
 
-test('dash starts only when cooldown is zero, then enters cooldown', () => {
+// Task 4 replaces the dash burst with a panel-jump; restore as a panel-jump test.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+test.skip('dash starts only when cooldown is zero, then enters cooldown', () => {
   const grid = createDefaultGrid();
-  let p: PlayerState = newPlayerState(0, 400, 400);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let p: any = newPlayerState(0, 400, 400);
   const dashIn: PlayerInput = { tick: 0, clientTimeMs: 0, mx: 1, my: 0, dash: true, sprint: false };
   p = stepPlayer(p, dashIn, CLIENT_PREDICT_DT_S, grid);
   assert.ok(p.dashRemainingS > 0);

@@ -38,7 +38,7 @@ export {
   readHeader,
   writeHeader,
 } from './wire.js';
-export { PlayerEncoder, PLAYER_FLAG_DASHING } from './entities/PlayerEncoder.js';
+export { PlayerEncoder, PLAYER_FLAG_READY } from './entities/PlayerEncoder.js';
 export { NpcEncoder } from './entities/NpcEncoder.js';
 export type { EntityEncoder } from './entities/PlayerEncoder.js';
 export {

@@ -27,8 +27,8 @@ export interface PlayerState {
   x: number;
   y: number;
   facing: number;
-  dashCooldownS: number;
-  dashRemainingS: number;
+  panelJumpCooldownS: number; // renamed from dashCooldownS
+  // dashRemainingS removed — panel-jump is instantaneous
   stateSeq: number;
   // Roster metadata. Lives on PlayerState for wire-format simplicity in
   // Phase 0 — stepPlayer treats them as opaque pass-through. When the

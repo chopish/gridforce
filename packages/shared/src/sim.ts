@@ -1,7 +1,4 @@
 import {
-  PLAYER_DASH_COOLDOWN_S,
-  PLAYER_DASH_DURATION_S,
-  PLAYER_DASH_SPEED,
   PLAYER_MOVE_SPEED,
   PLAYER_RADIUS,
   PLAYER_SPRINT_MULTIPLIER,
@@ -20,8 +17,7 @@ export function newPlayerState(id: number, x: number, y: number, name = ''): Pla
     x,
     y,
     facing: 0,
-    dashCooldownS: 0,
-    dashRemainingS: 0,
+    panelJumpCooldownS: 0,
     stateSeq: 0,
     name,
     ready: false,
@@ -36,14 +32,13 @@ export function stepPlayer(
   dt: number,
   grid: GridDef,
 ): PlayerState {
-  let { x, y, facing, dashCooldownS, dashRemainingS } = state;
+  let { x, y, facing, panelJumpCooldownS } = state;
   const stateSeq = (state.stateSeq + 1) >>> 0;
 
   // Sanitize input on the consumer side too — server clamps as well, but the
   // shared sim must never trust raw values from the wire.
   let mx = 0;
   let my = 0;
-  let wantDash = false;
   let sprint = false;
   if (input) {
     mx = clamp(input.mx, -1, 1);
@@ -53,34 +48,17 @@ export function stepPlayer(
       mx /= mag;
       my /= mag;
     }
-    wantDash = !!input.dash;
     sprint = !!input.sprint;
   }
 
-  if (dashCooldownS > 0) dashCooldownS = Math.max(0, dashCooldownS - dt);
-  if (dashRemainingS > 0) dashRemainingS = Math.max(0, dashRemainingS - dt);
+  if (panelJumpCooldownS > 0) panelJumpCooldownS = Math.max(0, panelJumpCooldownS - dt);
 
-  if (wantDash && dashCooldownS === 0 && dashRemainingS === 0) {
-    dashRemainingS = PLAYER_DASH_DURATION_S;
-    dashCooldownS = PLAYER_DASH_COOLDOWN_S;
-  }
+  // TODO(Task 4): panel-jump burst replaces the old dash burst here.
+  // For now, just walk-integrate (no dash burst).
 
-  let vx: number;
-  let vy: number;
-  if (dashRemainingS > 0) {
-    const mag = Math.hypot(mx, my);
-    if (mag > FACING_EPSILON) {
-      vx = (mx / mag) * PLAYER_DASH_SPEED;
-      vy = (my / mag) * PLAYER_DASH_SPEED;
-    } else {
-      vx = Math.cos(facing) * PLAYER_DASH_SPEED;
-      vy = Math.sin(facing) * PLAYER_DASH_SPEED;
-    }
-  } else {
-    const walk = sprint ? PLAYER_MOVE_SPEED * PLAYER_SPRINT_MULTIPLIER : PLAYER_MOVE_SPEED;
-    vx = mx * walk;
-    vy = my * walk;
-  }
+  const walk = sprint ? PLAYER_MOVE_SPEED * PLAYER_SPRINT_MULTIPLIER : PLAYER_MOVE_SPEED;
+  const vx = mx * walk;
+  const vy = my * walk;
 
   x += vx * dt;
   y += vy * dt;
@@ -101,15 +79,10 @@ export function stepPlayer(
     x,
     y,
     facing,
-    dashCooldownS,
-    dashRemainingS,
+    panelJumpCooldownS,
     stateSeq,
     // Roster metadata is opaque to the sim — pass through unchanged.
     name: state.name,
     ready: state.ready,
   };
-}
-
-export function isDashing(state: PlayerState): boolean {
-  return state.dashRemainingS > 0;
 }

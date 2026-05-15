@@ -5,7 +5,6 @@ import {
   NETSIM_PROFILES,
   SERVER_TICK_DT_MS,
   type PlayerId,
-  type PlayerState,
 } from '@gridforce/shared';
 
 import { createInvite, redeemInvite, LobbyApiError } from './api.js';
@@ -240,13 +239,11 @@ async function bootstrap(): Promise<void> {
       renderer.playerRenderer.update(ids, (id) => {
         if (id === world.localPlayerId) {
           const v = world.visualLocalPosition(alpha);
-          const cur: PlayerState | undefined = world.players.get(id);
-          return { x: v.x, y: v.y, facing: v.facing, dashing: !!cur && cur.dashRemainingS > 0 };
+          return { x: v.x, y: v.y, facing: v.facing, dashing: false };
         }
         const sample = world.remoteInterp.sample(id, now);
         if (!sample) return null;
-        const cur = world.players.get(id);
-        return { ...sample, dashing: !!cur && cur.dashRemainingS > 0 };
+        return { ...sample, dashing: false };
       });
 
       // Resync banner. Show whenever rtt is unpopulated, hide the moment
