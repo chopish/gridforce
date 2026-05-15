@@ -131,9 +131,12 @@ async function bootstrap(): Promise<void> {
     );
   });
 
-  // Cycle the network simulator profile with F. Used during manual playtest.
+  // Cycle the network simulator profile with P. Used during manual playtest.
+  // Previously bound to KeyF; moved to KeyP because F is now the shock-fire
+  // key (B1 electrical-defense). Cycling netsim is dev-only, so a less
+  // prominent binding is fine.
   window.addEventListener('keydown', (e) => {
-    if (e.code === 'KeyF') {
+    if (e.code === 'KeyP') {
       const next = socket.cycleNetSimProfile();
       console.info('[netsim] →', next);
     }
