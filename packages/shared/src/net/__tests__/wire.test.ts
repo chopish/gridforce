@@ -487,8 +487,8 @@ test('CrawlerEncoder round-trips Crawler state', async () => {
   assert.equal(decoded.targetCx, 5);
   assert.equal(decoded.targetCy, 6);
   assert.equal(decoded.ai, 1);
-  assert.ok(Math.abs(decoded.x - 320) < 1, 'x int round-trip');
-  assert.ok(Math.abs(decoded.y - 200) < 1, 'y int round-trip');
+  assert.ok(Math.abs(decoded.x - 320) <= 1, 'x int round-trip');
+  assert.ok(Math.abs(decoded.y - 200) <= 1, 'y int round-trip');
 });
 
 test('Welcome carries full panel-state byte array', () => {

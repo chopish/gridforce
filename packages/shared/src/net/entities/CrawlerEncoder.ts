@@ -27,8 +27,8 @@ export const CrawlerEncoder: EntityEncoder<CrawlerState> = {
   type: EntityType.Crawler,
   encode(w: BinaryWriter, c: CrawlerState): void {
     w.u16(c.id & 0xffff);
-    w.i16(Math.trunc(c.x));
-    w.i16(Math.trunc(c.y));
+    w.i16(Math.round(c.x));
+    w.i16(Math.round(c.y));
     w.u8(quantizeFacing(c.facing));
     w.u8(c.hp & 0xff);
     w.u8(c.targetCx & 0xff);
