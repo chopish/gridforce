@@ -394,14 +394,14 @@ export class PredictedWorld {
     // correction every snapshot was preventing the existing correction from
     // ever decaying (sustained ~7 px pull at 20 Hz snapshot rate vs 150 ms
     // blend = correction can never reach below ~2/3 of its peak).
-    if (oldPrev && err >= PREDICTION_THRESHOLD_PX && err < PREDICTION_HARD_SNAP_PX) {
+    if (!replayedJump && oldPrev && err >= PREDICTION_THRESHOLD_PX && err < PREDICTION_HARD_SNAP_PX) {
       const expectedNextLerpX = oldPrev.x + this.lastRenderAlpha * (rebased.x - oldPrev.x);
       const expectedNextLerpY = oldPrev.y + this.lastRenderAlpha * (rebased.y - oldPrev.y);
       this.correctionX = this.lastVisualX - expectedNextLerpX;
       this.correctionY = this.lastVisualY - expectedNextLerpY;
       this.diagnostics.smoothCorrections++;
       this.diagnostics.lastSnapAtTick = snap.tick;
-    } else if (err >= PREDICTION_HARD_SNAP_PX) {
+    } else if (!replayedJump && err >= PREDICTION_HARD_SNAP_PX) {
       // Hard snap — wipe correction so visual moves to rebased immediately.
       this.correctionX = 0;
       this.correctionY = 0;

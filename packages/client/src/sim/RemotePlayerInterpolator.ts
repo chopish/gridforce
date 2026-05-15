@@ -14,9 +14,12 @@ interface BufferedSnapshot {
 
 const MAX_BUFFER_LEN = 30;
 const ARRIVAL_HISTORY = 60;
-// Threshold for detecting a panel-jump in remote player snapshots.
-// Slightly above half a panel (56 px at default panelSize=64) — well above
-// any sprint-walk per-tick distance (~12 px) and well below a full jump.
+// Render-side teleport detection threshold. This must satisfy:
+//   max_sprint_distance_per_snapshot < TELEPORT_THRESHOLD_PX < min_panel_jump
+// At default tuning that's roughly 25 px (sprint·diagonal·snapshot-interval)
+// and 64 px (panelSize). 56 sits comfortably in the safe middle. If panelSize
+// or sprint tuning changes substantially, revisit this — the interpolator
+// doesn't know about GridDef here, so the value is decoupled by design.
 const TELEPORT_THRESHOLD_PX = 56;
 
 // Adaptive interpolation buffer for remote players.
