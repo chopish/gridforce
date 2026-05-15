@@ -180,7 +180,9 @@ async function bootstrap(): Promise<void> {
     let accumulator = 0;
     let frameSamples = 0;
     let frameSampleStart = last;
-    let lastRenderedStageIndex = -1;
+    // Track the stage by id rather than index — a run swap in the lobby
+    // keeps currentStageIndex at 0, so an index-only check would miss it.
+    let lastRenderedStageId = '';
     // "resyncing…" banner is shown while rtt EWMA is unpopulated (=0). This
     // happens at startup before the first pong and again after visibility
     // restore (resetRttForVisibilityRestore zeros it). On bad-profile
@@ -234,10 +236,12 @@ async function bootstrap(): Promise<void> {
       });
       renderer.npcRenderer.endFrame();
 
-      // React to stage transitions (including the very first frame).
-      if (world.currentStageIndex !== lastRenderedStageIndex) {
-        renderer.setGrid(world.getCurrentStage().grid);
-        lastRenderedStageIndex = world.currentStageIndex;
+      // React to stage transitions (including the very first frame, and
+      // lobby-time run swaps that don't move the stage index).
+      const currentStage = world.getCurrentStage();
+      if (currentStage.id !== lastRenderedStageId) {
+        renderer.setGrid(currentStage.grid);
+        lastRenderedStageId = currentStage.id;
       }
 
       // Render players: local from prediction, remotes from interpolator.

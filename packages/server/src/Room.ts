@@ -240,7 +240,19 @@ export class Room {
     this.currentStageIndex = 0;
     this.currentPhaseIndex = 0;
     this.phaseElapsedS = 0;
+    // Re-centre all players on the active stage's grid. Pre-game they sat
+    // at spawn positions sized to whatever grid was active at join time,
+    // which can be wrong if the host swapped runs mid-lobby.
+    this.respawnAllOnCurrentGrid();
     return true;
+  }
+
+  private respawnAllOnCurrentGrid(): void {
+    let slot = 0;
+    for (const [id, state] of this.states) {
+      const { x, y } = spawnPosition(this.grid, slot++);
+      this.states.set(id, { ...state, x, y });
+    }
   }
 
   // Advance the phase clock to the next phase. Public so future gameplay
@@ -269,13 +281,8 @@ export class Room {
     this.currentPhaseIndex = 0;
     this.phaseElapsedS = 0;
     // Re-centre players on the new stage's grid so a smaller arena doesn't
-    // strand someone outside the bounds. The `grid` getter already reflects
-    // the new stage by the time we reach here.
-    let slot = 0;
-    for (const [id, state] of this.states) {
-      const { x, y } = spawnPosition(this.grid, slot++);
-      this.states.set(id, { ...state, x, y });
-    }
+    // strand someone outside the bounds.
+    this.respawnAllOnCurrentGrid();
   }
 
   // Host-only stress-test command. Spawns or removes NPCs to reach the

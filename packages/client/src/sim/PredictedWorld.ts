@@ -258,6 +258,13 @@ export class PredictedWorld {
     this.currentStageIndex = snap.currentStageIndex;
     this.currentPhaseIndex = snap.currentPhaseIndex;
     this.phaseElapsedS = snap.phaseElapsedS;
+    // Keep the local sim's grid in lock-step with the active stage. The
+    // Welcome payload seeds it once at join time, but the host can swap the
+    // run in the lobby and we won't get another Welcome — without this the
+    // grid (used for stepPlayer's bound clamp) stays stale and the player
+    // is invisibly fenced into the old arena even when the renderer has
+    // moved on.
+    this.grid = this.getCurrentStage().grid;
 
     // Lead maintenance. Two regimes:
     //   1. predictedTick has fallen below MIN_SAFE_LEAD (or even past the
