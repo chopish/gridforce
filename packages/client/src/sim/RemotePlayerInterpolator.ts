@@ -14,6 +14,10 @@ interface BufferedSnapshot {
 
 const MAX_BUFFER_LEN = 30;
 const ARRIVAL_HISTORY = 60;
+// Threshold for detecting a panel-jump in remote player snapshots.
+// Slightly above half a panel (56 px at default panelSize=64) — well above
+// any sprint-walk per-tick distance (~12 px) and well below a full jump.
+const TELEPORT_THRESHOLD_PX = 56;
 
 // Adaptive interpolation buffer for remote players.
 //
@@ -34,6 +38,8 @@ export class RemotePlayerInterpolator {
   private arrivalIntervals: number[] = [];
   private lastArrivalAt = 0;
   private delayMs = REMOTE_INTERP_DELAY_SEED_MS;
+  // Last-ingested position per player, used to detect panel-jumps.
+  private lastIngestedPos = new Map<PlayerId, { x: number; y: number }>();
 
   get currentDelayMs(): number {
     return this.delayMs;
@@ -42,6 +48,7 @@ export class RemotePlayerInterpolator {
   seed(state: PlayerState, _serverTimeMs: number): void {
     const now = performance.now();
     this.buffers.set(state.id, [{ arrivalAt: now, state: { ...state } }]);
+    this.lastIngestedPos.set(state.id, { x: state.x, y: state.y });
   }
 
   ingest(state: PlayerState, _serverTimeMs: number): void {
@@ -54,6 +61,23 @@ export class RemotePlayerInterpolator {
     }
     this.lastArrivalAt = now;
 
+    // Detect a panel-jump: if the snapshot moved more than TELEPORT_THRESHOLD_PX
+    // from the last ingested position, the remote player teleported. Clear and
+    // re-seed the buffer so the render picks up from the new position immediately
+    // instead of lerping across the jump gap.
+    const lastPos = this.lastIngestedPos.get(state.id);
+    if (lastPos !== undefined) {
+      const dist = Math.hypot(state.x - lastPos.x, state.y - lastPos.y);
+      if (dist > TELEPORT_THRESHOLD_PX) {
+        // Re-seed: replace the buffer with a single entry at the new position
+        // so the interpolator starts fresh from the destination.
+        this.buffers.set(state.id, [{ arrivalAt: now, state: { ...state } }]);
+        this.lastIngestedPos.set(state.id, { x: state.x, y: state.y });
+        return;
+      }
+    }
+    this.lastIngestedPos.set(state.id, { x: state.x, y: state.y });
+
     let buf = this.buffers.get(state.id);
     if (!buf) {
       buf = [];
@@ -65,6 +89,7 @@ export class RemotePlayerInterpolator {
 
   remove(id: PlayerId): void {
     this.buffers.delete(id);
+    this.lastIngestedPos.delete(id);
   }
 
   // Returns the visual position for `id` at `renderNow` (performance.now()),
@@ -124,7 +149,11 @@ export class RemotePlayerInterpolator {
   // replaying the gap as a catch-up animation).
   resetForVisibilityRestore(): void {
     for (const [id, buf] of this.buffers) {
-      if (buf.length > 1) this.buffers.set(id, [buf[buf.length - 1]!]);
+      if (buf.length > 1) {
+        const last = buf[buf.length - 1]!;
+        this.buffers.set(id, [last]);
+        this.lastIngestedPos.set(id, { x: last.state.x, y: last.state.y });
+      }
     }
     this.lastArrivalAt = 0;
     this.arrivalIntervals = [];

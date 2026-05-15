@@ -223,7 +223,19 @@ export class PredictedWorld {
       sprint: local.sprint,
     };
     const nextLocal = stepPlayer(localState, input, SERVER_TICK_DT_S, this.grid);
+
+    // Detect a panel-jump frame: position moved more than walk-step worth
+    // (with margin for sprint). Half a panel is well above any single-tick
+    // walk distance even with sprint, and well below a full jump.
+    const stepDist = Math.hypot(nextLocal.x - localState.x, nextLocal.y - localState.y);
+    const jumped = stepDist > this.grid.panelSize * 0.5;
+
     this.players.set(this.localPlayerId, nextLocal);
+
+    if (jumped) {
+      // Skip render-time interpolation by aligning prev with cur.
+      this.prevPlayers.set(this.localPlayerId, { ...nextLocal });
+    }
 
     this.pending.push(input);
     // Cap pending list to bound replay cost on very bad networks.
@@ -340,8 +352,12 @@ export class PredictedWorld {
 
     // Rebase: take server's view of us, then replay any unacked inputs.
     let rebased: PlayerState = { ...localSnap };
+    let replayedJump = false;
     for (const inp of this.pending) {
+      const replayBefore = rebased;
       rebased = stepPlayer(rebased, inp, SERVER_TICK_DT_S, this.grid);
+      const replayStepDist = Math.hypot(rebased.x - replayBefore.x, rebased.y - replayBefore.y);
+      if (replayStepDist > this.grid.panelSize * 0.5) replayedJump = true;
     }
     this.diagnostics.lastReplayInputs = this.pending.length;
 
@@ -359,6 +375,16 @@ export class PredictedWorld {
     // rebased target over the rest of this tick.
     const oldPrev = this.prevPlayers.get(this.localPlayerId);
     this.players.set(this.localPlayerId, rebased);
+
+    // If the replay traversed a panel-jump, align prev with the rebased
+    // destination so the lerp snaps immediately rather than sliding across
+    // the jump. Do this BEFORE the visual-correction block so the correction
+    // logic doesn't re-introduce a smooth blend over a genuine teleport.
+    if (replayedJump) {
+      this.prevPlayers.set(this.localPlayerId, { ...rebased });
+      this.correctionX = 0;
+      this.correctionY = 0;
+    }
 
     // Visual continuity. When divergence is real (>= threshold), compute a
     // correction that keeps the on-screen position exactly where it just was
