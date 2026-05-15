@@ -7,6 +7,7 @@ import {
   PLAYER_RADIUS,
   CRAWLER_SPAWN_INTERVAL_S,
   MAX_ALIVE_CRAWLERS,
+  SHOCK_COOLDOWN_S,
   CrawlerAIState,
   DEFAULT_DIFFICULTY,
   DEFAULT_RUN_ID,
@@ -16,6 +17,7 @@ import {
   GRID_COLS,
   GRID_ROWS,
   MAX_PLAYERS_PER_ROOM,
+  PanelState,
   PlayerJoinedMsg,
   PlayerLeftMsg,
   SERVER_SNAPSHOT_INTERVAL_MS,
@@ -27,6 +29,7 @@ import {
   getRun,
   getRunOrDefault,
   getStage,
+  indexOf,
   isValidDifficulty,
   isValidRunId,
   newPlayerState,
@@ -538,12 +541,48 @@ export class Room {
     this.carbons.set(id, { id, x, y, ttlS: CARBON_TTL_S });
   }
 
+  private applyShock(_playerId: PlayerId, playerState: PlayerState): PlayerState {
+    const { cols, rows, panelSize } = this.grid;
+    const cx = Math.floor(playerState.x / panelSize);
+    const cy = Math.floor(playerState.y / panelSize);
+    const neighbors: Array<[number, number]> = [
+      [cx + 1, cy], [cx - 1, cy], [cx, cy + 1], [cx, cy - 1],
+    ];
+    for (const [nx, ny] of neighbors) {
+      if (nx < 0 || nx >= cols || ny < 0 || ny >= rows) continue;
+      const idx = indexOf(cols, nx, ny);
+      if (this.panelStates[idx] !== PanelState.LIVE) continue;
+      // Kill any crawler inside this tile.
+      const tileMinX = nx * panelSize;
+      const tileMinY = ny * panelSize;
+      const tileMaxX = tileMinX + panelSize;
+      const tileMaxY = tileMinY + panelSize;
+      for (const [cid, c] of this.crawlers) {
+        if (c.x >= tileMinX && c.x < tileMaxX && c.y >= tileMinY && c.y < tileMaxY) {
+          this.spawnCarbon(c.x, c.y);
+          this.crawlers.delete(cid);
+        }
+      }
+    }
+    return { ...playerState, shockCooldownS: SHOCK_COOLDOWN_S };
+  }
+
   private physicsStep(): void {
     for (const [id, state] of this.states) {
       const pilot = this.pilots.get(id);
       const input = pilot ? pilot.consumeInputForTick(this.tick) : null;
       const next = stepPlayer(state, input, SERVER_TICK_DT_S, this.grid);
-      this.states.set(id, next);
+      // Uncharged local shock — rising-edge on input.shock with cooldown gate.
+      let cur = next;
+      if (input && input.shock && cur.shockCooldownS === 0) {
+        cur = this.applyShock(id, cur);
+      } else {
+        // Drain cooldown if non-zero.
+        if (cur.shockCooldownS > 0) {
+          cur = { ...cur, shockCooldownS: Math.max(0, cur.shockCooldownS - SERVER_TICK_DT_S) };
+        }
+      }
+      this.states.set(id, cur);
     }
     if (this.npcs.size > 0) {
       for (const npc of this.npcs.values()) {
