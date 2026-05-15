@@ -36,6 +36,8 @@ export function encode(p: WelcomePayload): Uint8Array {
   w.string(p.sessionKey);
   w.varuint(p.players.length);
   for (const pl of p.players) PlayerEncoder.encode(w, pl);
+  w.varuint(p.panelStates.length);
+  for (let i = 0; i < p.panelStates.length; i++) w.u8(p.panelStates[i]!);
   return w.finish();
 }
 
@@ -58,6 +60,9 @@ export function decode(r: BinaryReader): WelcomePayload {
   const count = r.varuint();
   const players: PlayerState[] = [];
   for (let i = 0; i < count; i++) players.push(PlayerEncoder.decode(r));
+  const panelLen = r.varuint();
+  const panelStates = new Uint8Array(panelLen);
+  for (let i = 0; i < panelLen; i++) panelStates[i] = r.u8();
   return {
     yourPlayerId,
     grid: { cols, rows, panelSize },
@@ -73,5 +78,6 @@ export function decode(r: BinaryReader): WelcomePayload {
     maxPlayers,
     sessionKey,
     players,
+    panelStates,
   };
 }

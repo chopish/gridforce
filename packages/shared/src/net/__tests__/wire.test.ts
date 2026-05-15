@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import { SCHEMA_VERSION } from '../../constants.js';
 import { newPlayerState } from '../../sim.js';
+import { PanelState, allLive } from '../../panels.js';
 import {
   AddBotMsg,
   ErrorMsg,
@@ -81,6 +82,7 @@ test('Welcome round-trip', () => {
       { ...newPlayerState(0, 100, 100, 'alice'), facing: 1.234, stateSeq: 7 },
       { ...newPlayerState(3, 200, 250, 'bob'), facing: -0.5, stateSeq: 9, ready: true },
     ],
+    panelStates: allLive(18, 12),
   };
   const decoded = decodeMessage(WelcomeMsg.encode(payload));
   assert.equal(decoded.type, MessageType.Welcome);
@@ -218,6 +220,9 @@ test('Snapshot round-trip with cooldown timer', () => {
     phaseElapsedS: 1.25,
     players,
     npcs: [],
+    panelStates: allLive(18, 12),
+    panelCols: 18,
+    panelRows: 12,
   };
   const dec = decodeMessage(SnapshotMsg.encode(payload));
   assert.equal(dec.type, MessageType.Snapshot);
@@ -259,6 +264,9 @@ test('Snapshot handles zero players', () => {
       phaseElapsedS: 0,
       players: [],
       npcs: [],
+      panelStates: allLive(18, 12),
+      panelCols: 18,
+      panelRows: 12,
     }),
   );
   assert.equal(dec.type, MessageType.Snapshot);
@@ -291,6 +299,9 @@ test('Snapshot encodes NPC group when npcs are present', () => {
       phaseElapsedS: 0,
       players: [],
       npcs,
+      panelStates: allLive(18, 12),
+      panelCols: 18,
+      panelRows: 12,
     }),
   );
   assert.equal(dec.type, MessageType.Snapshot);
@@ -382,6 +393,7 @@ test('PlayerEncoder preserves repairProgressS up to REPAIR_DURATION_S without cl
     phase: 'playing', hostId: 0, difficulty: 1,
     runId: 'test-run', currentStageIndex: 0, currentPhaseIndex: 0, phaseElapsedS: 0,
     players, npcs: [],
+    panelStates: allLive(18, 12), panelCols: 18, panelRows: 12,
   }));
   assert.equal(dec.type, MessageType.Snapshot);
   const got = dec.payload.players[0]!.repairProgressS;
@@ -421,6 +433,9 @@ test('PlayerEncoder round-trips carbon + shockCooldownS + repairProgressS', () =
     phaseElapsedS: 0,
     players,
     npcs: [],
+    panelStates: allLive(18, 12),
+    panelCols: 18,
+    panelRows: 12,
   }));
   assert.equal(dec.type, MessageType.Snapshot);
   const s = dec.payload;
@@ -428,4 +443,60 @@ test('PlayerEncoder round-trips carbon + shockCooldownS + repairProgressS', () =
   assert.ok(Math.abs(s.players[0]!.shockCooldownS - 0.15) < 0.01, 'shock cooldown quantization');
   assert.ok(Math.abs(s.players[0]!.repairProgressS - 0.8) < 0.01, 'repair progress quantization');
   assert.equal(s.players[1]!.carbon, 99);
+});
+
+test('Snapshot carries panel-state RLE block', () => {
+  const panelBuf = allLive(18, 12);
+  panelBuf[0] = PanelState.DAMAGED;
+  panelBuf[5] = PanelState.BROKEN;
+  const dec = decodeMessage(SnapshotMsg.encode({
+    tick: 1,
+    serverTimeMs: 0,
+    ackInputTick: -1,
+    inputAckBitmask: 0,
+    phase: 'playing',
+    hostId: 0,
+    difficulty: 1,
+    runId: 'test-run',
+    currentStageIndex: 0,
+    currentPhaseIndex: 0,
+    phaseElapsedS: 0,
+    players: [],
+    npcs: [],
+    panelStates: panelBuf,
+    panelCols: 18,
+    panelRows: 12,
+  }));
+  assert.equal(dec.type, MessageType.Snapshot);
+  const s = dec.payload;
+  assert.equal(s.panelStates.length, 18 * 12);
+  assert.equal(s.panelStates[0], PanelState.DAMAGED);
+  assert.equal(s.panelStates[5], PanelState.BROKEN);
+  assert.equal(s.panelStates[1], PanelState.LIVE);
+});
+
+test('Welcome carries full panel-state byte array', () => {
+  const panelBuf = allLive(18, 12);
+  panelBuf[10] = PanelState.DAMAGED;
+  const decoded = decodeMessage(WelcomeMsg.encode({
+    yourPlayerId: 0,
+    grid: { cols: 18, rows: 12, panelSize: 64 },
+    startTick: 0,
+    serverTimeMs: 0,
+    phase: 'lobby',
+    hostId: 0,
+    difficulty: 1,
+    runId: 'test-run',
+    currentStageIndex: 0,
+    currentPhaseIndex: 0,
+    phaseElapsedS: 0,
+    maxPlayers: 4,
+    sessionKey: '',
+    players: [],
+    panelStates: panelBuf,
+  }));
+  assert.equal(decoded.type, MessageType.Welcome);
+  const w = decoded.payload;
+  assert.equal(w.panelStates.length, 18 * 12);
+  assert.equal(w.panelStates[10], PanelState.DAMAGED);
 });

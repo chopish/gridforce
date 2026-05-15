@@ -89,6 +89,11 @@ export interface SnapshotPayload {
   // entry. Combined with PhaseDef.durationS this drives the StageHud
   // countdown without any extra messages.
   phaseElapsedS: number;
+  // B1: full panel-state buffer, RLE-encoded on the wire. Snapshot
+  // sends every tick; deltas are a future optimization.
+  panelStates: Uint8Array;
+  panelCols: number;
+  panelRows: number;
   players: PlayerState[];
   // Wandering NPCs (entity stress / forward-design slot for game NPCs).
   // Empty when none are spawned. Per-NPC cost on the wire is ~8 bytes,
@@ -122,6 +127,8 @@ export interface WelcomePayload {
   // (invite creation, future room settings). Sent only inside this
   // player's Welcome — never broadcast to others.
   sessionKey: string;
+  // B1: full panel-state buffer (raw bytes, NOT RLE — joiner-friendly).
+  panelStates: Uint8Array;
 }
 
 // Lobby controls. Sent by the client.

@@ -13,6 +13,7 @@ import {
   SERVER_TICK_DT_S,
   SnapshotMsg,
   WelcomeMsg,
+  allLive,
   getRun,
   getRunOrDefault,
   getStage,
@@ -103,6 +104,7 @@ export class Room {
   private currentStageIndex = 0;
   private currentPhaseIndex = 0;
   private phaseElapsedS = 0;
+  panelStates: Uint8Array = new Uint8Array(0);
 
   // The active stage's grid. Derived so a stage advance during play
   // automatically swaps it without rewiring every consumer.
@@ -240,6 +242,7 @@ export class Room {
     this.currentStageIndex = 0;
     this.currentPhaseIndex = 0;
     this.phaseElapsedS = 0;
+    this.panelStates = allLive(this.grid.cols, this.grid.rows);
     // Re-centre all players on the active stage's grid. Pre-game they sat
     // at spawn positions sized to whatever grid was active at join time,
     // which can be wrong if the host swapped runs mid-lobby.
@@ -283,6 +286,7 @@ export class Room {
     // Re-centre players on the new stage's grid so a smaller arena doesn't
     // strand someone outside the bounds.
     this.respawnAllOnCurrentGrid();
+    this.panelStates = allLive(this.grid.cols, this.grid.rows);
   }
 
   // Host-only stress-test command. Spawns or removes NPCs to reach the
@@ -328,6 +332,7 @@ export class Room {
       this.currentStageIndex = 0;
       this.currentPhaseIndex = 0;
       this.phaseElapsedS = 0;
+      this.panelStates = allLive(this.grid.cols, this.grid.rows);
       changed = true;
     }
     if (isValidDifficulty(difficulty) && difficulty !== this.difficulty) {
@@ -394,6 +399,7 @@ export class Room {
         maxPlayers: this.maxPlayers,
         sessionKey: conn.sessionKey,
         players: Array.from(this.states.values()),
+        panelStates: this.panelStates,
       }),
     );
   }
@@ -516,6 +522,9 @@ export class Room {
         currentStageIndex: this.currentStageIndex,
         currentPhaseIndex: this.currentPhaseIndex,
         phaseElapsedS: this.phaseElapsedS,
+        panelStates: this.panelStates,
+        panelCols: this.grid.cols,
+        panelRows: this.grid.rows,
         players: visible,
         npcs: npcStates,
       });

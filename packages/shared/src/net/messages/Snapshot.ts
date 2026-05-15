@@ -1,4 +1,5 @@
 import { SCHEMA_VERSION } from '../../constants.js';
+import { encodeRle, decodeRle } from '../../panels.js';
 import { RoomPhaseValue, type NpcState, type PlayerState, type RoomPhase, type SnapshotPayload } from '../../types.js';
 import { getEntityEncoder, registerEntityEncoder } from '../entities/registry.js';
 import type { BinaryReader } from '../wire.js';
@@ -51,6 +52,9 @@ export function encode(p: SnapshotPayload): Uint8Array {
   w.u8(p.currentStageIndex & 0xff);
   w.u8(p.currentPhaseIndex & 0xff);
   w.f32(p.phaseElapsedS);
+  w.u16(p.panelCols);
+  w.u16(p.panelRows);
+  encodeRle(w, p.panelStates);
 
   // Group count is dynamic — Player is always present, NPC only when any
   // NPCs are spawned (saves the 2-byte group header in the empty case).
@@ -84,6 +88,9 @@ export function decode(r: BinaryReader): SnapshotPayload {
   const currentStageIndex = r.u8();
   const currentPhaseIndex = r.u8();
   const phaseElapsedS = r.f32();
+  const panelCols = r.u16();
+  const panelRows = r.u16();
+  const panelStates = decodeRle(r, panelCols * panelRows);
 
   const groupCount = r.u8();
   const players: PlayerState[] = [];
@@ -124,6 +131,9 @@ export function decode(r: BinaryReader): SnapshotPayload {
     currentStageIndex,
     currentPhaseIndex,
     phaseElapsedS,
+    panelStates,
+    panelCols,
+    panelRows,
     players,
     npcs,
   };
