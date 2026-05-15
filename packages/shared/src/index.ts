@@ -6,3 +6,4 @@ export * from './sim.js';
 export * from './netsim.js';
 export * from './stages.js';
 export * from './net/index.js';
+export * from './panels.js';
