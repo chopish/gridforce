@@ -20,7 +20,12 @@ export interface CrawlerStepContext {
   panels: Uint8Array;
   /** Per-panel "seconds of attack accrued" — keyed by panel index. The step
    *  function bumps this for the panel being attacked and clears it once
-   *  the panel transitions to the next state. */
+   *  the panel transitions to the next state.
+   *
+   *  Multi-crawler stacking is intentional: two crawlers attacking the same
+   *  panel share the same timer entry, so they degrade it ~2× as fast. Gang
+   *  pressure feels right and matches the Smash-TV style of the doc. If a
+   *  future enemy type needs isolated timers, key by (crawlerId, panelIdx). */
   attackTimers: Map<number, number>;
   /** Accumulator: incremented each time a crawler exits the world through a
    *  broken tile. The caller (Room) deducts city HP from this and resets. */
