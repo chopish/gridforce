@@ -1,6 +1,6 @@
 import { SCHEMA_VERSION } from '../../constants.js';
 import { encodeRle, decodeRle } from '../../panels.js';
-import { RoomPhaseValue, type CrawlerState, type NpcState, type PlayerState, type RoomPhase, type SnapshotPayload } from '../../types.js';
+import { RoomPhaseValue, type CarbonState, type CrawlerState, type NpcState, type PlayerState, type RoomPhase, type SnapshotPayload } from '../../types.js';
 import { getEntityEncoder, registerEntityEncoder } from '../entities/registry.js';
 import type { BinaryReader } from '../wire.js';
 import { BinaryWriter, EntityType, MessageType, writeHeader } from '../wire.js';
@@ -56,13 +56,15 @@ export function encode(p: SnapshotPayload): Uint8Array {
   w.u16(p.panelRows);
   encodeRle(w, p.panelStates);
 
-  // Group count is dynamic — Player is always present; NPC and Crawler
-  // groups are omitted when empty (saves the 2-byte group header each).
+  // Group count is dynamic — Player is always present; NPC, Crawler, and
+  // Carbon groups are omitted when empty (saves the 2-byte group header each).
   const hasNpcs = p.npcs.length > 0;
   const hasCrawlers = p.crawlers.length > 0;
+  const hasCarbons = p.carbons.length > 0;
   let groupCount = 1; // Player always present
   if (hasNpcs) groupCount++;
   if (hasCrawlers) groupCount++;
+  if (hasCarbons) groupCount++;
   w.u8(groupCount);
   w.u8(EntityType.Player);
   w.varuint(p.players.length);
@@ -82,6 +84,13 @@ export function encode(p: SnapshotPayload): Uint8Array {
     const crawlerEnc = getEntityEncoder(EntityType.Crawler);
     if (!crawlerEnc) throw new Error('Crawler encoder not registered');
     for (const c of p.crawlers) crawlerEnc.encode(w, c);
+  }
+  if (hasCarbons) {
+    w.u8(EntityType.Carbon);
+    w.varuint(p.carbons.length);
+    const carbonEnc = getEntityEncoder(EntityType.Carbon);
+    if (!carbonEnc) throw new Error('Carbon encoder not registered');
+    for (const c of p.carbons) carbonEnc.encode(w, c);
   }
 
   return w.finish();
@@ -107,6 +116,7 @@ export function decode(r: BinaryReader): SnapshotPayload {
   const players: PlayerState[] = [];
   const npcs: NpcState[] = [];
   const crawlers: CrawlerState[] = [];
+  const carbons: CarbonState[] = [];
   for (let g = 0; g < groupCount; g++) {
     // u8 is a number on the wire; comparing against the EntityType enum
     // is safe because the enum is numeric and getEntityEncoder is the
@@ -127,6 +137,8 @@ export function decode(r: BinaryReader): SnapshotPayload {
       for (let i = 0; i < count; i++) npcs.push(enc.decode(r) as NpcState);
     } else if (entityType === EntityType.Crawler) {
       for (let i = 0; i < count; i++) crawlers.push(enc.decode(r) as CrawlerState);
+    } else if (entityType === EntityType.Carbon) {
+      for (let i = 0; i < count; i++) carbons.push(enc.decode(r) as CarbonState);
     } else {
       for (let i = 0; i < count; i++) enc.decode(r);
     }
@@ -151,5 +163,6 @@ export function decode(r: BinaryReader): SnapshotPayload {
     players,
     npcs,
     crawlers,
+    carbons,
   };
 }

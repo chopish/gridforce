@@ -221,6 +221,7 @@ test('Snapshot round-trip with cooldown timer', () => {
     players,
     npcs: [],
     crawlers: [],
+    carbons: [],
     panelStates: allLive(18, 12),
     panelCols: 18,
     panelRows: 12,
@@ -266,6 +267,7 @@ test('Snapshot handles zero players', () => {
       players: [],
       npcs: [],
       crawlers: [],
+      carbons: [],
       panelStates: allLive(18, 12),
       panelCols: 18,
       panelRows: 12,
@@ -302,6 +304,7 @@ test('Snapshot encodes NPC group when npcs are present', () => {
       players: [],
       npcs,
       crawlers: [],
+      carbons: [],
       panelStates: allLive(18, 12),
       panelCols: 18,
       panelRows: 12,
@@ -395,7 +398,7 @@ test('PlayerEncoder preserves repairProgressS up to REPAIR_DURATION_S without cl
     tick: 1, serverTimeMs: 0, ackInputTick: -1, inputAckBitmask: 0,
     phase: 'playing', hostId: 0, difficulty: 1,
     runId: 'test-run', currentStageIndex: 0, currentPhaseIndex: 0, phaseElapsedS: 0,
-    players, npcs: [], crawlers: [],
+    players, npcs: [], crawlers: [], carbons: [],
     panelStates: allLive(18, 12), panelCols: 18, panelRows: 12,
   }));
   assert.equal(dec.type, MessageType.Snapshot);
@@ -437,6 +440,7 @@ test('PlayerEncoder round-trips carbon + shockCooldownS + repairProgressS', () =
     players,
     npcs: [],
     crawlers: [],
+    carbons: [],
     panelStates: allLive(18, 12),
     panelCols: 18,
     panelRows: 12,
@@ -468,6 +472,7 @@ test('Snapshot carries panel-state RLE block', () => {
     players: [],
     npcs: [],
     crawlers: [],
+    carbons: [],
     panelStates: panelBuf,
     panelCols: 18,
     panelRows: 12,
@@ -478,6 +483,19 @@ test('Snapshot carries panel-state RLE block', () => {
   assert.equal(s.panelStates[0], PanelState.DAMAGED);
   assert.equal(s.panelStates[5], PanelState.BROKEN);
   assert.equal(s.panelStates[1], PanelState.LIVE);
+});
+
+test('CarbonEncoder round-trips Carbon state', async () => {
+  const { CarbonEncoder } = await import('../entities/CarbonEncoder.js');
+  const c = { id: 7, x: 500, y: 700, ttlS: 5.5 };
+  const w = new BinaryWriter(16);
+  CarbonEncoder.encode(w, c);
+  const r = new BinaryReader(w.finish());
+  const decoded = CarbonEncoder.decode(r);
+  assert.equal(decoded.id, 7);
+  assert.equal(decoded.x, 500);
+  assert.equal(decoded.y, 700);
+  assert.ok(Math.abs(decoded.ttlS - 5.5) < 0.1, `ttl quantization (got ${decoded.ttlS})`);
 });
 
 test('CrawlerEncoder round-trips Crawler state', async () => {

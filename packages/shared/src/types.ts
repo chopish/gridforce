@@ -43,6 +43,15 @@ export interface CrawlerState {
   ai: CrawlerAIStateValue;
 }
 
+// Carbon pickup dropped by destroyed crawlers. Collected by players on
+// contact; expires after CARBON_TTL_S seconds if uncollected.
+export interface CarbonState {
+  id: number;   // u16
+  x: number;    // px
+  y: number;    // px
+  ttlS: number; // f32 seconds remaining
+}
+
 export interface PlayerState {
   id: PlayerId;
   x: number;
@@ -123,6 +132,8 @@ export interface SnapshotPayload {
   // B1 electrical-defense crawlers. Empty before startGame; the spawner
   // adds one per CRAWLER_SPAWN_INTERVAL_S up to MAX_ALIVE_CRAWLERS.
   crawlers: CrawlerState[];
+  // B1 carbon pickups. Dropped by killed crawlers; collected by players.
+  carbons: CarbonState[];
 }
 
 export interface WelcomePayload {

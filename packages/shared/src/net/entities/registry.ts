@@ -1,3 +1,4 @@
+import { CarbonEncoder } from './CarbonEncoder.js';
 import { CrawlerEncoder } from './CrawlerEncoder.js';
 import { NpcEncoder } from './NpcEncoder.js';
 import { PlayerEncoder, type EntityEncoder } from './PlayerEncoder.js';
@@ -13,11 +14,11 @@ export function getEntityEncoder(type: number): EntityEncoder<unknown> | undefin
   return encoders.get(type);
 }
 
-// Phase 0 entity types. Carbon slot is reserved in the EntityType enum
-// and will register here when it ships (Task 9).
+// Phase 0 entity types.
 registerEntityEncoder(PlayerEncoder);
 registerEntityEncoder(NpcEncoder);
 registerEntityEncoder(CrawlerEncoder);
+registerEntityEncoder(CarbonEncoder);
 
 // Re-export for callers that want it directly without going through the registry.
-export { PlayerEncoder, NpcEncoder, CrawlerEncoder, EntityType };
+export { PlayerEncoder, NpcEncoder, CrawlerEncoder, CarbonEncoder, EntityType };

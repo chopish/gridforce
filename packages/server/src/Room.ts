@@ -1,6 +1,10 @@
 import { performance } from 'node:perf_hooks';
 
 import {
+  CARBON_TTL_S,
+  CARBON_PICKUP_RADIUS,
+  PLAYER_CARBON_MAX,
+  PLAYER_RADIUS,
   CRAWLER_SPAWN_INTERVAL_S,
   MAX_ALIVE_CRAWLERS,
   CrawlerAIState,
@@ -28,6 +32,7 @@ import {
   newPlayerState,
   stepCrawler,
   stepPlayer,
+  type CarbonState,
   type CrawlerState,
   type CrawlerStepContext,
   type DifficultyValue,
@@ -136,6 +141,10 @@ export class Room {
   private nextCrawlerId = 0;
   private crawlerSpawnAccum = 0;
   private readonly attackTimers = new Map<number, number>();
+
+  // B1 carbon pickups. Spawned by combat kills (Task 10); collected by players.
+  readonly carbons = new Map<number, CarbonState>();
+  private nextCarbonId = 0;
 
   tick = 0;
   private nextPlayerId: PlayerId = 0;
@@ -262,6 +271,8 @@ export class Room {
     this.nextCrawlerId = 0;
     this.crawlerSpawnAccum = 0;
     this.attackTimers.clear();
+    this.carbons.clear();
+    this.nextCarbonId = 0;
     // Re-centre all players on the active stage's grid. Pre-game they sat
     // at spawn positions sized to whatever grid was active at join time,
     // which can be wrong if the host swapped runs mid-lobby.
@@ -522,6 +533,11 @@ export class Room {
     });
   }
 
+  spawnCarbon(x: number, y: number): void {
+    const id = this.nextCarbonId++ & 0xffff;
+    this.carbons.set(id, { id, x, y, ttlS: CARBON_TTL_S });
+  }
+
   private physicsStep(): void {
     for (const [id, state] of this.states) {
       const pilot = this.pilots.get(id);
@@ -557,6 +573,30 @@ export class Room {
       }
     }
     // ctx.cityHpDelta accumulates exits; B1 ignores it (B2 wires up city HP).
+
+    // Carbon expiry + pickup. Combat kills (Task 10) call spawnCarbon directly.
+    for (const [id, carbon] of this.carbons) {
+      const nextTtl = carbon.ttlS - SERVER_TICK_DT_S;
+      if (nextTtl <= 0) {
+        this.carbons.delete(id);
+        continue;
+      }
+      // Pickup: any player within (PLAYER_RADIUS + CARBON_PICKUP_RADIUS) collects it.
+      let pickedUp = false;
+      for (const [pid, pstate] of this.states) {
+        const dist = Math.hypot(carbon.x - pstate.x, carbon.y - pstate.y);
+        if (dist <= PLAYER_RADIUS + CARBON_PICKUP_RADIUS) {
+          const newCarbon = Math.min(PLAYER_CARBON_MAX, pstate.carbon + 1);
+          this.states.set(pid, { ...pstate, carbon: newCarbon });
+          this.carbons.delete(id);
+          pickedUp = true;
+          break;
+        }
+      }
+      if (!pickedUp) {
+        this.carbons.set(id, { ...carbon, ttlS: nextTtl });
+      }
+    }
 
     // Phase clock. Open-ended phases (durationS === null) wait for an
     // explicit advancePhase() call from gameplay code.
@@ -608,6 +648,7 @@ export class Room {
         players: visible,
         npcs: npcStates,
         crawlers: Array.from(this.crawlers.values()),
+        carbons: Array.from(this.carbons.values()),
       });
       // Snapshots are loss-tolerant: a newer one supersedes any in flight.
       // Route via the unreliable channel so high-latency clients aren't
