@@ -31,9 +31,14 @@ function unquantizeFacing(q: number): number {
 //   u32 stateSeq
 //   u8  carbon            (0..99 clamped)
 //   u8  shockCooldownQ    (quantizeTimer; saturates at 1.0s)
-//   u8  repairProgressQ   (quantizeTimer; saturates at 1.0s)
+//   u8  repairProgressQ   (quantizeLongTimer; saturates at ~2.0s for 1.5s repair window)
 //   string name
-const TIMER_SCALE = 255; // 1 second resolved at ~3.9 ms per step
+const TIMER_SCALE = 255; // 1 second resolved at ~3.9 ms per step (cooldowns)
+// Longer-saturating scale for repair-style progress timers that can run
+// past 1.0s (B1's REPAIR_DURATION_S = 1.5s; future actions may go longer).
+// Saturates at 2.0s with ~7.8ms resolution per step — still plenty for a
+// 30 Hz simulation.
+const LONG_TIMER_SCALE = 127;
 
 function quantizeTimer(s: number): number {
   if (s <= 0) return 0;
@@ -42,6 +47,15 @@ function quantizeTimer(s: number): number {
 }
 function unquantizeTimer(q: number): number {
   return q / TIMER_SCALE;
+}
+
+function quantizeLongTimer(s: number): number {
+  if (s <= 0) return 0;
+  const q = Math.round(s * LONG_TIMER_SCALE);
+  return q >= 255 ? 255 : q;
+}
+function unquantizeLongTimer(q: number): number {
+  return q / LONG_TIMER_SCALE;
 }
 
 export interface EntityEncoder<T> {
@@ -64,7 +78,7 @@ export const PlayerEncoder: EntityEncoder<PlayerState> = {
     w.u32(p.stateSeq >>> 0);
     w.u8(Math.max(0, Math.min(99, p.carbon)) & 0xff);
     w.u8(quantizeTimer(p.shockCooldownS));
-    w.u8(quantizeTimer(p.repairProgressS));
+    w.u8(quantizeLongTimer(p.repairProgressS));
     w.string(p.name);
   },
   decode(r) {
@@ -75,9 +89,9 @@ export const PlayerEncoder: EntityEncoder<PlayerState> = {
     const flags = r.u8();
     const panelJumpCooldownS = unquantizeTimer(r.u8());
     const stateSeq = r.u32();
-    const carbon = r.u8();
+    const carbon = Math.min(99, r.u8());
     const shockCooldownS = unquantizeTimer(r.u8());
-    const repairProgressS = unquantizeTimer(r.u8());
+    const repairProgressS = unquantizeLongTimer(r.u8());
     const name = r.string();
     const ready = (flags & PLAYER_FLAG_READY) !== 0;
     return { id, x, y, facing, panelJumpCooldownS, stateSeq, name, ready, carbon, shockCooldownS, repairProgressS };

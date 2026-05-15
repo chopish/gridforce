@@ -366,6 +366,28 @@ test('Schema mismatch is detected via decodeMessage', () => {
   assert.throws(() => decodeMessage(bad), SchemaMismatchError);
 });
 
+test('PlayerEncoder preserves repairProgressS up to REPAIR_DURATION_S without clipping', () => {
+  const players = [
+    {
+      ...newPlayerState(0, 100, 100, 'a'),
+      facing: 0,
+      stateSeq: 1,
+      carbon: 0,
+      shockCooldownS: 0,
+      repairProgressS: 1.5,
+    },
+  ];
+  const dec = decodeMessage(SnapshotMsg.encode({
+    tick: 1, serverTimeMs: 0, ackInputTick: -1, inputAckBitmask: 0,
+    phase: 'playing', hostId: 0, difficulty: 1,
+    runId: 'test-run', currentStageIndex: 0, currentPhaseIndex: 0, phaseElapsedS: 0,
+    players, npcs: [],
+  }));
+  assert.equal(dec.type, MessageType.Snapshot);
+  const got = dec.payload.players[0]!.repairProgressS;
+  assert.ok(Math.abs(got - 1.5) < 0.03, `expected ~1.5s, got ${got}`);
+});
+
 test('PlayerEncoder round-trips carbon + shockCooldownS + repairProgressS', () => {
   const players = [
     {
