@@ -40,3 +40,15 @@ test('camera centres when world is smaller than viewport in either axis', () => 
   // y still tracks the target (clamped to world bounds).
   assert.ok(cam.position.y > 0);
 });
+
+
+test('camera update with dt <= 0 is a no-op', () => {
+  const cam = new Camera({ viewportW: 800, viewportH: 600, worldW: 2304, worldH: 1536 });
+  cam.snapTo(500, 500);
+  cam.update(1000, 1000, 0);
+  assert.equal(cam.position.x, 500);
+  assert.equal(cam.position.y, 500);
+  cam.update(1000, 1000, -1);
+  assert.equal(cam.position.x, 500);
+  assert.equal(cam.position.y, 500);
+});

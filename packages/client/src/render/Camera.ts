@@ -35,6 +35,7 @@ export class Camera {
   }
 
   update(targetX: number, targetY: number, dtS: number): void {
+    if (dtS <= 0) return;
     // Frame-rate-independent exponential smoothing.
     const alpha = 1 - Math.exp(-dtS / TIME_CONSTANT_S);
     const clamped = this.clamp(targetX, targetY);
