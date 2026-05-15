@@ -10,7 +10,7 @@ class FakeTransport implements Transport {
   readonly kind: TransportKind;
   private _state: TransportState;
   readonly sent: Array<{ bytes: Uint8Array; channel: Channel }> = [];
-  readonly closeCalls: Array<{ code?: number; reason?: string }> = [];
+  readonly closeCalls: Array<{ code: number | undefined; reason: string | undefined }> = [];
   private msgHandlers = new Set<(b: Uint8Array) => void>();
   private closeHandlers = new Set<() => void>();
 
