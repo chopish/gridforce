@@ -90,6 +90,8 @@ export function stepPlayer(
     const oct = snapDirToOctant(dirX, dirY);
     x += oct.dx * grid.panelSize;
     y += oct.dy * grid.panelSize;
+    // Update facing to the jump direction so the next idle-jump uses it.
+    facing = Math.atan2(oct.dy, oct.dx);
     panelJumpCooldownS = PANEL_JUMP_COOLDOWN_S;
   }
 

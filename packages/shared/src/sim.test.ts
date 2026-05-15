@@ -183,6 +183,51 @@ test('panel-jump clamps to world edge when target would land outside', () => {
   assert.equal(state.x, worldW - PLAYER_RADIUS);
 });
 
+test('panel-jump clamps both axes when jumping into a corner', () => {
+  const grid = createDefaultGrid();
+  const worldW = grid.cols * grid.panelSize;
+  const worldH = grid.rows * grid.panelSize;
+  // Place the player half a panel from the bottom-right corner; jump diagonally.
+  let state = newPlayerState(0, worldW - grid.panelSize / 2, worldH - grid.panelSize / 2);
+  state = stepPlayer(
+    state,
+    { tick: 1, clientTimeMs: 0, mx: 1, my: 1, dash: true, sprint: false },
+    1 / 30,
+    grid,
+  );
+  assert.equal(state.x, worldW - PLAYER_RADIUS, 'x clamped at right wall');
+  assert.equal(state.y, worldH - PLAYER_RADIUS, 'y clamped at bottom wall');
+});
+
+test('panel-jump updates facing so a chained idle jump uses the new direction', () => {
+  const grid = createDefaultGrid();
+  const startX = grid.cols * grid.panelSize / 4;
+  const startY = grid.rows * grid.panelSize / 2;
+  let state = newPlayerState(0, startX, startY);
+  // First jump: northeast via input vector. (positive x, positive y — note
+  // we're in screen coordinates so positive y is "south" but that's fine
+  // for this test.)
+  state = stepPlayer(
+    state,
+    { tick: 1, clientTimeMs: 0, mx: 0.5, my: 0.866, dash: true, sprint: false },
+    1 / 30,
+    grid,
+  );
+  const xAfterFirst = state.x;
+  const yAfterFirst = state.y;
+  // Force cooldown to zero so the second jump fires next tick.
+  state = { ...state, panelJumpCooldownS: 0 };
+  // Second jump: no input. Should reuse the facing set by the first jump.
+  state = stepPlayer(
+    state,
+    { tick: 2, clientTimeMs: 0, mx: 0, my: 0, dash: true, sprint: false },
+    1 / 30,
+    grid,
+  );
+  assert.ok(state.x > xAfterFirst + 50, 'second jump kept east component');
+  assert.ok(state.y > yAfterFirst + 50, 'second jump kept south component');
+});
+
 test('panel-jump cooldown is enforced', () => {
   const grid = createDefaultGrid();
   const startX = grid.cols * grid.panelSize / 2;
