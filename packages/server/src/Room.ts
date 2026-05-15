@@ -5,6 +5,8 @@ import {
   DEFAULT_RUN_ID,
   ErrorCode,
   ErrorMsg,
+  GRID_COLS,
+  GRID_ROWS,
   MAX_PLAYERS_PER_ROOM,
   PlayerJoinedMsg,
   PlayerLeftMsg,
@@ -104,7 +106,7 @@ export class Room {
   private currentStageIndex = 0;
   private currentPhaseIndex = 0;
   private phaseElapsedS = 0;
-  panelStates: Uint8Array = new Uint8Array(0);
+  panelStates: Uint8Array = allLive(GRID_COLS, GRID_ROWS);
 
   // The active stage's grid. Derived so a stage advance during play
   // automatically swaps it without rewiring every consumer.
