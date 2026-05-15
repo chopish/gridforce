@@ -30,7 +30,11 @@
 //       carry currentStageIndex (u8), currentPhaseIndex (u8), and
 //       phaseElapsedS (f32). RoomPhase gains a third value `run-end`
 //       (encoded as u8 = 2) for the post-final-phase state.
-export const SCHEMA_VERSION = 10;
+//  v11: PlayerInput gains a `sprint` bit (held shift). PlayerEncoder
+//       drops dashRemainingS (panel-jump is instantaneous) and renames
+//       dashCooldownS → panelJumpCooldownS. The `dash` input bit is
+//       still wire-named `dash` but now means "rising-edge panel jump".
+export const SCHEMA_VERSION = 11;
 
 // Tick rates
 export const SERVER_TICK_HZ = 30;
@@ -53,6 +57,15 @@ export const PLAYER_MOVE_SPEED = 220;
 export const PLAYER_DASH_SPEED = 700;
 export const PLAYER_DASH_DURATION_S = 0.18;
 export const PLAYER_DASH_COOLDOWN_S = 0.65;
+
+// Sprint: hold shift to walk this much faster. Applies only to walk
+// speed; panel-jump is instantaneous so the multiplier never compounds.
+export const PLAYER_SPRINT_MULTIPLIER = 1.6;
+
+// Panel-jump: rising-edge of the `dash` input bit teleports the player
+// one panel in the input/facing direction. Cooldown is the rate-limit.
+export const PANEL_JUMP_COOLDOWN_S = 0.4;
+
 export const MAX_PLAYERS_PER_ROOM = 4;
 
 // Grid (Phase 0: fixed-size empty grid)
