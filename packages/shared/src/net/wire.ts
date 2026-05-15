@@ -37,9 +37,8 @@ export const enum MessageType {
 export const enum EntityType {
   Player = 1,
   NPC = 2,
-  // Reserved for future:
-  // Electrode = 3,
-  // Projectile = 4,
+  Crawler = 3,
+  Carbon = 4, // reserved for Task 9; declared early to lock the value
 }
 
 export class BinaryWriter {

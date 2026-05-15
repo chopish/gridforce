@@ -475,6 +475,22 @@ test('Snapshot carries panel-state RLE block', () => {
   assert.equal(s.panelStates[1], PanelState.LIVE);
 });
 
+test('CrawlerEncoder round-trips Crawler state', async () => {
+  const { CrawlerEncoder } = await import('../entities/CrawlerEncoder.js');
+  const c = { id: 42, x: 320.5, y: 200, facing: Math.PI / 2, hp: 1, targetCx: 5, targetCy: 6, ai: 1 as const };
+  const w = new BinaryWriter(32);
+  CrawlerEncoder.encode(w, c);
+  const r = new BinaryReader(w.finish());
+  const decoded = CrawlerEncoder.decode(r);
+  assert.equal(decoded.id, 42);
+  assert.equal(decoded.hp, 1);
+  assert.equal(decoded.targetCx, 5);
+  assert.equal(decoded.targetCy, 6);
+  assert.equal(decoded.ai, 1);
+  assert.ok(Math.abs(decoded.x - 320) < 1, 'x int round-trip');
+  assert.ok(Math.abs(decoded.y - 200) < 1, 'y int round-trip');
+});
+
 test('Welcome carries full panel-state byte array', () => {
   const panelBuf = allLive(18, 12);
   panelBuf[10] = PanelState.DAMAGED;

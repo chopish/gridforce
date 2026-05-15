@@ -24,6 +24,25 @@ export interface NpcState {
   flags: number;
 }
 
+// Crawler AI state — wire-encoded as a u8.
+export const CrawlerAIState = {
+  APPROACHING: 0,
+  ATTACKING: 1,
+  TRANSITING: 2,
+} as const;
+export type CrawlerAIStateValue = (typeof CrawlerAIState)[keyof typeof CrawlerAIState];
+
+export interface CrawlerState {
+  id: number;       // u16
+  x: number;        // px
+  y: number;        // px
+  facing: number;   // rad (quantized u8)
+  hp: number;       // u8, default 1 in B1
+  targetCx: number; // u8 column
+  targetCy: number; // u8 row
+  ai: CrawlerAIStateValue;
+}
+
 export interface PlayerState {
   id: PlayerId;
   x: number;

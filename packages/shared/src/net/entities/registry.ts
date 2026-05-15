@@ -1,3 +1,4 @@
+import { CrawlerEncoder } from './CrawlerEncoder.js';
 import { NpcEncoder } from './NpcEncoder.js';
 import { PlayerEncoder, type EntityEncoder } from './PlayerEncoder.js';
 import { EntityType } from '../wire.js';
@@ -12,10 +13,11 @@ export function getEntityEncoder(type: number): EntityEncoder<unknown> | undefin
   return encoders.get(type);
 }
 
-// Phase 0 entity types. Electrode + Projectile slots are reserved in the
-// EntityType enum and will register here when they ship.
+// Phase 0 entity types. Carbon slot is reserved in the EntityType enum
+// and will register here when it ships (Task 9).
 registerEntityEncoder(PlayerEncoder);
 registerEntityEncoder(NpcEncoder);
+registerEntityEncoder(CrawlerEncoder);
 
 // Re-export for callers that want it directly without going through the registry.
-export { PlayerEncoder, NpcEncoder, EntityType };
+export { PlayerEncoder, NpcEncoder, CrawlerEncoder, EntityType };
