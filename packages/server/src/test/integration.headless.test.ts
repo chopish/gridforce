@@ -9,6 +9,7 @@ import express from 'express';
 import {
   NETSIM_PROFILES,
   PLAYER_MOVE_SPEED,
+  PLAYER_SPRINT_MULTIPLIER,
   PREDICTION_HARD_SNAP_PX,
   type NetSimProfile,
 } from '@gridforce/shared';
@@ -233,6 +234,123 @@ test(
     }
   },
 );
+
+// Integration test: sprint flag survives 10% outgoing input loss via 3-tick
+// redundancy.
+//
+// Strategy: run a sprint client and a walk client simultaneously under the same
+// 10% outgoing input loss profile. Both clients suffer identical timing races
+// and identical proportional loss; the only difference is the sprint flag. We
+// assert that the sprint client moves meaningfully further than the walk client
+// over the same time window.
+//
+// Two-client ratio approach eliminates sensitivity to the absolute number of
+// null-input startup ticks (which depends on server tick offset) — both clients
+// experience the same null-tick penalty, so the ratio isolates the sprint flag.
+//
+// Profile: lossPct=10, owDelayMs=0, jitterMs=0.
+//   With INPUT_REDUNDANCY=3: per-tick miss rate = 0.1³ = 0.1%.
+//   OWD=0 keeps inputs in the same event-loop phase so the input lead is fully
+//   effective without delaying the ws.send() relative to the server tick timer.
+//
+// Grid: large-run (2304 px wide). Sprinter spawns at x≈1152.
+//   Sprint-right for 2 s: 1152 + ~640 = ~1792 < 2292 (maxX). No wall clamping.
+//   Walk-right for 2 s:   1152 + ~440 = ~1592. Also safe.
+//
+// Both clients are connected immediately after the 2-second warmup so they
+// share the same startTick and experience identical event-loop conditions.
+// Server states are read before stop() to avoid room.remove() → states.delete().
+const SPRINT_LOSS_PROFILE: NetSimProfile = { owDelayMs: 0, jitterMs: 0, lossPct: 10 };
+const SPRINT_LOSS_DURATION_MS = 2_000;
+
+test('sprint flag survives 10% input loss via redundancy', { timeout: 25_000 }, async () => {
+  const { url, manager, shutdown } = await startServerOnEphemeralPort();
+  try {
+    const room = manager.createRoom({ visibility: 'unlisted' });
+    const roomCode = room.code;
+
+    // Lobby → large-run → start game so there are no wall issues on the wider grid.
+    const host = new TestClient({
+      url,
+      roomCode,
+      name: 'host',
+      drive: () => ({ mx: 0, my: 0, dash: false, sprint: false }),
+    });
+    await host.connect();
+    await new Promise<void>((r) => setTimeout(r, 100));
+    const hostId = room.hostId;
+    assert.notEqual(hostId, 0xff, 'host client must be assigned');
+    room.setLobbySettings(hostId, 'large-run', 1);
+    assert.equal(room.startGame(hostId), true, 'startGame must succeed');
+    assert.equal(room.grid.cols, 36, 'large-run must be active (36 cols)');
+
+    // Warmup: let the room tick for 2 s so the server tick is well into the
+    // future relative to the test clients' predictedTick leads.
+    host.start();
+    await new Promise<void>((r) => setTimeout(r, 2_000));
+
+    // Connect sprint and walk clients simultaneously. Same profile = same
+    // timing conditions. Both drive rightward, one with sprint, one without.
+    const sprint = new TestClient({
+      url,
+      roomCode,
+      name: 'sprinter',
+      profile: SPRINT_LOSS_PROFILE,
+      drive: () => ({ mx: 1, my: 0, dash: false, sprint: true }),
+    });
+    const walk = new TestClient({
+      url,
+      roomCode,
+      name: 'walker',
+      profile: SPRINT_LOSS_PROFILE,
+      drive: () => ({ mx: 1, my: 0, dash: false, sprint: false }),
+    });
+    await sprint.connect();
+    await walk.connect();
+
+    const sprintSpawnX = sprint.getStats().finalLocalPosition.x;
+    const walkSpawnX = walk.getStats().finalLocalPosition.x;
+
+    sprint.start();
+    walk.start();
+    await new Promise<void>((r) => setTimeout(r, SPRINT_LOSS_DURATION_MS));
+
+    // Drain in-flight packets then read server state BEFORE stop() —
+    // stop() triggers room.remove() → states.delete().
+    await new Promise<void>((r) => setTimeout(r, 200));
+    const allStates = Array.from(room.states.values());
+    sprint.stop();
+    walk.stop();
+    host.stop();
+
+    const sprinterState = allStates.find((s) => s.name === 'sprinter');
+    const walkerState = allStates.find((s) => s.name === 'walker');
+    assert.ok(sprinterState != null, 'sprinter must still be in room.states after drain');
+    assert.ok(walkerState != null, 'walker must still be in room.states after drain');
+
+    const sprintDist = sprinterState.x - sprintSpawnX;
+    const walkDist = walkerState.x - walkSpawnX;
+
+    console.log(
+      `[sprint-loss] sprintDist=${sprintDist.toFixed(1)} walkDist=${walkDist.toFixed(1)} ` +
+        `ratio=${walkDist > 0 ? (sprintDist / walkDist).toFixed(3) : 'n/a'} ` +
+        `grid=${room.grid.cols}x${room.grid.rows}`,
+    );
+
+    // Sprint must travel meaningfully further than walk under the same 10%
+    // input loss. Expected ratio ≈ PLAYER_SPRINT_MULTIPLIER = 1.6×. Allow for
+    // startup null-ticks and jitter; require at least 1.2×.
+    assert.ok(
+      sprintDist > walkDist * 1.2,
+      `sprint should outrun walk even with 10% input loss via redundancy: ` +
+        `sprintDist=${sprintDist.toFixed(1)}, walkDist=${walkDist.toFixed(1)} ` +
+        `ratio=${walkDist > 0 ? (sprintDist / walkDist).toFixed(3) : 'n/a'} ` +
+        `(expected ratio ≈ ${PLAYER_SPRINT_MULTIPLIER})`,
+    );
+  } finally {
+    await shutdown();
+  }
+});
 
 // Regression test for tethered-spawn bug: a client joining a room that has
 // already been ticking for a while must still be able to move. The fix is
