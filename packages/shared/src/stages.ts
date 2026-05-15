@@ -73,6 +73,12 @@ export const STAGES: Record<string, StageDef> = {
     grid: createDefaultGrid(),
     phaseSequence: [{ id: 'active', displayName: 'Active', durationS: null }],
   },
+  'large-grid': {
+    id: 'large-grid',
+    displayName: 'Large Grid',
+    grid: { cols: 36, rows: 24, panelSize: 64 },
+    phaseSequence: [{ id: 'active', displayName: 'Active', durationS: null }],
+  },
 };
 
 export const RUNS: Record<string, RunDef> = {
@@ -80,6 +86,11 @@ export const RUNS: Record<string, RunDef> = {
     id: 'test-run',
     displayName: 'Test Run',
     stageSequence: ['test-grid'],
+  },
+  'large-run': {
+    id: 'large-run',
+    displayName: 'Large Run',
+    stageSequence: ['large-grid'],
   },
 };
 
