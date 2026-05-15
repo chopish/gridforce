@@ -34,7 +34,13 @@
 //       drops dashRemainingS (panel-jump is instantaneous) and renames
 //       dashCooldownS → panelJumpCooldownS. The `dash` input bit is
 //       still wire-named `dash` but now means "rising-edge panel jump".
-export const SCHEMA_VERSION = 11;
+//  v12: First-playable B1. PlayerInput adds `shock` + `repair` bits.
+//       PlayerState adds carbon + shockCooldownS + repairProgressS.
+//       Snapshot carries a panel-state RLE block, plus new entity
+//       groups EntityType.Crawler=3 and EntityType.Carbon=4. Welcome
+//       carries the full panel-state byte array. v13 (B2) will add
+//       hp/downed/reviveProgress + cityHp + currentWave + counters.
+export const SCHEMA_VERSION = 12;
 
 // Tick rates
 export const SERVER_TICK_HZ = 30;
@@ -122,3 +128,27 @@ export const RTT_OUTLIER_MS = 3000;
 
 // Frame stall safety on client (max dt fed into accumulator per render frame)
 export const CLIENT_MAX_FRAME_DT_S = 0.05;
+
+// --- B1 electrical-defense tuning (placeholders, expect playtest changes) ---
+
+// Panel state machine.
+export const PANEL_ATTACK_TO_DAMAGE_S = 0.5;
+export const PANEL_ATTACK_TO_BREAK_S = 0.5;
+
+// Repair (DAMAGED -> LIVE only in B1; rebuild lands in B2).
+export const REPAIR_DURATION_S = 1.5;
+export const REPAIR_CARBON_COST = 1;
+
+// Uncharged local shock (charged shock lands in B2).
+export const SHOCK_COOLDOWN_S = 0.25;
+
+// Carbon pickups.
+export const CARBON_TTL_S = 10;
+export const CARBON_PICKUP_RADIUS = 16;
+export const PLAYER_CARBON_MAX = 99;
+
+// Crawlers.
+export const CRAWLER_MOVE_SPEED = 80;        // px/s
+export const CRAWLER_RADIUS = 14;            // px
+export const CRAWLER_SPAWN_INTERVAL_S = 1.0; // continuous trickle in B1
+export const MAX_ALIVE_CRAWLERS = 8;         // B1 cap; B2 wave manager raises this
