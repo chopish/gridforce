@@ -3,6 +3,8 @@ import { Application, Container } from 'pixi.js';
 import type { GridDef } from '@gridforce/shared';
 
 import { Camera } from './Camera.js';
+import { CarbonRenderer } from './CarbonRenderer.js';
+import { CrawlerRenderer } from './CrawlerRenderer.js';
 import { GridRenderer } from './GridRenderer.js';
 import { NpcRenderer } from './NpcRenderer.js';
 import { PlayerRenderer } from './PlayerRenderer.js';
@@ -19,6 +21,8 @@ export class Renderer {
   app!: Application;
   playfield: Container | null = null;
   gridRenderer!: GridRenderer;
+  crawlerRenderer!: CrawlerRenderer;
+  carbonRenderer!: CarbonRenderer;
   npcRenderer!: NpcRenderer;
   playerRenderer!: PlayerRenderer;
 
@@ -40,9 +44,14 @@ export class Renderer {
     this.app.stage.addChild(this.playfield);
 
     this.gridRenderer = new GridRenderer(grid);
+    this.carbonRenderer = new CarbonRenderer();
+    this.crawlerRenderer = new CrawlerRenderer();
     this.npcRenderer = new NpcRenderer();
     this.playerRenderer = new PlayerRenderer();
+    // Z-order (back to front): grid → carbon → crawler → npc → player
     this.playfield.addChild(this.gridRenderer.root);
+    this.playfield.addChild(this.carbonRenderer.root);
+    this.playfield.addChild(this.crawlerRenderer.root);
     this.playfield.addChild(this.npcRenderer.root);
     this.playfield.addChild(this.playerRenderer.root);
 

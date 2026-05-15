@@ -239,6 +239,21 @@ async function bootstrap(): Promise<void> {
       });
       renderer.npcRenderer.endFrame();
 
+      // Crawlers (electrical-defense B1): drawn above npcs z-order is handled
+      // by Renderer.init — here we just push positions each frame.
+      renderer.crawlerRenderer.beginFrame();
+      for (const c of world.crawlers.values()) {
+        renderer.crawlerRenderer.draw(c.id, c.x, c.y, c.facing);
+      }
+      renderer.crawlerRenderer.endFrame();
+
+      // Carbon pickups: drawn below crawlers (z-order set in Renderer.init).
+      renderer.carbonRenderer.beginFrame();
+      for (const carbon of world.carbons.values()) {
+        renderer.carbonRenderer.draw(carbon.id, carbon.x, carbon.y, carbon.ttlS);
+      }
+      renderer.carbonRenderer.endFrame();
+
       // React to stage transitions (including the very first frame, and
       // lobby-time run swaps that don't move the stage index).
       const currentStage = world.getCurrentStage();
