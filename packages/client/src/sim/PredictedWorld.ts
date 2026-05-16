@@ -1,4 +1,6 @@
 import {
+  GRID_COLS,
+  GRID_ROWS,
   INPUT_LEAD_TICKS,
   MAX_INPUT_LEAD_TICKS,
   MAX_REPLAY_INPUTS,
@@ -6,6 +8,7 @@ import {
   PREDICTION_HARD_SNAP_PX,
   PREDICTION_THRESHOLD_PX,
   SERVER_TICK_DT_S,
+  allocateTiles,
   type CarbonState,
   type CrawlerState,
   type GridDef,
@@ -18,6 +21,7 @@ import {
   type RunDef,
   type SnapshotPayload,
   type StageDef,
+  type TileBuffers,
   type WelcomePayload,
   getRunOrDefault,
   getStage,
@@ -67,11 +71,10 @@ export class PredictedWorld {
   currentPhaseIndex = 0;
   phaseElapsedS = 0;
 
-  // B1 electrical-defense: panel state + entity mirrors. Renderers consume
-  // these to draw tiles and entity sprites.
-  panelStates: Uint8Array = new Uint8Array(0);
-  panelCols = 0;
-  panelRows = 0;
+  // C1 v13 multi-layer tile state mirror + entity mirrors. Renderers consume
+  // these to draw tiles and entity sprites. Grid dimensions live on `grid`;
+  // there are no separate panelCols/panelRows fields.
+  tiles: TileBuffers = allocateTiles(GRID_COLS, GRID_ROWS);
   readonly crawlers = new Map<number, CrawlerState>();
   readonly carbons = new Map<number, CarbonState>();
 
@@ -182,9 +185,7 @@ export class PredictedWorld {
     this.currentStageIndex = w.currentStageIndex;
     this.currentPhaseIndex = w.currentPhaseIndex;
     this.phaseElapsedS = w.phaseElapsedS;
-    this.panelStates = new Uint8Array(w.panelStates);
-    this.panelCols = w.grid.cols;
-    this.panelRows = w.grid.rows;
+    this.tiles = w.tiles;
     this.crawlers.clear();
     this.carbons.clear();
     // Lead the server tick from the start: by the time our first input
@@ -277,9 +278,7 @@ export class PredictedWorld {
     this.currentStageIndex = snap.currentStageIndex;
     this.currentPhaseIndex = snap.currentPhaseIndex;
     this.phaseElapsedS = snap.phaseElapsedS;
-    this.panelStates = new Uint8Array(snap.panelStates);
-    this.panelCols = snap.panelCols;
-    this.panelRows = snap.panelRows;
+    this.tiles = snap.tiles;
     this.crawlers.clear();
     for (const c of snap.crawlers) this.crawlers.set(c.id, c);
     this.carbons.clear();

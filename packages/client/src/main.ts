@@ -267,8 +267,12 @@ async function bootstrap(): Promise<void> {
 
       // Push latest panel states to the grid renderer each frame.
       // Reference-equality check inside setPanelStates avoids redundant redraws.
-      if (world.panelStates.length > 0) {
-        renderer.gridRenderer.setPanelStates(world.panelStates);
+      // C1 v13: tiles.l1Hp is the closest legacy analog (panel HP byte buffer).
+      // Task 18 rewrites GridRenderer to consume the full TileBuffers; until
+      // then the renderer treats HP bytes as legacy PanelState values, which
+      // is visually wrong but compiles cleanly.
+      if (world.tiles.l1Hp.length > 0) {
+        renderer.gridRenderer.setPanelStates(world.tiles.l1Hp);
       }
 
       // Render players: local from prediction, remotes from interpolator.
