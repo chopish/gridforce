@@ -8,6 +8,7 @@ import {
   POST_KILL_REST_S,
   SCORE_SOFTMAX_TEMPERATURE,
   TASK_REEVAL_INTERVAL_S,
+  TaskKind,
   indexOf,
   type CrawlerState,
   type CrawlerTask,
@@ -279,9 +280,65 @@ export class CrawlerAiManager {
       ai.staggerAccumS = 0;
     }
 
+    // Compute effective detection radius. The SEARCH-widen and alert-bonus
+    // multipliers are wired here; their inputs (ai.currentTask, alertBonusInS)
+    // are scaffolded today and exercised by T8 / T17.
+    const near = nearestPlayer(c, players);
+    let effectiveR = ai.profile.detectionRadiusPx;
+    // SEARCH widens detection so a wandering bug spots pilots from farther.
+    // Wired today (the field is set by T8's task picker) but mites still
+    // pick SEARCH only after T8 lands.
+    if (ai.currentTask === TaskKind.SEARCH) effectiveR *= ai.profile.searchRadiusMult;
+    // CALL_ALERT receivers get a temporary detection bonus (T17 sets the
+    // timer; harmless when alertBonusInS == 0).
+    if (ai.alertBonusInS > 0) effectiveR *= ai.profile.alertBonusMult;
+    const effectiveR2 = effectiveR * effectiveR;
+    const detected = !!near && near.dist2 <= effectiveR2;
+
+    // CALM → ENGAGED: detection, alert (hasInvestigateTarget), or damage.
+    if (ai.phase === 'CALM') {
+      if (detected || ai.hasInvestigateTarget) {
+        ai.phase = 'ENGAGED';
+        ai.engagedIdleS = 0;
+      }
+    }
+
+    // ENGAGED → CALM: engagedDecayS seconds with no detection, no alert
+    // target, and not currently in wind-up/recovery.
+    if (ai.phase === 'ENGAGED') {
+      const hasInterest = detected || ai.hasInvestigateTarget ||
+        ai.windUpInS > 0 || ai.recoveryInS > 0;
+      if (hasInterest) {
+        ai.engagedIdleS = 0;
+      } else {
+        ai.engagedIdleS += dt;
+        if (ai.engagedIdleS >= ai.profile.engagedDecayS) {
+          ai.phase = 'CALM';
+        }
+      }
+    }
+
+    // Decay the investigate target.
+    if (ai.hasInvestigateTarget) {
+      ai.investigateUntilS -= dt;
+      if (ai.investigateUntilS <= 0) ai.hasInvestigateTarget = false;
+    }
+
     // TEMPORARY: defer to the C1.9 logic until later tasks wire in the
     // new task selection. Behavior is identical to pre-T5.
     return this.legacyDecide(c, ai, dt, players, bugs, tiles, grid);
+  }
+
+  // Test/debug accessor.
+  getPhase(crawlerId: number): 'CALM' | 'ENGAGED' | null {
+    return this.states.get(crawlerId)?.phase ?? null;
+  }
+
+  // Test/debug accessor for INVESTIGATE target.
+  getInvestigateTarget(crawlerId: number): { x: number; y: number } | null {
+    const ai = this.states.get(crawlerId);
+    if (!ai || !ai.hasInvestigateTarget) return null;
+    return { x: ai.investigateTargetX, y: ai.investigateTargetY };
   }
 
   // Preserved C1.9 decide() logic — translates `ai.task` → `ai.legacyTask`
