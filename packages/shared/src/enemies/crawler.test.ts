@@ -1,98 +1,58 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  CrawlerAIState,
-  type CrawlerState,
-  type GridDef,
-} from '../types.js';
-import {
-  PanelState,
-  allLive,
-  indexOf,
-} from '../panels.js';
-import {
-  PANEL_ATTACK_TO_DAMAGE_S,
-  PANEL_ATTACK_TO_BREAK_S,
-  CRAWLER_MOVE_SPEED,
-} from '../constants.js';
+import { allocateTiles, indexOf } from '../tiles.js';
 import { stepCrawler, type CrawlerStepContext } from './crawler.js';
+import { CrawlerAIState, type CrawlerState } from '../types.js';
 
-const grid: GridDef = { cols: 18, rows: 12, panelSize: 64 };
+const GRID = { cols: 18, rows: 12, panelSize: 64 };
 
-function freshContext(): CrawlerStepContext {
-  return {
-    panels: allLive(grid.cols, grid.rows),
-    attackTimers: new Map<number, number>(),
-    cityHpDelta: 0,
-  };
+function makeCtx(): CrawlerStepContext {
+  return { tiles: allocateTiles(GRID.cols, GRID.rows) };
 }
 
-test('approaching crawler walks toward target panel', () => {
+test('APPROACHING moves toward target until within half a panel', () => {
   const c: CrawlerState = {
-    id: 1, x: grid.cols * grid.panelSize / 2, y: 10,
-    facing: Math.PI / 2, hp: 1,
-    targetCx: 9, targetCy: 0, ai: CrawlerAIState.APPROACHING,
+    id: 1, x: 0, y: 32, facing: 0, hp: 1,
+    targetCx: 5, targetCy: 0, ai: CrawlerAIState.APPROACHING,
   };
-  const ctx = freshContext();
-  const dt = 1 / 30;
-  const next = stepCrawler(c, dt, grid, ctx);
-  const distMoved = Math.hypot(next.x - c.x, next.y - c.y);
-  assert.ok(distMoved > 0, 'crawler should have moved');
-  assert.ok(distMoved <= CRAWLER_MOVE_SPEED * dt + 0.01, 'no faster than speed');
+  const ctx = makeCtx();
+  const after = stepCrawler(c, 0.1, GRID, ctx);
+  assert.ok(after.x > 0);
+  assert.equal(after.ai, CrawlerAIState.APPROACHING);
 });
 
-test('attacking crawler degrades LIVE -> DAMAGED after attack-time-to-damage', () => {
-  const ctx = freshContext();
-  const cx = 5;
-  const cy = 5;
+test('ATTACKING transitions to TRANSITING when its tile is a passage', () => {
   const c: CrawlerState = {
-    id: 1,
-    x: cx * grid.panelSize + grid.panelSize / 2,
-    y: cy * grid.panelSize + grid.panelSize / 2,
-    facing: 0, hp: 1,
-    targetCx: cx, targetCy: cy, ai: CrawlerAIState.ATTACKING,
+    id: 1, x: 0, y: 0, facing: 0, hp: 1,
+    targetCx: 0, targetCy: 0, ai: CrawlerAIState.ATTACKING,
   };
-  let cur = c;
-  const dt = 1 / 30;
-  const ticks = Math.ceil((PANEL_ATTACK_TO_DAMAGE_S + 0.05) / dt);
-  for (let i = 0; i < ticks; i++) cur = stepCrawler(cur, dt, grid, ctx);
-  const panelIdx = indexOf(grid.cols, cx, cy);
-  assert.equal(ctx.panels[panelIdx], PanelState.DAMAGED);
+  const ctx = makeCtx();
+  const idx = indexOf(GRID.cols, 0, 0);
+  ctx.tiles.l1Hp[idx] = 0;
+  ctx.tiles.l0Hp[idx] = 0;
+  const after = stepCrawler(c, 0.1, GRID, ctx);
+  assert.equal(after.ai, CrawlerAIState.TRANSITING);
 });
 
-test('attacking crawler degrades DAMAGED -> BROKEN after another attack window', () => {
-  const ctx = freshContext();
-  const cx = 5;
-  const cy = 5;
-  ctx.panels[indexOf(grid.cols, cx, cy)] = PanelState.DAMAGED;
+test('TRANSITING walks past the world edge and gets hp=0', () => {
   const c: CrawlerState = {
-    id: 1,
-    x: cx * grid.panelSize + grid.panelSize / 2,
-    y: cy * grid.panelSize + grid.panelSize / 2,
-    facing: 0, hp: 1,
-    targetCx: cx, targetCy: cy, ai: CrawlerAIState.ATTACKING,
+    id: 1, x: 5, y: 32, facing: Math.PI, hp: 1,
+    targetCx: 0, targetCy: 0, ai: CrawlerAIState.TRANSITING,
   };
-  let cur = c;
-  const dt = 1 / 30;
-  const ticks = Math.ceil((PANEL_ATTACK_TO_BREAK_S + 0.05) / dt);
-  for (let i = 0; i < ticks; i++) cur = stepCrawler(cur, dt, grid, ctx);
-  assert.equal(ctx.panels[indexOf(grid.cols, cx, cy)], PanelState.BROKEN);
+  const ctx = makeCtx();
+  const after = stepCrawler(c, 1.0, GRID, ctx);
+  assert.equal(after.hp, 0);
+  assert.ok(after.x < 0);
 });
 
-test('crawler transitioning through broken tile moves in facing direction', () => {
-  const ctx = freshContext();
-  const cx = 5;
-  const cy = 0; // top row
-  ctx.panels[indexOf(grid.cols, cx, cy)] = PanelState.BROKEN;
-  // Facing downward (+y in screen coords) — crawler came from top edge,
-  // walking south through the hole.
+test('ATTACKING crawler does not mutate tile HP directly (weight handled by Room)', () => {
   const c: CrawlerState = {
-    id: 1,
-    x: cx * grid.panelSize + grid.panelSize / 2,
-    y: cy * grid.panelSize + grid.panelSize / 2,
-    facing: Math.PI / 2, hp: 1,
-    targetCx: cx, targetCy: cy, ai: CrawlerAIState.TRANSITING,
+    id: 1, x: 0, y: 0, facing: 0, hp: 1,
+    targetCx: 0, targetCy: 0, ai: CrawlerAIState.ATTACKING,
   };
-  const next = stepCrawler(c, 1 / 30, grid, ctx);
-  assert.ok(next.y > c.y, `expected y to increase (move south), was ${c.y} now ${next.y}`);
+  const ctx = makeCtx();
+  const idx = indexOf(GRID.cols, 0, 0);
+  const beforeHp = ctx.tiles.l1Hp[idx];
+  stepCrawler(c, 1.0, GRID, ctx);
+  assert.equal(ctx.tiles.l1Hp[idx], beforeHp);
 });

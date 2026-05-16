@@ -1,35 +1,21 @@
-import {
-  CRAWLER_MOVE_SPEED,
-  PANEL_ATTACK_TO_DAMAGE_S,
-  PANEL_ATTACK_TO_BREAK_S,
-} from '../constants.js';
-import {
-  PanelState,
-  indexOf,
-  type PanelStateValue,
-} from '../panels.js';
+import { CRAWLER_MOVE_SPEED } from '../constants.js';
+import { indexOf, isPassage, type TileBuffers } from '../tiles.js';
 import {
   CrawlerAIState,
   type CrawlerState,
   type GridDef,
 } from '../types.js';
 
+// Context passed to the per-tick crawler step. The Room owns this and
+// re-uses it across all crawlers in a tick.
+//
+// Note: the previous deterministic-attack-timer fields (`panels`,
+// `attackTimers`, `cityHpDelta`) were retired in C1 in favour of the
+// weight-driven integrity model. The room aggregates bug weights per
+// tile after this step loop runs and applies damage to the topmost
+// layer at each affected tile.
 export interface CrawlerStepContext {
-  /** Mutable panel-state buffer. stepCrawler may mutate cells when a panel
-   *  degrades. */
-  panels: Uint8Array;
-  /** Per-panel "seconds of attack accrued" — keyed by panel index. The step
-   *  function bumps this for the panel being attacked and clears it once
-   *  the panel transitions to the next state.
-   *
-   *  Multi-crawler stacking is intentional: two crawlers attacking the same
-   *  panel share the same timer entry, so they degrade it ~2× as fast. Gang
-   *  pressure feels right and matches the Smash-TV style of the doc. If a
-   *  future enemy type needs isolated timers, key by (crawlerId, panelIdx). */
-  attackTimers: Map<number, number>;
-  /** Accumulator: incremented each time a crawler exits the world through a
-   *  broken tile. The caller (Room) deducts city HP from this and resets. */
-  cityHpDelta: number;
+  tiles: TileBuffers;
 }
 
 const HALF_PANEL_FACTOR = 0.5;
@@ -42,18 +28,17 @@ export function stepCrawler(
 ): CrawlerState {
   switch (c.ai) {
     case CrawlerAIState.APPROACHING:
-      return stepApproaching(c, dt, grid, ctx);
+      return stepApproaching(c, dt, grid);
     case CrawlerAIState.ATTACKING:
-      return stepAttacking(c, dt, grid, ctx);
+      return stepAttacking(c, grid, ctx);
     case CrawlerAIState.TRANSITING:
-      return stepTransiting(c, dt, grid, ctx);
+      return stepTransiting(c, dt, grid);
     default:
       return c;
   }
 }
 
-function stepApproaching(c: CrawlerState, dt: number, grid: GridDef, ctx: CrawlerStepContext): CrawlerState {
-  void ctx;
+function stepApproaching(c: CrawlerState, dt: number, grid: GridDef): CrawlerState {
   const tx = c.targetCx * grid.panelSize + grid.panelSize / 2;
   const ty = c.targetCy * grid.panelSize + grid.panelSize / 2;
   const dx = tx - c.x;
@@ -73,31 +58,19 @@ function stepApproaching(c: CrawlerState, dt: number, grid: GridDef, ctx: Crawle
   };
 }
 
-function stepAttacking(c: CrawlerState, dt: number, grid: GridDef, ctx: CrawlerStepContext): CrawlerState {
+function stepAttacking(c: CrawlerState, grid: GridDef, ctx: CrawlerStepContext): CrawlerState {
   const idx = indexOf(grid.cols, c.targetCx, c.targetCy);
-  const state = ctx.panels[idx] as PanelStateValue;
-  if (state === PanelState.BROKEN) {
-    // Another crawler already broke through; switch to transit.
+  if (isPassage(ctx.tiles, idx)) {
+    // Target tile has been fully tunneled (L1 and L0 both destroyed) —
+    // walk through. The Room reaps TRANSITING bugs that exit the map.
     return { ...c, ai: CrawlerAIState.TRANSITING };
   }
-  const accrued = (ctx.attackTimers.get(idx) ?? 0) + dt;
-  const threshold = state === PanelState.LIVE
-    ? PANEL_ATTACK_TO_DAMAGE_S
-    : PANEL_ATTACK_TO_BREAK_S;
-  if (accrued >= threshold) {
-    const nextState: PanelStateValue = state === PanelState.LIVE ? PanelState.DAMAGED : PanelState.BROKEN;
-    ctx.panels[idx] = nextState;
-    ctx.attackTimers.set(idx, 0);
-    if (nextState === PanelState.BROKEN) {
-      return { ...c, ai: CrawlerAIState.TRANSITING };
-    }
-  } else {
-    ctx.attackTimers.set(idx, accrued);
-  }
+  // Crawler contributes weight to its target tile; damage is applied by the
+  // Room's weight-integrity loop, not here.
   return c;
 }
 
-function stepTransiting(c: CrawlerState, dt: number, grid: GridDef, ctx: CrawlerStepContext): CrawlerState {
+function stepTransiting(c: CrawlerState, dt: number, grid: GridDef): CrawlerState {
   // Continue in the crawler's facing direction (set during APPROACHING).
   const step = CRAWLER_MOVE_SPEED * dt;
   const nx = c.x + Math.cos(c.facing) * step;
@@ -105,9 +78,9 @@ function stepTransiting(c: CrawlerState, dt: number, grid: GridDef, ctx: Crawler
   const worldW = grid.cols * grid.panelSize;
   const worldH = grid.rows * grid.panelSize;
   if (nx < 0 || nx > worldW || ny < 0 || ny > worldH) {
-    // Crawler has exited the world. Bump city HP delta and mark for removal
-    // by zeroing hp; the caller (Room) reaps these between ticks.
-    ctx.cityHpDelta += 1;
+    // Crawler has exited the world. Set hp=0 so the Room reaps it; the
+    // Room's loop will note the exit for city-HP bookkeeping (city HP
+    // delta isn't tracked in C1 — that's a C3 concern).
     return { ...c, x: nx, y: ny, hp: 0 };
   }
   return { ...c, x: nx, y: ny };

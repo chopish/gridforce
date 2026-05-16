@@ -146,7 +146,6 @@ export class Room {
   readonly crawlers = new Map<number, CrawlerState>();
   private nextCrawlerId = 0;
   private crawlerSpawnAccum = 0;
-  private readonly attackTimers = new Map<number, number>();
 
   // B1 carbon pickups. Spawned by combat kills (Task 10); collected by players.
   readonly carbons = new Map<number, CarbonState>();
@@ -276,7 +275,6 @@ export class Room {
     this.crawlers.clear();
     this.nextCrawlerId = 0;
     this.crawlerSpawnAccum = 0;
-    this.attackTimers.clear();
     this.carbons.clear();
     this.nextCarbonId = 0;
     // Re-centre all players on the active stage's grid. Pre-game they sat
@@ -636,12 +634,20 @@ export class Room {
       this.spawnCrawler();
     }
 
-    // Step all crawlers.
-    const ctx: CrawlerStepContext = {
-      panels: this.panelStates,
-      attackTimers: this.attackTimers,
-      cityHpDelta: 0,
-    };
+    // Step all crawlers. Task 8 shim: derive a fresh TileBuffers from the
+    // legacy panelStates buffer so crawlers can check isPassage(). Task 9
+    // retires panelStates in favor of native TileBuffers storage and drops
+    // this per-tick alloc.
+    const tilesForCrawlers: TileBuffers = allocateTiles(this.grid.cols, this.grid.rows);
+    for (let i = 0; i < this.panelStates.length; i++) {
+      const s = this.panelStates[i];
+      if (s === PanelState.DAMAGED) {
+        tilesForCrawlers.l1Hp[i] = 40;
+      } else if (s === PanelState.BROKEN) {
+        tilesForCrawlers.l1Hp[i] = 0;
+      }
+    }
+    const ctx: CrawlerStepContext = { tiles: tilesForCrawlers };
     for (const [id, c] of this.crawlers) {
       const next = stepCrawler(c, SERVER_TICK_DT_S, this.grid, ctx);
       if (next.hp <= 0) {
@@ -650,7 +656,6 @@ export class Room {
         this.crawlers.set(id, next);
       }
     }
-    // ctx.cityHpDelta accumulates exits; B1 ignores it (B2 wires up city HP).
 
     // Carbon expiry + pickup. Combat kills (Task 10) call spawnCarbon directly.
     for (const [id, carbon] of this.carbons) {
