@@ -17,10 +17,13 @@ import {
   ErrorMsg,
   GRID_COLS,
   GRID_ROWS,
+  L1_PANEL_MAX_HP,
+  LayerKind,
   MAX_PLAYERS_PER_ROOM,
-  PanelState,
   PlayerJoinedMsg,
   allocateTiles,
+  conductive,
+  topmostLayer,
   type TileBuffers,
   PlayerLeftMsg,
   SERVER_SNAPSHOT_INTERVAL_MS,
@@ -28,7 +31,6 @@ import {
   SERVER_TICK_DT_S,
   SnapshotMsg,
   WelcomeMsg,
-  allLive,
   getRun,
   getRunOrDefault,
   getStage,
@@ -124,7 +126,11 @@ export class Room {
   private currentStageIndex = 0;
   private currentPhaseIndex = 0;
   private phaseElapsedS = 0;
-  panelStates: Uint8Array = allLive(GRID_COLS, GRID_ROWS);
+  // C1 layered tile model: per-layer HP buffers. Replaced the legacy
+  // panelStates: Uint8Array (LIVE/DAMAGED/BROKEN trinary) in Task 9. Shock,
+  // repair, and crawler AI all read/write this directly now; full rewrites
+  // of those subsystems land in Tasks 10-13.
+  tiles: TileBuffers = allocateTiles(GRID_COLS, GRID_ROWS);
 
   // The active stage's grid. Derived so a stage advance during play
   // automatically swaps it without rewiring every consumer.
@@ -271,7 +277,7 @@ export class Room {
     this.currentStageIndex = 0;
     this.currentPhaseIndex = 0;
     this.phaseElapsedS = 0;
-    this.panelStates = allLive(this.grid.cols, this.grid.rows);
+    this.tiles = allocateTiles(this.grid.cols, this.grid.rows);
     this.crawlers.clear();
     this.nextCrawlerId = 0;
     this.crawlerSpawnAccum = 0;
@@ -320,7 +326,7 @@ export class Room {
     // Re-centre players on the new stage's grid so a smaller arena doesn't
     // strand someone outside the bounds.
     this.respawnAllOnCurrentGrid();
-    this.panelStates = allLive(this.grid.cols, this.grid.rows);
+    this.tiles = allocateTiles(this.grid.cols, this.grid.rows);
   }
 
   // Host-only stress-test command. Spawns or removes NPCs to reach the
@@ -366,7 +372,7 @@ export class Room {
       this.currentStageIndex = 0;
       this.currentPhaseIndex = 0;
       this.phaseElapsedS = 0;
-      this.panelStates = allLive(this.grid.cols, this.grid.rows);
+      this.tiles = allocateTiles(this.grid.cols, this.grid.rows);
       changed = true;
     }
     if (isValidDifficulty(difficulty) && difficulty !== this.difficulty) {
@@ -417,19 +423,6 @@ export class Room {
   }
 
   private sendWelcome(conn: Connection): void {
-    // Task 7 shim: mirror the broadcastSnapshot approach — derive a fresh
-    // TileBuffers from the legacy panelStates byte buffer each time. Task 9
-    // retires this.panelStates in favor of native TileBuffers storage and
-    // removes both shims.
-    const tiles: TileBuffers = allocateTiles(this.grid.cols, this.grid.rows);
-    for (let i = 0; i < this.panelStates.length; i++) {
-      const s = this.panelStates[i];
-      if (s === PanelState.DAMAGED) {
-        tiles.l1Hp[i] = 40;
-      } else if (s === PanelState.BROKEN) {
-        tiles.l1Hp[i] = 0;
-      }
-    }
     conn.send(
       WelcomeMsg.encode({
         yourPlayerId: conn.playerId,
@@ -446,7 +439,7 @@ export class Room {
         maxPlayers: this.maxPlayers,
         sessionKey: conn.sessionKey,
         players: Array.from(this.states.values()),
-        tiles,
+        tiles: this.tiles,
       }),
     );
   }
@@ -555,6 +548,11 @@ export class Room {
     this.carbons.set(id, { id, x, y, ttlS: CARBON_TTL_S });
   }
 
+  // TODO: rewritten in Task 11 (cursor-aim uncharged shock). For now this
+  // preserves the B1 behavior: hit the 4 cardinal neighbors, conduction
+  // gate via the layered model. Damage application + carbon-on-tile drop
+  // semantics will change in 11/12 — today this is "kill anything on a
+  // conductive neighbor and reset cooldown".
   private applyShock(_playerId: PlayerId, playerState: PlayerState): PlayerState {
     const { cols, rows, panelSize } = this.grid;
     const cx = Math.floor(playerState.x / panelSize);
@@ -565,7 +563,10 @@ export class Room {
     for (const [nx, ny] of neighbors) {
       if (nx < 0 || nx >= cols || ny < 0 || ny >= rows) continue;
       const idx = indexOf(cols, nx, ny);
-      if (this.panelStates[idx] !== PanelState.LIVE) continue;
+      // Conduction gate: L1 panel HP must clear the CONDUCTION_THRESHOLD.
+      // Damaged-below-threshold panels don't carry the shock through, same
+      // as the legacy DAMAGED state did.
+      if (!conductive(this.tiles, idx)) continue;
       // Kill any crawler inside this tile.
       const tileMinX = nx * panelSize;
       const tileMinY = ny * panelSize;
@@ -596,22 +597,31 @@ export class Room {
           cur = { ...cur, shockCooldownS: Math.max(0, cur.shockCooldownS - SERVER_TICK_DT_S) };
         }
       }
-      // Repair (DAMAGED -> LIVE only in B1; rebuild lands in B2).
+      // Repair (raise L1 panel HP back to max). TODO: this is the B1-style
+      // "valid target = L1 is the topmost layer and below max HP" check,
+      // approximating the legacy "DAMAGED" trinary state. Task 10+ may
+      // refine the eligibility predicate and the HP scaling (e.g. partial
+      // restore, multi-tick ramp, or L2 add-on rebuild path).
       if (input && input.repair && cur.carbon > 0) {
         const cx = Math.floor(cur.x / this.grid.panelSize);
         const cy = Math.floor(cur.y / this.grid.panelSize);
         if (cx >= 0 && cx < this.grid.cols && cy >= 0 && cy < this.grid.rows) {
           const idx = indexOf(this.grid.cols, cx, cy);
-          if (this.panelStates[idx] === PanelState.DAMAGED) {
+          const top = topmostLayer(this.tiles, idx);
+          // Valid repair target = L1 is currently the topmost (no L2 addon,
+          // L1 still present) AND it's below max HP.
+          const repairable =
+            top === LayerKind.L1_PANEL && this.tiles.l1Hp[idx]! < L1_PANEL_MAX_HP;
+          if (repairable) {
             const newProgress = cur.repairProgressS + SERVER_TICK_DT_S;
             if (newProgress >= REPAIR_DURATION_S) {
-              this.panelStates[idx] = PanelState.LIVE;
+              this.tiles.l1Hp[idx] = L1_PANEL_MAX_HP;
               cur = { ...cur, carbon: cur.carbon - REPAIR_CARBON_COST, repairProgressS: 0 };
             } else {
               cur = { ...cur, repairProgressS: newProgress };
             }
           } else {
-            // Not on a DAMAGED tile; reset progress.
+            // Not on a repairable tile; reset progress.
             cur = { ...cur, repairProgressS: 0 };
           }
         }
@@ -634,20 +644,8 @@ export class Room {
       this.spawnCrawler();
     }
 
-    // Step all crawlers. Task 8 shim: derive a fresh TileBuffers from the
-    // legacy panelStates buffer so crawlers can check isPassage(). Task 9
-    // retires panelStates in favor of native TileBuffers storage and drops
-    // this per-tick alloc.
-    const tilesForCrawlers: TileBuffers = allocateTiles(this.grid.cols, this.grid.rows);
-    for (let i = 0; i < this.panelStates.length; i++) {
-      const s = this.panelStates[i];
-      if (s === PanelState.DAMAGED) {
-        tilesForCrawlers.l1Hp[i] = 40;
-      } else if (s === PanelState.BROKEN) {
-        tilesForCrawlers.l1Hp[i] = 0;
-      }
-    }
-    const ctx: CrawlerStepContext = { tiles: tilesForCrawlers };
+    // Step all crawlers against the room's tile state.
+    const ctx: CrawlerStepContext = { tiles: this.tiles };
     for (const [id, c] of this.crawlers) {
       const next = stepCrawler(c, SERVER_TICK_DT_S, this.grid, ctx);
       if (next.hp <= 0) {
@@ -709,22 +707,6 @@ export class Room {
       for (const npc of this.npcs.values()) npcStates.push(npc.state);
     }
     const serverTimeMs = Date.now();
-    // Task 6 shim: convert the legacy panelStates byte buffer into the new
-    // TileBuffers shape that the v13 Snapshot wire format expects. Task 9
-    // will replace this.panelStates with native TileBuffers storage; until
-    // then we rebuild a TileBuffers per snapshot tick.
-    const tiles: TileBuffers = allocateTiles(this.grid.cols, this.grid.rows);
-    for (let i = 0; i < this.panelStates.length; i++) {
-      const s = this.panelStates[i];
-      if (s === PanelState.DAMAGED) {
-        // Anything below the conduction threshold; we shim it to a
-        // low-but-nonzero value so the panel still exists.
-        tiles.l1Hp[i] = 40;
-      } else if (s === PanelState.BROKEN) {
-        tiles.l1Hp[i] = 0;
-      }
-      // PanelState.LIVE leaves the default L1_PANEL_MAX_HP (100).
-    }
     for (const pilot of this.pilots.values()) {
       // AOI hook (Phase 0: identity). When per-client culling ships, this
       // returns a per-pilot subset and we move encoding here-per-pilot.
@@ -741,7 +723,7 @@ export class Room {
         currentStageIndex: this.currentStageIndex,
         currentPhaseIndex: this.currentPhaseIndex,
         phaseElapsedS: this.phaseElapsedS,
-        tiles,
+        tiles: this.tiles,
         players: visible,
         npcs: npcStates,
         crawlers: Array.from(this.crawlers.values()),

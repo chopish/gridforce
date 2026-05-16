@@ -4,7 +4,7 @@ import { createServer, type Server as HttpServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import express from 'express';
 
-import { CrawlerAIState, allLive } from '@gridforce/shared';
+import { CrawlerAIState, allocateTiles, type TileBuffers } from '@gridforce/shared';
 
 import { AccessKeyStore } from '../AccessKeyStore.js';
 import { InviteStore } from '../InviteStore.js';
@@ -87,7 +87,7 @@ test('B1 endless loop: shock kills a planted crawler and drops carbon', async ()
       states: Map<number, { x: number; y: number }>;
       grid: { cols: number; rows: number; panelSize: number };
       crawlers: Map<number, { id: number; x: number; y: number; facing: number; hp: number; targetCx: number; targetCy: number; ai: number }>;
-      panelStates: Uint8Array;
+      tiles: TileBuffers;
     };
     const hostState = r.states.get(id)!;
     const cx = Math.floor(hostState.x / r.grid.panelSize) + 1;
@@ -99,8 +99,9 @@ test('B1 endless loop: shock kills a planted crawler and drops carbon', async ()
       facing: Math.PI, hp: 1,
       targetCx: cx, targetCy: cy, ai: CrawlerAIState.ATTACKING,
     });
-    // Make sure the panel under that crawler is LIVE so shock conducts.
-    r.panelStates = allLive(r.grid.cols, r.grid.rows);
+    // Reset tile state so the panel under that crawler is at full L1 HP
+    // and therefore conducts.
+    r.tiles = allocateTiles(r.grid.cols, r.grid.rows);
     c.start();
     // Drive enough ticks for shock input to land + apply.
     await new Promise<void>((r) => setTimeout(r, 500));
