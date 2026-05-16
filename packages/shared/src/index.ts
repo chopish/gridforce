@@ -16,3 +16,4 @@ export * from './integrity.js';
 export * from './panelJump.js';
 export * from './shockBeam.js';
 export * from './enemies/crawler.js';
+export * from './enemies/taskTypes.js';
