@@ -603,6 +603,10 @@ export class Room {
       ai: CrawlerAIState.APPROACHING,
       windUpInS: 0,
     });
+    // Pre-register with the priority-AI manager so per-bug AI state
+    // exists from tick 0 (no implicit lazy creation in decide()). Profile
+    // defaults to MITE_PROFILE — future enemy types will pass their own.
+    this.crawlerAi.registerCrawler(id);
   }
 
   spawnCarbon(x: number, y: number): void {

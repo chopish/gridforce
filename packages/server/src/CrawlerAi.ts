@@ -4,18 +4,27 @@ import {
   CrawlerTaskKind,
   L0_DOME_MAX_HP,
   L1_PANEL_MAX_HP,
+  MITE_PROFILE,
   POST_KILL_REST_S,
   SCORE_SOFTMAX_TEMPERATURE,
   TASK_REEVAL_INTERVAL_S,
   indexOf,
   type CrawlerState,
   type CrawlerTask,
+  type EnemyProfile,
   type GridDef,
   type PlayerState,
+  type TaskKindValue,
   type TileBuffers,
 } from '@gridforce/shared';
 
-// Mite priority profile.
+// ─── C1.9 LEGACY MITE PROFILE ────────────────────────────────────────────
+// The C1.9 decide() path uses this local scoring profile. It is intentionally
+// SEPARATE from the shared `MITE_PROFILE` (EnemyProfile) we now import: the
+// shared one carries the new C2 fields (detectionRadiusPx, taskWeights, …)
+// while this one is the narrow tuple of scoring scalars the legacy softmax
+// still references. T7 will retire LEGACY_MITE_PROFILE and read scoring
+// fields off the EnemyProfile directly.
 //
 //   - `player` is the base score for chasing a pilot. Crowd boredom is a
 //     piecewise curve (see crowdPenalty below) that DIPS for a tight squad
@@ -32,7 +41,7 @@ import {
 //     gives attack a low but non-zero probability per roll. As the swarm
 //     grows and chaseScore is eroded by crowdPenalty, the attack
 //     probability climbs SMOOTHLY rather than flipping all at once.
-const MITE_PROFILE = {
+const LEGACY_MITE_PROFILE = {
   player: 100,
   panelBase: 5,
   panelDamageScale: 15,
@@ -129,31 +138,113 @@ function pickSoftmax(chaseScore: number, attackScore: number, tau: number): 'cha
   return Math.random() < pAttack ? 'attack' : 'chase';
 }
 
+// ─── Per-bug AI phase ────────────────────────────────────────────────────
+// CALM is the wandering / passive default; ENGAGED is set when the bug has
+// recently seen or taken damage from a player. T6 will wire phase
+// transitions; T5 only declares the field.
+type Phase = 'CALM' | 'ENGAGED';
+
+// Per-bug AI state held by the manager. Bug position/hp lives on
+// CrawlerState (wire-visible); everything here is server-internal. T5
+// widens this from C1.9's 5-field shape to hold every per-bug field the
+// C2 priority-AI spec will need. Most NEW fields are unused this commit;
+// later tasks (T6 phase, T7 scoring, T10 attack state machine, T12
+// stagger, T17 swarm-AI alert) wire them in.
 interface CrawlerAi {
-  task: CrawlerTask;
-  attentionPenalty: number;
+  profile: EnemyProfile;
+  phase: Phase;
+  currentTask: TaskKindValue;
+
+  // Current task's bound target data (T7+). Mirrored on `legacyTask` for
+  // the C1.9 path during the transition.
+  taskTargetX: number;
+  taskTargetY: number;
+  taskTargetCx: number;
+  taskTargetCy: number;
+
+  // Timers — `reevalInS`, `chaseCommitInS`, `attackRestInS`,
+  // `attentionPenalty` carry over from C1.9 and still drive legacyDecide.
+  // The rest are scaffolded for T6+.
   reevalInS: number;
-  // Time left in the chase-commit window. ATTACK tasks ignore this — they
-  // hold until the target tile is destroyed.
   chaseCommitInS: number;
-  // Post-kill rest. While >0, this bug cannot pick ATTACK_TILE. Reset to
-  // POST_KILL_REST_S when an ATTACK task ends because the tile died.
   attackRestInS: number;
+  taskCommitmentS: number;  // NEW (T7): time on current task; resets on switch
+  attentionPenalty: number;
+  engagedIdleS: number;     // NEW (T6): phase-decay timer
+
+  // ATTACK_PLAYER state machine (T10).
+  windUpInS: number;
+  recoveryInS: number;
+  swingFiredThisTick: boolean;
+  attackTargetPlayerId: number | null;
+
+  // Stagger accumulator (T12).
+  staggerAccumHp: number;
+  staggerAccumS: number;
+
+  // Swarm-AI alert state (T17).
+  alertBonusInS: number;
+  investigateTargetX: number;
+  investigateTargetY: number;
+  investigateUntilS: number;
+  hasInvestigateTarget: boolean;
+
+  // Cached last-known bug position for debug/test accessors (T7+).
+  lastBugPos: { x: number; y: number } | null;
+
+  // C1.9-shape task retained so legacyDecide can read/write it until T7
+  // replaces this path. Mirrors `currentTask` semantically but uses the
+  // existing CrawlerTask discriminated union the executor consumes.
+  legacyTask: CrawlerTask;
 }
 
-function defaultTask(): CrawlerTask {
+function defaultLegacyTask(): CrawlerTask {
   return { kind: CrawlerTaskKind.CHASE_PLAYER, targetX: 0, targetY: 0 };
+}
+
+function makeAiState(profile: EnemyProfile): CrawlerAi {
+  return {
+    profile,
+    phase: 'CALM',
+    currentTask: profile.startTask,
+    taskTargetX: 0, taskTargetY: 0,
+    taskTargetCx: 0, taskTargetCy: 0,
+    reevalInS: 0,
+    chaseCommitInS: 0,
+    attackRestInS: 0,
+    taskCommitmentS: 0,
+    attentionPenalty: 0,
+    engagedIdleS: 0,
+    windUpInS: 0,
+    recoveryInS: 0,
+    swingFiredThisTick: false,
+    attackTargetPlayerId: null,
+    staggerAccumHp: 0,
+    staggerAccumS: 0,
+    alertBonusInS: 0,
+    investigateTargetX: 0, investigateTargetY: 0,
+    investigateUntilS: 0,
+    hasInvestigateTarget: false,
+    lastBugPos: null,
+    legacyTask: defaultLegacyTask(),
+  };
 }
 
 export class CrawlerAiManager {
   private states = new Map<number, CrawlerAi>();
+
+  // Called by Room when an enemy spawns. C2 v1 uses MITE_PROFILE for all
+  // crawlers; future enemy types will dispatch by their own profile.
+  registerCrawler(id: number, profile: EnemyProfile = MITE_PROFILE): void {
+    this.states.set(id, makeAiState(profile));
+  }
 
   // O(n) but n ≤ MAX_ALIVE_CRAWLERS ≈ 25; cheap. Called once per decide()
   // so each bug sees the current attacker count when scoring.
   private activeAttackerCount(): number {
     let n = 0;
     for (const ai of this.states.values()) {
-      if (ai.task.kind === CrawlerTaskKind.ATTACK_TILE) n++;
+      if (ai.legacyTask.kind === CrawlerTaskKind.ATTACK_TILE) n++;
     }
     return n;
   }
@@ -168,15 +259,44 @@ export class CrawlerAiManager {
   ): CrawlerTask {
     let ai = this.states.get(c.id);
     if (!ai) {
-      ai = {
-        task: defaultTask(),
-        attentionPenalty: 0,
-        reevalInS: 0,
-        chaseCommitInS: 0,
-        attackRestInS: 0,
-      };
+      // Defensive: a crawler that wasn't pre-registered (e.g. unit-test
+      // path that constructs CrawlerState directly) gets the mite profile.
+      ai = makeAiState(MITE_PROFILE);
       this.states.set(c.id, ai);
     }
+    ai.lastBugPos = { x: c.x, y: c.y };
+
+    // Tick the new C2 timers each decide(). Only the C1.9-relevant ones
+    // (reevalInS / chaseCommitInS / attackRestInS) drive behavior today;
+    // the rest are scaffolded for later tasks. The legacyDecide path
+    // ticks reevalInS / chaseCommitInS / attackRestInS itself, so we
+    // ONLY tick the new fields here to keep behavior identical.
+    ai.taskCommitmentS += dt;
+    ai.alertBonusInS = Math.max(0, ai.alertBonusInS - dt);
+    ai.staggerAccumS += dt;
+    if (ai.staggerAccumS >= ai.profile.staggerWindowS) {
+      ai.staggerAccumHp = 0;
+      ai.staggerAccumS = 0;
+    }
+
+    // TEMPORARY: defer to the C1.9 logic until later tasks wire in the
+    // new task selection. Behavior is identical to pre-T5.
+    return this.legacyDecide(c, ai, dt, players, bugs, tiles, grid);
+  }
+
+  // Preserved C1.9 decide() logic — translates `ai.task` → `ai.legacyTask`
+  // and otherwise reads the same fields as before. Will be removed once
+  // T7+ wires the new task-selection path. Inlined here so existing tests
+  // pass through this refactor untouched.
+  private legacyDecide(
+    c: CrawlerState,
+    ai: CrawlerAi,
+    dt: number,
+    players: ReadonlyArray<PlayerState>,
+    bugs: ReadonlyArray<CrawlerState>,
+    tiles: TileBuffers,
+    grid: GridDef,
+  ): CrawlerTask {
     ai.chaseCommitInS = Math.max(0, ai.chaseCommitInS - dt);
     ai.attackRestInS = Math.max(0, ai.attackRestInS - dt);
     ai.reevalInS -= dt;
@@ -188,7 +308,7 @@ export class CrawlerAiManager {
     // actions, taunts, etc.
     const near = nearestPlayer(c, players);
     if (near && near.dist2 <= PLAYER_AGGRO_RADIUS_SQ) {
-      ai.task = {
+      ai.legacyTask = {
         kind: CrawlerTaskKind.CHASE_PLAYER,
         targetX: near.player.x,
         targetY: near.player.y,
@@ -198,23 +318,23 @@ export class CrawlerAiManager {
       // Reset reeval too so we don't immediately re-score right after the
       // forced aggro — let the chase stick for the commit window.
       ai.reevalInS = TASK_REEVAL_INTERVAL_S;
-      return ai.task;
+      return ai.legacyTask;
     }
 
     // Commit-until-completion for ATTACK tasks.
-    if (ai.task.kind === CrawlerTaskKind.ATTACK_TILE) {
-      const tcx = ai.task.targetCx;
-      const tcy = ai.task.targetCy;
+    if (ai.legacyTask.kind === CrawlerTaskKind.ATTACK_TILE) {
+      const tcx = ai.legacyTask.targetCx;
+      const tcy = ai.legacyTask.targetCy;
       const inBounds = tcx >= 0 && tcx < grid.cols && tcy >= 0 && tcy < grid.rows;
       if (inBounds) {
         const idx = indexOf(grid.cols, tcx, tcy);
         const stillAttackable = tiles.l1Hp[idx]! > 0 || tiles.l0Hp[idx]! > 0;
         if (stillAttackable) {
           if (ai.reevalInS <= 0) {
-            ai.attentionPenalty += MITE_PROFILE.attentionPerScan;
+            ai.attentionPenalty += LEGACY_MITE_PROFILE.attentionPerScan;
             ai.reevalInS = TASK_REEVAL_INTERVAL_S;
           }
-          return ai.task;
+          return ai.legacyTask;
         }
         // Tile dead — task complete. Trigger the post-kill rest so this
         // bug doesn't immediately commit to the next adjacent tile.
@@ -224,46 +344,46 @@ export class CrawlerAiManager {
 
     // Chase commitment — short lock so the bug doesn't flap to a different
     // task every single scan.
-    if (ai.task.kind === CrawlerTaskKind.CHASE_PLAYER && ai.chaseCommitInS > 0 && ai.reevalInS > 0) {
+    if (ai.legacyTask.kind === CrawlerTaskKind.CHASE_PLAYER && ai.chaseCommitInS > 0 && ai.reevalInS > 0) {
       if (near) {
-        ai.task = {
+        ai.legacyTask = {
           kind: CrawlerTaskKind.CHASE_PLAYER,
           targetX: near.player.x,
           targetY: near.player.y,
         };
       }
-      return ai.task;
+      return ai.legacyTask;
     }
 
     // Within the reeval window but not commit-locked → keep current task,
     // refreshing the chase target each tick if applicable.
     if (ai.reevalInS > 0) {
-      if (ai.task.kind === CrawlerTaskKind.CHASE_PLAYER && near) {
-        ai.task = {
+      if (ai.legacyTask.kind === CrawlerTaskKind.CHASE_PLAYER && near) {
+        ai.legacyTask = {
           kind: CrawlerTaskKind.CHASE_PLAYER,
           targetX: near.player.x,
           targetY: near.player.y,
         };
       }
-      return ai.task;
+      return ai.legacyTask;
     }
 
     const newTask = this.score(c, ai, players, bugs, tiles, grid);
-    const sameKind = newTask.kind === ai.task.kind;
+    const sameKind = newTask.kind === ai.legacyTask.kind;
     const sameTarget = sameKind && newTask.kind === CrawlerTaskKind.ATTACK_TILE
-      && ai.task.kind === CrawlerTaskKind.ATTACK_TILE
-      && newTask.targetCx === ai.task.targetCx
-      && newTask.targetCy === ai.task.targetCy;
+      && ai.legacyTask.kind === CrawlerTaskKind.ATTACK_TILE
+      && newTask.targetCx === ai.legacyTask.targetCx
+      && newTask.targetCy === ai.legacyTask.targetCy;
     if (!sameKind || (newTask.kind === CrawlerTaskKind.ATTACK_TILE && !sameTarget)) {
-      ai.task = newTask;
+      ai.legacyTask = newTask;
       ai.attentionPenalty = 0;
       ai.chaseCommitInS = newTask.kind === CrawlerTaskKind.CHASE_PLAYER ? CHASE_COMMIT_S : 0;
     } else {
-      ai.task = newTask;
-      ai.attentionPenalty += MITE_PROFILE.attentionPerScan;
+      ai.legacyTask = newTask;
+      ai.attentionPenalty += LEGACY_MITE_PROFILE.attentionPerScan;
     }
     ai.reevalInS = TASK_REEVAL_INTERVAL_S;
-    return ai.task;
+    return ai.legacyTask;
   }
 
   private score(
@@ -283,8 +403,8 @@ export class CrawlerAiManager {
     // packs reinforce chase; large crowds erode it (critical mass).
     let chaseScore = -Infinity;
     if (near) {
-      const crowd = countNearbyBugs(c, bugs, MITE_PROFILE.crowdRadiusPx);
-      chaseScore = MITE_PROFILE.player - crowdPenalty(crowd);
+      const crowd = countNearbyBugs(c, bugs, LEGACY_MITE_PROFILE.crowdRadiusPx);
+      chaseScore = LEGACY_MITE_PROFILE.player - crowdPenalty(crowd);
     }
 
     // Attack — score is layer-aware. Dome (L0 exposed) is always wider-
@@ -295,9 +415,9 @@ export class CrawlerAiManager {
       const l1 = tiles.l1Hp[idx]!;
       const l0 = tiles.l0Hp[idx]!;
       if (l1 > 0) {
-        attackScore = MITE_PROFILE.panelBase + MITE_PROFILE.panelDamageScale * (1 - l1 / L1_PANEL_MAX_HP);
+        attackScore = LEGACY_MITE_PROFILE.panelBase + LEGACY_MITE_PROFILE.panelDamageScale * (1 - l1 / L1_PANEL_MAX_HP);
       } else if (l0 > 0) {
-        attackScore = MITE_PROFILE.domeBase + MITE_PROFILE.domeDamageScale * (1 - l0 / L0_DOME_MAX_HP);
+        attackScore = LEGACY_MITE_PROFILE.domeBase + LEGACY_MITE_PROFILE.domeDamageScale * (1 - l0 / L0_DOME_MAX_HP);
       }
     }
 
@@ -320,12 +440,12 @@ export class CrawlerAiManager {
     if (Number.isFinite(chaseScore)) {
       chaseScore =
         chaseScore * noise() -
-        (ai.task.kind === CrawlerTaskKind.CHASE_PLAYER ? ai.attentionPenalty : 0);
+        (ai.legacyTask.kind === CrawlerTaskKind.CHASE_PLAYER ? ai.attentionPenalty : 0);
     }
     if (Number.isFinite(attackScore)) {
       attackScore =
         attackScore * noise() -
-        (ai.task.kind === CrawlerTaskKind.ATTACK_TILE ? ai.attentionPenalty : 0);
+        (ai.legacyTask.kind === CrawlerTaskKind.ATTACK_TILE ? ai.attentionPenalty : 0);
     }
 
     const pick = pickSoftmax(chaseScore, attackScore, SCORE_SOFTMAX_TEMPERATURE);
@@ -342,7 +462,7 @@ export class CrawlerAiManager {
     // Degenerate case: neither task is viable. Hold current task; the
     // next tick will re-evaluate as state changes (a player respawns, the
     // bug walks onto a new tile, etc.).
-    return ai.task;
+    return ai.legacyTask;
   }
 
   remove(id: number): void {
@@ -351,5 +471,20 @@ export class CrawlerAiManager {
 
   clear(): void {
     this.states.clear();
+  }
+
+  // Hook for T12: damage taken increments the stagger accumulator and
+  // seeds an INVESTIGATE target for the swarm. Phase transition to
+  // ENGAGED on damage is wired in T6; the SWING-cancel side-effect lands
+  // in T12. T5 just records the data so the call site can be added now.
+  onDamageTaken(crawlerId: number, dmg: number, sourceX: number, sourceY: number): void {
+    const ai = this.states.get(crawlerId);
+    if (!ai) return;
+    ai.staggerAccumHp += dmg;
+    ai.staggerAccumS = 0;
+    ai.hasInvestigateTarget = true;
+    ai.investigateTargetX = sourceX;
+    ai.investigateTargetY = sourceY;
+    ai.investigateUntilS = ai.profile.investigateStaleS;
   }
 }
