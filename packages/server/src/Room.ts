@@ -8,6 +8,8 @@ import {
   CRAWLER_SPAWN_INTERVAL_S,
   CRAWLER_WEIGHT,
   MAX_ALIVE_CRAWLERS,
+  SHOCK_CHARGE_COOLDOWN_S,
+  SHOCK_CHARGE_TIME_S,
   SHOCK_COOLDOWN_S,
   REPAIR_DURATION_S,
   REPAIR_CARBON_COST,
@@ -597,8 +599,8 @@ export class Room {
   // SHOCK_COOLDOWN_S. Cooldown gating + rising-edge detection are caller
   // responsibilities (see physicsStep).
   //
-  // Task 12 will add the held → release "charged" variant; this is the
-  // tap path only.
+  // The Task 12 "charged" hold→release variant is applyChargedShock; this is
+  // the rising-edge tap path only.
   private applyShock(_playerId: PlayerId, playerState: PlayerState, input: PlayerInput): PlayerState {
     const { cols, rows, panelSize } = this.grid;
     const cardinal = snapToCardinal(input.facingRad);
@@ -616,7 +618,55 @@ export class Room {
     // below-threshold panels don't carry the shock through (matches the
     // legacy DAMAGED-blocks-shock semantic).
     if (!conductive(this.tiles, idx)) return playerState;
-    // Kill any crawler whose centre is on the targeted tile + drop carbon.
+    this.killCrawlersOnTile(tx, ty);
+    return { ...playerState, shockCooldownS: SHOCK_COOLDOWN_S };
+  }
+
+  // Charged shock — fired on the falling edge of input.shock once shockHeldS
+  // has reached SHOCK_CHARGE_TIME_S (see physicsStep). Pulse propagates along
+  // the cursor's cardinal direction across up to 2 tiles. Both ends of the
+  // line are conduction-gated tile-by-tile: tile 1 must be in-bounds AND
+  // conductive (otherwise the whole pulse fizzles — neither tile is hit and
+  // no cooldown is charged); tile 2 only receives the pulse if tile 2 itself
+  // is conductive (tile 1 having conducted is implicit by the time we get
+  // there). Returns a new PlayerState with shockCooldownS bumped to
+  // SHOCK_CHARGE_COOLDOWN_S, or the input state unchanged on a fizzle.
+  private applyChargedShock(
+    _playerId: PlayerId,
+    playerState: PlayerState,
+    input: PlayerInput,
+  ): PlayerState {
+    const { cols, rows, panelSize } = this.grid;
+    const cardinal = snapToCardinal(input.facingRad);
+    const px = Math.floor(playerState.x / panelSize);
+    const py = Math.floor(playerState.y / panelSize);
+    const dx = cardinal === 1 ? 1 : cardinal === 3 ? -1 : 0;
+    const dy = cardinal === 0 ? -1 : cardinal === 2 ? 1 : 0;
+    // Tile 1.
+    const t1x = px + dx;
+    const t1y = py + dy;
+    if (t1x < 0 || t1x >= cols || t1y < 0 || t1y >= rows) return playerState;
+    const idx1 = indexOf(cols, t1x, t1y);
+    if (!conductive(this.tiles, idx1)) return playerState;
+    this.killCrawlersOnTile(t1x, t1y);
+    // Tile 2 — only if tile 1 conducted (which it did, per the gate above)
+    // AND tile 2 is itself in-bounds + conductive.
+    const t2x = px + dx * 2;
+    const t2y = py + dy * 2;
+    if (t2x >= 0 && t2x < cols && t2y >= 0 && t2y < rows) {
+      const idx2 = indexOf(cols, t2x, t2y);
+      if (conductive(this.tiles, idx2)) {
+        this.killCrawlersOnTile(t2x, t2y);
+      }
+    }
+    return { ...playerState, shockCooldownS: SHOCK_CHARGE_COOLDOWN_S };
+  }
+
+  // Kill every crawler whose centre lies on tile (tx,ty) and drop carbon at
+  // each kill location. Shared between the uncharged tap and the charged
+  // release.
+  private killCrawlersOnTile(tx: number, ty: number): void {
+    const { panelSize } = this.grid;
     const tileMinX = tx * panelSize;
     const tileMinY = ty * panelSize;
     const tileMaxX = tileMinX + panelSize;
@@ -627,7 +677,6 @@ export class Room {
         this.crawlers.delete(cid);
       }
     }
-    return { ...playerState, shockCooldownS: SHOCK_COOLDOWN_S };
   }
 
   private physicsStep(): void {
@@ -635,20 +684,40 @@ export class Room {
       const pilot = this.pilots.get(id);
       const input = pilot ? pilot.consumeInputForTick(this.tick) : null;
       const next = stepPlayer(state, input, SERVER_TICK_DT_S, this.grid);
-      // Uncharged local shock — fire on the RISING EDGE of input.shock
-      // (held-state semantics on the wire, but only the tap should fire a
-      // shock pulse). Cooldown gate still applies so even rapid taps can't
-      // outrun SHOCK_COOLDOWN_S. The full hold→charge→release "charged
-      // shock" path lands in Task 12.
+      // Shock — v13 has two paths sharing one input bit:
+      //   - Uncharged tap fires on the RISING EDGE of input.shock. Cooldown
+      //     gate still applies so rapid taps can't outrun SHOCK_COOLDOWN_S.
+      //   - Charged release fires on the FALLING EDGE if shockHeldS has
+      //     accumulated to SHOCK_CHARGE_TIME_S — fires a 2-tile cardinal line
+      //     (see applyChargedShock). Short-hold releases do nothing extra
+      //     (the rising-edge tap already fired).
+      // While the bit is held we accumulate dt into shockHeldS, saturating
+      // at SHOCK_CHARGE_TIME_S so the wire-quantized timer never overshoots.
       let cur = next;
       const prevShockHeld = this.prevShockBits.get(id) ?? false;
       const shockHeldNow = !!(input && input.shock);
       this.prevShockBits.set(id, shockHeldNow);
       const risingEdge = shockHeldNow && !prevShockHeld;
+      const fallingEdge = !shockHeldNow && prevShockHeld;
+      if (shockHeldNow) {
+        cur = {
+          ...cur,
+          shockHeldS: Math.min(SHOCK_CHARGE_TIME_S, cur.shockHeldS + SERVER_TICK_DT_S),
+        };
+      }
       if (input && risingEdge && cur.shockCooldownS === 0) {
         cur = this.applyShock(id, cur, input);
+      } else if (fallingEdge) {
+        // Falling edge — only fire charged if we hit full charge. Either way,
+        // reset the held timer (the tap path doesn't read it).
+        if (input && cur.shockHeldS >= SHOCK_CHARGE_TIME_S && cur.shockCooldownS === 0) {
+          cur = this.applyChargedShock(id, cur, input);
+        }
+        cur = { ...cur, shockHeldS: 0 };
       } else if (cur.shockCooldownS > 0) {
-        // Drain cooldown each tick.
+        // Drain cooldown each tick. Held-edge taps above can both fire AND
+        // bump cooldown in the same tick; this `else` keeps the drain from
+        // immediately undoing the bump.
         cur = { ...cur, shockCooldownS: Math.max(0, cur.shockCooldownS - SERVER_TICK_DT_S) };
       }
       // Repair (raise L1 panel HP back to max). TODO: this is the B1-style
