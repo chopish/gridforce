@@ -9,9 +9,9 @@ interface RoomInternals {
   panelStates: Uint8Array;
   grid: { cols: number; rows: number; panelSize: number };
   states: Map<number, {
-    id: number; x: number; y: number; facing: number;
+    id: number; x: number; y: number; facing: number; facingCursorRad: number;
     panelJumpCooldownS: number; stateSeq: number; name: string; ready: boolean;
-    carbon: number; shockCooldownS: number; repairProgressS: number;
+    carbon: number; shockCooldownS: number; repairProgressS: number; shockHeldS: number;
   }>;
   crawlers: Map<number, {
     id: number; x: number; y: number; facing: number; hp: number;
@@ -28,9 +28,9 @@ test('shock kills crawler on adjacent LIVE tile', () => {
   r.phase = 'playing';
   r.panelStates = allLive(r.grid.cols, r.grid.rows);
   r.states.set(0, {
-    id: 0, x: 5 * 64 + 32, y: 5 * 64 + 32, facing: 0,
+    id: 0, x: 5 * 64 + 32, y: 5 * 64 + 32, facing: 0, facingCursorRad: 0,
     panelJumpCooldownS: 0, stateSeq: 0, name: 'a', ready: true,
-    carbon: 0, shockCooldownS: 0, repairProgressS: 0,
+    carbon: 0, shockCooldownS: 0, repairProgressS: 0, shockHeldS: 0,
   });
   r.crawlers.set(1, {
     id: 1, x: 6 * 64 + 32, y: 5 * 64 + 32, facing: Math.PI, hp: 1,
@@ -59,9 +59,9 @@ test('shock cooldown enforced after first fire', () => {
   r.phase = 'playing';
   r.panelStates = allLive(r.grid.cols, r.grid.rows);
   r.states.set(0, {
-    id: 0, x: 5 * 64 + 32, y: 5 * 64 + 32, facing: 0,
+    id: 0, x: 5 * 64 + 32, y: 5 * 64 + 32, facing: 0, facingCursorRad: 0,
     panelJumpCooldownS: 0, stateSeq: 0, name: 'a', ready: true,
-    carbon: 0, shockCooldownS: 0, repairProgressS: 0,
+    carbon: 0, shockCooldownS: 0, repairProgressS: 0, shockHeldS: 0,
   });
   r.pilots.set(0, {
     isBot: false, ready: true, name: 'a', ackInputTick: 0, computeAckBitmask: () => 0, send: () => {}, dispose: () => {},
@@ -80,9 +80,9 @@ test('shock does not reach across DAMAGED tile', () => {
   // DAMAGE the tile right of the player so it can't conduct.
   r.panelStates[indexOf(r.grid.cols, 6, 5)] = PanelState.DAMAGED;
   r.states.set(0, {
-    id: 0, x: 5 * 64 + 32, y: 5 * 64 + 32, facing: 0,
+    id: 0, x: 5 * 64 + 32, y: 5 * 64 + 32, facing: 0, facingCursorRad: 0,
     panelJumpCooldownS: 0, stateSeq: 0, name: 'a', ready: true,
-    carbon: 0, shockCooldownS: 0, repairProgressS: 0,
+    carbon: 0, shockCooldownS: 0, repairProgressS: 0, shockHeldS: 0,
   });
   // Crawler standing on the DAMAGED tile.
   r.crawlers.set(1, {

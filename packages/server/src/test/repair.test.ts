@@ -9,9 +9,9 @@ interface RoomInternals {
   panelStates: Uint8Array;
   grid: { cols: number; rows: number; panelSize: number };
   states: Map<number, {
-    id: number; x: number; y: number; facing: number;
+    id: number; x: number; y: number; facing: number; facingCursorRad: number;
     panelJumpCooldownS: number; stateSeq: number; name: string; ready: boolean;
-    carbon: number; shockCooldownS: number; repairProgressS: number;
+    carbon: number; shockCooldownS: number; repairProgressS: number; shockHeldS: number;
   }>;
   crawlers: Map<number, {
     id: number; x: number; y: number; facing: number; hp: number;
@@ -42,9 +42,9 @@ test('holding repair on DAMAGED tile with carbon flips to LIVE after 1.5s', () =
   r.panelStates[indexOf(r.grid.cols, 5, 5)] = PanelState.DAMAGED;
   // Place a player on tile (5, 5) with 5 carbon.
   r.states.set(0, {
-    id: 0, x: 5 * 64 + 32, y: 5 * 64 + 32, facing: 0,
+    id: 0, x: 5 * 64 + 32, y: 5 * 64 + 32, facing: 0, facingCursorRad: 0,
     panelJumpCooldownS: 0, stateSeq: 0, name: 'a', ready: true,
-    carbon: 5, shockCooldownS: 0, repairProgressS: 0,
+    carbon: 5, shockCooldownS: 0, repairProgressS: 0, shockHeldS: 0,
   });
   r.pilots.set(0, pilotWithRepair(true));
   // Tick until progress meets duration.
@@ -63,9 +63,9 @@ test('releasing repair resets the progress timer', () => {
   r.panelStates = allLive(r.grid.cols, r.grid.rows);
   r.panelStates[indexOf(r.grid.cols, 5, 5)] = PanelState.DAMAGED;
   r.states.set(0, {
-    id: 0, x: 5 * 64 + 32, y: 5 * 64 + 32, facing: 0,
+    id: 0, x: 5 * 64 + 32, y: 5 * 64 + 32, facing: 0, facingCursorRad: 0,
     panelJumpCooldownS: 0, stateSeq: 0, name: 'a', ready: true,
-    carbon: 1, shockCooldownS: 0, repairProgressS: 0,
+    carbon: 1, shockCooldownS: 0, repairProgressS: 0, shockHeldS: 0,
   });
   let repairing = true;
   r.pilots.set(0, {
@@ -87,9 +87,9 @@ test('repair does nothing on a LIVE tile', () => {
   r.panelStates = allLive(r.grid.cols, r.grid.rows);
   // Player on LIVE tile (default).
   r.states.set(0, {
-    id: 0, x: 5 * 64 + 32, y: 5 * 64 + 32, facing: 0,
+    id: 0, x: 5 * 64 + 32, y: 5 * 64 + 32, facing: 0, facingCursorRad: 0,
     panelJumpCooldownS: 0, stateSeq: 0, name: 'a', ready: true,
-    carbon: 5, shockCooldownS: 0, repairProgressS: 0,
+    carbon: 5, shockCooldownS: 0, repairProgressS: 0, shockHeldS: 0,
   });
   r.pilots.set(0, pilotWithRepair(true));
   for (let i = 0; i < 50; i++) r.physicsStep();
@@ -104,9 +104,9 @@ test('repair does nothing with 0 carbon', () => {
   r.panelStates = allLive(r.grid.cols, r.grid.rows);
   r.panelStates[indexOf(r.grid.cols, 5, 5)] = PanelState.DAMAGED;
   r.states.set(0, {
-    id: 0, x: 5 * 64 + 32, y: 5 * 64 + 32, facing: 0,
+    id: 0, x: 5 * 64 + 32, y: 5 * 64 + 32, facing: 0, facingCursorRad: 0,
     panelJumpCooldownS: 0, stateSeq: 0, name: 'a', ready: true,
-    carbon: 0, shockCooldownS: 0, repairProgressS: 0,
+    carbon: 0, shockCooldownS: 0, repairProgressS: 0, shockHeldS: 0,
   });
   r.pilots.set(0, pilotWithRepair(true));
   for (let i = 0; i < 50; i++) r.physicsStep();

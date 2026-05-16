@@ -21,6 +21,7 @@ import {
   WelcomeMsg,
   decodeMessage,
 } from '../index.js';
+import { PlayerEncoder } from '../entities/PlayerEncoder.js';
 import { BinaryReader, BinaryWriter } from '../wire.js';
 
 // Local helper to avoid importing sim.js (which has unresolved imports until
@@ -31,6 +32,7 @@ function newPlayerState(id: number, x: number, y: number, name = ''): PlayerStat
     x,
     y,
     facing: 0,
+    facingCursorRad: 0,
     panelJumpCooldownS: 0,
     stateSeq: 0,
     name,
@@ -38,6 +40,7 @@ function newPlayerState(id: number, x: number, y: number, name = ''): PlayerStat
     carbon: 0,
     shockCooldownS: 0,
     repairProgressS: 0,
+    shockHeldS: 0,
   };
 }
 
@@ -586,4 +589,24 @@ test('Welcome carries full panel-state byte array', () => {
   const w = decoded.payload;
   assert.equal(w.panelStates.length, 18 * 12);
   assert.equal(w.panelStates[10], PanelState.DAMAGED);
+});
+
+test('PlayerEncoder v13 round-trips facingCursorRad and shockHeldS', () => {
+  const p: PlayerState = {
+    id: 7, x: 100, y: 200,
+    facing: 0,
+    facingCursorRad: Math.PI,
+    panelJumpCooldownS: 0,
+    stateSeq: 0,
+    name: 'a', ready: false,
+    carbon: 5, shockCooldownS: 0, repairProgressS: 0,
+    shockHeldS: 0.42,
+  };
+  const w = new BinaryWriter(64);
+  PlayerEncoder.encode(w, p);
+  const buf = w.finish();
+  const r = new BinaryReader(buf);
+  const back = PlayerEncoder.decode(r);
+  assert.ok(Math.abs(back.facingCursorRad - Math.PI) < 0.05);
+  assert.ok(Math.abs(back.shockHeldS - 0.42) < 0.02);
 });

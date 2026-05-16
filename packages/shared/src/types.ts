@@ -67,7 +67,8 @@ export interface PlayerState {
   id: PlayerId;
   x: number;
   y: number;
-  facing: number;
+  facing: number;             // velocity-derived (legacy; kept for movement animation)
+  facingCursorRad: number;    // cursor-derived facing for aim/sprite direction
   panelJumpCooldownS: number; // renamed from dashCooldownS
   // dashRemainingS removed — panel-jump is instantaneous
   stateSeq: number;
@@ -80,6 +81,7 @@ export interface PlayerState {
   carbon: number;           // 0..99
   shockCooldownS: number;   // 0..SHOCK_COOLDOWN_S
   repairProgressS: number;  // 0..REPAIR_DURATION_S
+  shockHeldS: number;       // 0..SHOCK_CHARGE_TIME_S (saturates above)
 }
 
 export interface GridDef {

@@ -21,17 +21,19 @@ function unquantizeFacing(q: number): number {
   return (q / 256) * TWO_PI;
 }
 
-// One player entity (variable, ~19 + name bytes):
+// One player entity (variable, ~21 + name bytes):
 //   u8  id
 //   f32 x
 //   f32 y
-//   u8  facingQ
+//   u8  facingQ           (velocity-derived; legacy movement-animation cue)
 //   u8  flags             bit1=READY
 //   u8  panelJumpCooldownQ
 //   u32 stateSeq
 //   u8  carbon            (0..99 clamped)
 //   u8  shockCooldownQ    (quantizeTimer; saturates at 1.0s)
 //   u8  repairProgressQ   (quantizeLongTimer; saturates at ~2.0s for 1.5s repair window)
+//   u8  facingCursorRadQ  (quantizeFacing; cursor-derived aim direction)
+//   u8  shockHeldQ        (quantizeTimer; saturates at 1.0s, SHOCK_CHARGE_TIME_S is 0.6s)
 //   string name
 const TIMER_SCALE = 255; // 1 second resolved at ~3.9 ms per step (cooldowns)
 // Longer-saturating scale for repair-style progress timers that can run
@@ -79,6 +81,8 @@ export const PlayerEncoder: EntityEncoder<PlayerState> = {
     w.u8(Math.max(0, Math.min(99, p.carbon)) & 0xff);
     w.u8(quantizeTimer(p.shockCooldownS));
     w.u8(quantizeLongTimer(p.repairProgressS));
+    w.u8(quantizeFacing(p.facingCursorRad));
+    w.u8(quantizeTimer(p.shockHeldS)); // saturates at 1.0s — SHOCK_CHARGE_TIME_S is 0.6s
     w.string(p.name);
   },
   decode(r) {
@@ -92,8 +96,10 @@ export const PlayerEncoder: EntityEncoder<PlayerState> = {
     const carbon = Math.min(99, r.u8());
     const shockCooldownS = unquantizeTimer(r.u8());
     const repairProgressS = unquantizeLongTimer(r.u8());
+    const facingCursorRad = unquantizeFacing(r.u8());
+    const shockHeldS = unquantizeTimer(r.u8());
     const name = r.string();
     const ready = (flags & PLAYER_FLAG_READY) !== 0;
-    return { id, x, y, facing, panelJumpCooldownS, stateSeq, name, ready, carbon, shockCooldownS, repairProgressS };
+    return { id, x, y, facing, facingCursorRad, panelJumpCooldownS, stateSeq, name, ready, carbon, shockCooldownS, repairProgressS, shockHeldS };
   },
 };

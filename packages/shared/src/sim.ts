@@ -19,6 +19,7 @@ export function newPlayerState(id: number, x: number, y: number, name = ''): Pla
     x,
     y,
     facing: 0,
+    facingCursorRad: 0,
     panelJumpCooldownS: 0,
     stateSeq: 0,
     name,
@@ -26,6 +27,7 @@ export function newPlayerState(id: number, x: number, y: number, name = ''): Pla
     carbon: 0,
     shockCooldownS: 0,
     repairProgressS: 0,
+    shockHeldS: 0,
   };
 }
 
@@ -125,6 +127,7 @@ export function stepPlayer(
     x,
     y,
     facing,
+    facingCursorRad: state.facingCursorRad,
     panelJumpCooldownS,
     stateSeq,
     // Roster metadata is opaque to the sim — pass through unchanged.
@@ -134,5 +137,6 @@ export function stepPlayer(
     carbon: state.carbon,
     shockCooldownS: state.shockCooldownS,
     repairProgressS: state.repairProgressS,
+    shockHeldS: state.shockHeldS,
   };
 }
