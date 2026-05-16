@@ -72,9 +72,11 @@ export const PLAYER_RADIUS = 12;
 export const PLAYER_MOVE_SPEED = 308; // was 220; 220 * 1.4 ≈ 308
 
 // Panel-jump: in v13, the falling-edge of `jumpHeld` (Shift-release) teleports
-// the player toward `jumpCursor{Dx,Dy}` (server-authoritative; see Room.ts).
+// the player toward `jumpCursor{Dx,Dy}`. Both server and client run the same
+// `tryPanelJump` helper (panelJump.ts) — server authoritatively, client as
+// prediction — so the visual is instantaneous and chains feel responsive.
 // Cooldown is the rate-limit and is decremented in shared sim.ts.
-export const PANEL_JUMP_COOLDOWN_S = 0.4;
+export const PANEL_JUMP_COOLDOWN_S = 0.2;
 
 export const MAX_PLAYERS_PER_ROOM = 4;
 

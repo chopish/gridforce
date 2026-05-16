@@ -182,39 +182,38 @@ test('integrity: APPROACHING crawler contributes no weight (no damage)', () => {
   assert.equal(after, before, 'APPROACHING bug should not damage its tile');
 });
 
-test('integrity: cardinal neighbour weight bleeds onto adjacent tile', () => {
-  // Crawler attacks (10,10). Its weight should also count on (9,10),
-  // (11,10), (10,9), and (10,11) — each of which then takes dps × dt damage.
+test('integrity: cardinal neighbours are untouched by a single attacker', () => {
+  // A single ATTACKING crawler should damage ONLY its target tile. The
+  // earlier 4-cardinal weight-spread was retired in C1.1 because playtest
+  // showed bugs leaving a trail of partially damaged tiles behind a fully
+  // destroyed one, which read as confusing and made the kill window
+  // ambiguous. Stacking weight still triggers quadratic damage on the
+  // target tile, so swarms still feel devastating.
   const cx = 10;
   const cy = 10;
   const r = makeRoomForIntegrity();
   plantAttacker(r, TEST_ID_BASE, cx, cy);
 
   const targetIdx = indexOf(r.grid.cols, cx, cy);
-  const neighbourIdx = indexOf(r.grid.cols, cx + 1, cy);
   const beforeTarget = r.tiles.l1Hp[targetIdx]!;
-  const beforeNeighbour = r.tiles.l1Hp[neighbourIdx]!;
+  const beforeN = r.tiles.l1Hp[indexOf(r.grid.cols, cx, cy - 1)]!;
+  const beforeE = r.tiles.l1Hp[indexOf(r.grid.cols, cx + 1, cy)]!;
+  const beforeS = r.tiles.l1Hp[indexOf(r.grid.cols, cx, cy + 1)]!;
+  const beforeW = r.tiles.l1Hp[indexOf(r.grid.cols, cx - 1, cy)]!;
 
   tickFor(r, 1.0);
 
-  const afterTarget = r.tiles.l1Hp[targetIdx]!;
-  const afterNeighbour = r.tiles.l1Hp[neighbourIdx]!;
-
-  assert.ok(beforeTarget - afterTarget > 0, 'target tile should take damage');
   assert.ok(
-    beforeNeighbour - afterNeighbour > 0,
-    'cardinal-neighbour tile should also take damage from the spread weight',
+    beforeTarget - r.tiles.l1Hp[targetIdx]! > 0,
+    'target tile should take damage',
   );
-  // Target and neighbour both see w=1 (target's own weight = its weight; the
-  // neighbour's load = its own (0) + the target's (1)). Equal damage expected.
-  assert.equal(
-    beforeTarget - afterTarget,
-    beforeNeighbour - afterNeighbour,
-    'target and 4-cardinal neighbour should take equal damage when only one bug attacks',
-  );
+  assert.equal(r.tiles.l1Hp[indexOf(r.grid.cols, cx, cy - 1)]!, beforeN, 'N neighbour untouched');
+  assert.equal(r.tiles.l1Hp[indexOf(r.grid.cols, cx + 1, cy)]!, beforeE, 'E neighbour untouched');
+  assert.equal(r.tiles.l1Hp[indexOf(r.grid.cols, cx, cy + 1)]!, beforeS, 'S neighbour untouched');
+  assert.equal(r.tiles.l1Hp[indexOf(r.grid.cols, cx - 1, cy)]!, beforeW, 'W neighbour untouched');
 });
 
-test('integrity: diagonal neighbour does NOT take spread damage', () => {
+test('integrity: diagonal neighbour is untouched', () => {
   const cx = 10;
   const cy = 10;
   const r = makeRoomForIntegrity();
@@ -224,7 +223,7 @@ test('integrity: diagonal neighbour does NOT take spread damage', () => {
   const before = r.tiles.l1Hp[diagIdx]!;
   tickFor(r, 1.0);
   const after = r.tiles.l1Hp[diagIdx]!;
-  assert.equal(after, before, 'diagonal tile should be untouched by weight spread');
+  assert.equal(after, before, 'diagonal tile should be untouched');
 });
 
 test('integrity: damage is capped at 0 (no underflow) and stops at L1 destruction', () => {

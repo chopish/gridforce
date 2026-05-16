@@ -80,6 +80,32 @@ export class GridRenderer {
     } else {
       this.drawPassageTile(x, y, ps);
     }
+
+    // HP bar for the topmost surviving layer. Only drawn when below max so
+    // healthy tiles stay uncluttered.
+    if (l1 > 0 && l1 < L1_PANEL_MAX_HP) {
+      this.drawHpBar(x, y, ps, l1 / L1_PANEL_MAX_HP, 0x4cc26d);
+    } else if (l1 === 0 && l0 > 0 && l0 < L0_DOME_MAX_HP) {
+      this.drawHpBar(x, y, ps, l0 / L0_DOME_MAX_HP, 0xc26d4c);
+    }
+  }
+
+  // Thin bar pinned to the bottom of a tile. `ratio` (0..1) is the fill, color
+  // selects between L1 (green) and L0 (orange) so the player can read which
+  // layer is currently absorbing damage at a glance.
+  private drawHpBar(x: number, y: number, ps: number, ratio: number, color: number): void {
+    const g = this.gfx;
+    const pad = 4;
+    const barW = ps - pad * 2;
+    const barH = 3;
+    const barX = x + pad;
+    const barY = y + ps - pad - barH;
+    // Background track.
+    g.rect(barX, barY, barW, barH).fill({ color: 0x000000, alpha: 0.55 });
+    const fillW = Math.max(0, Math.min(barW, barW * ratio));
+    if (fillW > 0) {
+      g.rect(barX, barY, fillW, barH).fill({ color, alpha: 0.95 });
+    }
   }
 
   // LIVE-conductive panel — bright blue solar tile. Matches the B1 LIVE

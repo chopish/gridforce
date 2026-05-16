@@ -27,6 +27,7 @@ import {
   getStage,
   newPlayerState,
   stepPlayer,
+  tryPanelJump,
 } from '@gridforce/shared';
 
 import { NpcInterpolator } from './NpcInterpolator.js';
@@ -126,6 +127,7 @@ export class PredictedWorld {
     this.predictedTick = this.serverTick + INPUT_LEAD_TICKS;
     this.targetLead = INPUT_LEAD_TICKS;
     this.pending = [];
+    this.localPrevJumpHeld = false;
     this.correctionX = 0;
     this.correctionY = 0;
     this.diagnostics.predictedTick = this.predictedTick;
@@ -149,6 +151,12 @@ export class PredictedWorld {
   // increasing in `tick`. Replayed on top of every snapshot to keep the local
   // player's predicted state consistent with what we'll see next.
   private pending: PlayerInput[] = [];
+
+  // Previous tick's jumpHeld bit for the local player, used to detect the
+  // falling edge of Shift-release for predicted panel-jumps. Mirrors the
+  // server's Room.prevJumpHeld map (single-player here since we only predict
+  // ourselves). Reset on Welcome and on rebase from snapshot below.
+  private localPrevJumpHeld = false;
 
   // Visual-only position offset that blends to zero over PREDICTION_BLEND_MS.
   // The simulated position is updated immediately; only the rendered position
@@ -188,6 +196,7 @@ export class PredictedWorld {
     this.tiles = w.tiles;
     this.crawlers.clear();
     this.carbons.clear();
+    this.localPrevJumpHeld = false;
     // Lead the server tick from the start: by the time our first input
     // reaches the server, the server has already advanced past startTick by
     // ~RTT/2 ticks. Tagging from (startTick + lead) ensures the input lands
@@ -252,11 +261,16 @@ export class PredictedWorld {
       jumpCursorDy: local.jumpCursorDy,
       facingRad: local.facingRad,
     };
-    const nextLocal = stepPlayer(localState, input, SERVER_TICK_DT_S, this.grid);
+    const stepped = stepPlayer(localState, input, SERVER_TICK_DT_S, this.grid);
+    // Predict the panel-jump locally so the visual is instant and chains
+    // (Shift→aim→release→Shift→aim→release) reference the new tile, not the
+    // stale pre-jump position the server hasn't ack'd yet.
+    const nextLocal = tryPanelJump(stepped, input, this.localPrevJumpHeld, this.tiles, this.grid);
+    this.localPrevJumpHeld = input.jumpHeld;
 
-    // Detect a panel-jump frame: position moved more than walk-step worth
-    // (with margin for sprint). Half a panel is well above any single-tick
-    // walk distance even with sprint, and well below a full jump.
+    // Detect a panel-jump frame: position moved more than walk-step worth.
+    // Half a panel is well above any single-tick walk distance and well below
+    // a full jump.
     const stepDist = Math.hypot(nextLocal.x - localState.x, nextLocal.y - localState.y);
     const jumped = stepDist > this.grid.panelSize * 0.5;
 
@@ -396,15 +410,25 @@ export class PredictedWorld {
     const beforeX = before?.x ?? localSnap.x;
     const beforeY = before?.y ?? localSnap.y;
 
-    // Rebase: take server's view of us, then replay any unacked inputs.
+    // Rebase: take server's view of us, then replay any unacked inputs. For
+    // each input, run stepPlayer then tryPanelJump so the falling-edge jump
+    // applies the same way the server resolved it. prevHeld for the first
+    // replay input is unknown (we don't ship the previous-tick bit on the
+    // wire); assume `false`. The only loss is a release whose preceding hold
+    // was in the same input message — vanishingly rare given the server has
+    // typically acked the hold by the time the release arrives.
     let rebased: PlayerState = { ...localSnap };
     let replayedJump = false;
+    let prevHeld = false;
     for (const inp of this.pending) {
       const replayBefore = rebased;
       rebased = stepPlayer(rebased, inp, SERVER_TICK_DT_S, this.grid);
+      rebased = tryPanelJump(rebased, inp, prevHeld, this.tiles, this.grid);
+      prevHeld = inp.jumpHeld;
       const replayStepDist = Math.hypot(rebased.x - replayBefore.x, rebased.y - replayBefore.y);
       if (replayStepDist > this.grid.panelSize * 0.5) replayedJump = true;
     }
+    this.localPrevJumpHeld = prevHeld;
     this.diagnostics.lastReplayInputs = this.pending.length;
 
     const dx = beforeX - rebased.x;

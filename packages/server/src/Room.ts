@@ -23,8 +23,6 @@ import {
   L1_PANEL_MAX_HP,
   LayerKind,
   MAX_PLAYERS_PER_ROOM,
-  PANEL_JUMP_COOLDOWN_S,
-  PANEL_JUMP_TARGET_RANGE,
   PlayerJoinedMsg,
   allocateTiles,
   conductive,
@@ -32,6 +30,7 @@ import {
   damageTopmost,
   isPassage,
   topmostLayer,
+  tryPanelJump,
   type TileBuffers,
   PlayerLeftMsg,
   SERVER_SNAPSHOT_INTERVAL_MS,
@@ -95,17 +94,6 @@ function snapToCardinal(rad: number): 0 | 1 | 2 | 3 {
   if (f < 3 * s) return 2;           // S
   if (f < 5 * s) return 3;           // W
   return 0;                          // N
-}
-
-// Clamp a panel-jump cursor offset to ±PANEL_JUMP_TARGET_RANGE per axis,
-// then floor to an integer. The wire encoder already clamps in the Task 4
-// Input format, but server-side clamping is defensive against hostile or
-// out-of-spec clients (and against any test that bypasses the encoder).
-function clampPanelJumpOffset(v: number): number {
-  const i = v | 0;
-  if (i > PANEL_JUMP_TARGET_RANGE) return PANEL_JUMP_TARGET_RANGE;
-  if (i < -PANEL_JUMP_TARGET_RANGE) return -PANEL_JUMP_TARGET_RANGE;
-  return i;
 }
 
 // Place new players around the centre, spread on a circle so they don't spawn on top of each other.
@@ -780,41 +768,17 @@ export class Room {
         // Input not held OR no carbon — reset.
         cur = { ...cur, repairProgressS: 0 };
       }
-      // Panel-jump (Task 13). Held-Shift = aiming; release = teleport. We
-      // detect the falling edge of jumpHeld and, if a cursor offset is set
-      // and the cooldown has drained, snap the player to the target tile
-      // centre. The cursor delta is server-clamped defensively (the wire
-      // encoder also clamps in Task 4, but a hostile client could bypass).
-      // Cooldown drain happens in stepPlayer above; we set the cooldown to
-      // PANEL_JUMP_COOLDOWN_S on a successful jump. Cancel (dx=dy=0) and
-      // passage-rejection do NOT consume cooldown — only a real teleport.
+      // Panel-jump (Task 13). Held-Shift = aiming; release = teleport. The
+      // shared `tryPanelJump` helper detects the falling edge of jumpHeld,
+      // validates the target tile, and either returns the teleported state
+      // or `cur` unchanged. Same code path runs client-side (prediction +
+      // replay) so chains feel snappy and reconciliation doesn't snap back.
       // prevJumpHeld is server-only and is NOT encoded onto PlayerState.
       const prevHeld = this.prevJumpHeld.get(id) ?? false;
       const heldNow = !!(input && input.jumpHeld);
       this.prevJumpHeld.set(id, heldNow);
-      if (input && prevHeld && !heldNow && cur.panelJumpCooldownS <= 0) {
-        const dx = clampPanelJumpOffset(input.jumpCursorDx);
-        const dy = clampPanelJumpOffset(input.jumpCursorDy);
-        if (dx !== 0 || dy !== 0) {
-          const px = Math.floor(cur.x / this.grid.panelSize);
-          const py = Math.floor(cur.y / this.grid.panelSize);
-          const tx = px + dx;
-          const ty = py + dy;
-          if (tx >= 0 && tx < this.grid.cols && ty >= 0 && ty < this.grid.rows) {
-            const idx = indexOf(this.grid.cols, tx, ty);
-            // Reject jump onto an L1 passage (both L0 and L1 destroyed —
-            // there's no floor to land on). Reject without consuming cooldown
-            // so the player can immediately re-aim.
-            if (!isPassage(this.tiles, idx)) {
-              cur = {
-                ...cur,
-                x: tx * this.grid.panelSize + this.grid.panelSize / 2,
-                y: ty * this.grid.panelSize + this.grid.panelSize / 2,
-                panelJumpCooldownS: PANEL_JUMP_COOLDOWN_S,
-              };
-            }
-          }
-        }
+      if (input) {
+        cur = tryPanelJump(cur, input, prevHeld, this.tiles, this.grid);
       }
       this.states.set(id, cur);
     }
@@ -884,7 +848,12 @@ export class Room {
 
   // Per-tick weight aggregation + integrity damage pass. Only ATTACKING
   // crawlers contribute weight (APPROACHING haven't arrived; TRANSITING are
-  // leaving). For each tile, load = own weight + 4-cardinal neighbours.
+  // leaving). Each tile takes damage proportional to its own load — bugs
+  // damage only the tile they're attacking, not its 4-cardinal neighbours.
+  // (The neighbour-spread variant felt buggy in playtest: one crawler left a
+  // trail of partially damaged tiles before fully destroying its target.)
+  // Stacking weight still hits the quadratic regime above WEIGHT_THRESHOLD,
+  // so swarms collapse a tile much faster than singletons.
   // Damage = damagePerSecond(load, armor) × dt → topmost layer. Armor is 0
   // for L0/L1 in C1; the L2 add-on armor table arrives in a later task.
   private applyWeightIntegrity(dt: number): void {
@@ -898,7 +867,6 @@ export class Room {
     const weightAt = new Uint16Array(n);
     for (const c of this.crawlers.values()) {
       if (c.ai !== CrawlerAIState.ATTACKING) continue;
-      // Guard against out-of-bounds targets just in case.
       if (
         c.targetCx < 0 || c.targetCx >= cols ||
         c.targetCy < 0 || c.targetCy >= rows
@@ -907,29 +875,21 @@ export class Room {
       }
       weightAt[indexOf(cols, c.targetCx, c.targetCy)]! += CRAWLER_WEIGHT;
     }
-    for (let y = 0; y < rows; y++) {
-      for (let x = 0; x < cols; x++) {
-        const idx = indexOf(cols, x, y);
-        let w = weightAt[idx]!;
-        if (x > 0) w += weightAt[indexOf(cols, x - 1, y)]!;
-        if (x < cols - 1) w += weightAt[indexOf(cols, x + 1, y)]!;
-        if (y > 0) w += weightAt[indexOf(cols, x, y - 1)]!;
-        if (y < rows - 1) w += weightAt[indexOf(cols, x, y + 1)]!;
-        if (w === 0) continue;
-        const top = topmostLayer(this.tiles, idx);
-        if (top === null) continue;
-        // Armor is 0 for L0/L1 in C1 (L2 addon catalog with armor lands later).
-        const armor = 0;
-        const dps = damagePerSecond(w, armor);
-        // The tile hp buffers are Uint8 — assigning fractional damage would
-        // truncate ~0.067 hp to 1 hp each tick, grossly over-damaging. Buffer
-        // sub-integer damage in damageAccum and only flush whole hp once it
-        // crosses 1.0.
-        const acc = this.damageAccum[idx]! + dps * dt;
-        const whole = Math.floor(acc);
-        this.damageAccum[idx] = acc - whole;
-        if (whole > 0) damageTopmost(this.tiles, idx, whole);
-      }
+    for (let i = 0; i < n; i++) {
+      const w = weightAt[i]!;
+      if (w === 0) continue;
+      const top = topmostLayer(this.tiles, i);
+      if (top === null) continue;
+      // Armor is 0 for L0/L1 in C1 (L2 addon catalog with armor lands later).
+      const dps = damagePerSecond(w, 0);
+      // The tile hp buffers are Uint8 — assigning fractional damage would
+      // truncate ~0.067 hp to 1 hp each tick, grossly over-damaging. Buffer
+      // sub-integer damage in damageAccum and only flush whole hp once it
+      // crosses 1.0.
+      const acc = this.damageAccum[i]! + dps * dt;
+      const whole = Math.floor(acc);
+      this.damageAccum[i] = acc - whole;
+      if (whole > 0) damageTopmost(this.tiles, i, whole);
     }
   }
 

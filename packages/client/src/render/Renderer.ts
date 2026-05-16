@@ -10,6 +10,7 @@ import { GridRenderer } from './GridRenderer.js';
 import { MinimapRenderer } from './MinimapRenderer.js';
 import { NpcRenderer } from './NpcRenderer.js';
 import { PlayerRenderer } from './PlayerRenderer.js';
+import { ShockFxRenderer } from './ShockFxRenderer.js';
 
 const MINIMAP_MARGIN_PX = 16;
 
@@ -31,6 +32,7 @@ export class Renderer {
   carbonRenderer!: CarbonRenderer;
   npcRenderer!: NpcRenderer;
   playerRenderer!: PlayerRenderer;
+  shockFx!: ShockFxRenderer;
   jumpTargetOverlay!: JumpTargetOverlay;
   minimap!: MinimapRenderer;
 
@@ -57,18 +59,20 @@ export class Renderer {
     this.crawlerRenderer = new CrawlerRenderer();
     this.npcRenderer = new NpcRenderer();
     this.playerRenderer = new PlayerRenderer();
+    this.shockFx = new ShockFxRenderer();
     const worldW = grid.cols * grid.panelSize;
     const worldH = grid.rows * grid.panelSize;
 
     this.jumpTargetOverlay = new JumpTargetOverlay(grid.panelSize, worldW, worldH);
-    // Z-order (back to front): grid → carbon → crawler → npc → player → jump overlay.
-    // Overlay sits on top so the dim fade covers everything below it while
-    // jumpHeld is true; main.ts toggles its visibility per frame.
+    // Z-order (back to front): grid → carbon → crawler → npc → player →
+    // shockFx → jump overlay. Shock arcs sit above players so the bright
+    // beam isn't masked by the firing player's sprite.
     this.playfield.addChild(this.gridRenderer.root);
     this.playfield.addChild(this.carbonRenderer.root);
     this.playfield.addChild(this.crawlerRenderer.root);
     this.playfield.addChild(this.npcRenderer.root);
     this.playfield.addChild(this.playerRenderer.root);
+    this.playfield.addChild(this.shockFx.root);
     this.playfield.addChild(this.jumpTargetOverlay.container);
 
     // Minimap lives in screen space — added to `stage` directly so it does

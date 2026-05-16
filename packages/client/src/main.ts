@@ -6,8 +6,11 @@ import {
   NETSIM_PROFILES,
   PANEL_SIZE,
   SERVER_TICK_DT_MS,
+  SHOCK_CHARGE_TIME_S,
   type PlayerId,
 } from '@gridforce/shared';
+
+import { snapToCardinal } from './render/ShockFxRenderer.js';
 
 import { createInvite, redeemInvite, LobbyApiError } from './api.js';
 import { InputCapture } from './input/InputCapture.js';
@@ -236,6 +239,13 @@ async function bootstrap(): Promise<void> {
     // Track the stage by id rather than index — a run swap in the lobby
     // keeps currentStageIndex at 0, so an index-only check would miss it.
     let lastRenderedStageId = '';
+    // Local shock VFX edge tracking. Tap fires on rising edge, charged fires
+    // on falling edge after at least SHOCK_CHARGE_TIME_S of hold. Mirrors the
+    // server's edge logic but is purely cosmetic — if the server rejects the
+    // shock (e.g. non-conductive target), the beam still flashes briefly,
+    // which is preferable to no feedback at all.
+    let prevLocalShock = false;
+    let shockDownAtMs = 0;
     // "resyncing…" banner is shown while rtt EWMA is unpopulated (=0). This
     // happens at startup before the first pong and again after visibility
     // restore (resetRttForVisibilityRestore zeros it). On bad-profile
@@ -292,6 +302,33 @@ async function bootstrap(): Promise<void> {
             };
         const inp = world.step({ ...sample, clientTimeMs: now });
         socket.sendInput(inp);
+
+        // Shock VFX edges (local player only). We trigger off the per-tick
+        // sample so the cardinal direction reflects what we actually shipped
+        // to the server (same facingRad).
+        if (world.phase !== 'lobby' && localForFacing) {
+          if (sample.shock && !prevLocalShock) {
+            renderer.shockFx.fireTap(
+              localForFacing.x,
+              localForFacing.y,
+              snapToCardinal(sample.facingRad),
+            );
+            shockDownAtMs = now;
+          } else if (!sample.shock && prevLocalShock) {
+            const heldMs = now - shockDownAtMs;
+            if (heldMs >= SHOCK_CHARGE_TIME_S * 1000) {
+              renderer.shockFx.fireCharged(
+                localForFacing.x,
+                localForFacing.y,
+                snapToCardinal(sample.facingRad),
+              );
+            }
+          }
+          prevLocalShock = sample.shock;
+        } else {
+          prevLocalShock = false;
+        }
+
         accumulator -= SERVER_TICK_DT_MS;
       }
 
@@ -378,6 +415,10 @@ async function bootstrap(): Promise<void> {
           inputs.getJumpCursorDy(),
         );
       }
+
+      // Shock VFX decay/clear (purely visual; runs every frame regardless of
+      // tick accumulator so flashes fade smoothly at vsync rate).
+      renderer.shockFx.update(dt * 1000);
 
       // Camera follows the local player.
       renderer.tick(dt * 1000, me.x, me.y);
