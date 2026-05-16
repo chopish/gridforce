@@ -858,13 +858,21 @@ export class Room {
     }
     const weightAt = new Uint16Array(n);
     for (const c of this.crawlers.values()) {
-      if (c.ai !== CrawlerAIState.ATTACKING) continue;
+      // C1.3: both APPROACHING (walking) and ATTACKING (stopped) bugs damage
+      // the tile under them. The AI state is now purely a VFX hint (it
+      // toggles the client-side attack pulse).
       if (
         c.targetCx < 0 || c.targetCx >= cols ||
         c.targetCy < 0 || c.targetCy >= rows
       ) {
         continue;
       }
+      // Skip bugs that are still outside the playfield — `targetCx/Cy` is
+      // clamped to grid bounds in the AI, but the bug's actual position may
+      // still be off-grid (just spawned). Use the float position to gate.
+      const px = Math.floor(c.x / this.grid.panelSize);
+      const py = Math.floor(c.y / this.grid.panelSize);
+      if (px < 0 || px >= cols || py < 0 || py >= rows) continue;
       weightAt[indexOf(cols, c.targetCx, c.targetCy)]! += CRAWLER_WEIGHT;
     }
     for (let i = 0; i < n; i++) {

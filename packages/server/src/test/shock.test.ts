@@ -158,13 +158,13 @@ test('shock: tap pointed west hits west tile', () => {
 test('shock: longer hold reaches more tiles in 360° aim direction', () => {
   const r = makeRoomInPlaying();
   setPlayerAt(r, 5, 5);
-  // Bugs at +1, +2, +3 tiles east. With a full-charge release, all three
-  // should die. With a tap, only the +1 bug dies.
+  // Bugs at +1, +2, +3 tiles east. We use 22 hold ticks so the beam is
+  // long enough to reach +3 but short enough that the chase-AI doesn't
+  // pull the bugs out of their planted tiles before the release fires.
   plantCrawler(r, 1, 6, 5);
   plantCrawler(r, 2, 7, 5);
   plantCrawler(r, 3, 8, 5);
-  // Hold for ~SHOCK_CHARGE_FULL_S ticks (~30 ticks) then release.
-  const held = Array.from({ length: 32 }, () => ({ shock: true, facingRad: 0 }));
+  const held = Array.from({ length: 22 }, () => ({ shock: true, facingRad: 0 }));
   held.push({ shock: false, facingRad: 0 });
   setInputQueue(r, held);
   for (let i = 0; i < held.length; i++) tick(r);
@@ -193,8 +193,10 @@ test('shock: beam breaks at a non-conductive tile', () => {
   // Tile 6,5 is damaged-below-threshold; tile 7,5 has a bug.
   r.tiles.l1Hp[indexOf(r.grid.cols, 6, 5)] = NON_CONDUCTIVE_HP;
   plantCrawler(r, 1, 7, 5);
-  // Long hold so the beam would naturally reach 7,5 if not blocked.
-  const held = Array.from({ length: 32 }, () => ({ shock: true, facingRad: 0 }));
+  // Hold long enough to produce a 2-tile beam (would reach 7,5 if not
+  // blocked), but short enough that the chase-AI hasn't dragged the bug
+  // out of tile (7,5) before the release fires.
+  const held = Array.from({ length: 15 }, () => ({ shock: true, facingRad: 0 }));
   held.push({ shock: false, facingRad: 0 });
   setInputQueue(r, held);
   for (let i = 0; i < held.length; i++) tick(r);

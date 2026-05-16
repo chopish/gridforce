@@ -80,8 +80,10 @@ export const PLAYER_MOVE_SPEED = 308; // was 220; 220 * 1.4 ≈ 308
 // the player toward `jumpCursor{Dx,Dy}`. Both server and client run the same
 // `tryPanelJump` helper (panelJump.ts) — server authoritatively, client as
 // prediction — so the visual is instantaneous and chains feel responsive.
-// Cooldown is the rate-limit and is decremented in shared sim.ts.
-export const PANEL_JUMP_COOLDOWN_S = 0.2;
+// Cooldown is the rate-limit and is decremented in shared sim.ts. 0.1s = 3
+// ticks at 30 Hz, which still bounds spam (max ~10 jumps/s × 2 tiles each =
+// 20 tiles/s; the map is 18 wide, so it caps at one full traversal/second).
+export const PANEL_JUMP_COOLDOWN_S = 0.1;
 
 export const MAX_PLAYERS_PER_ROOM = 4;
 

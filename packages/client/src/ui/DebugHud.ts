@@ -43,7 +43,7 @@ export class DebugHud {
     ];
     this.root.textContent = lines.join('\n');
     if (this.netSimEl) {
-      this.netSimEl.textContent = `netsim: ${f.netSimName} (press F to cycle)`;
+      this.netSimEl.textContent = `netsim: ${f.netSimName} (press P to cycle)`;
     }
   }
 }
