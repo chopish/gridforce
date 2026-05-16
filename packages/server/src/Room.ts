@@ -23,11 +23,14 @@ import {
   L1_PANEL_MAX_HP,
   LayerKind,
   MAX_PLAYERS_PER_ROOM,
+  PANEL_JUMP_COOLDOWN_S,
+  PANEL_JUMP_TARGET_RANGE,
   PlayerJoinedMsg,
   allocateTiles,
   conductive,
   damagePerSecond,
   damageTopmost,
+  isPassage,
   topmostLayer,
   type TileBuffers,
   PlayerLeftMsg,
@@ -92,6 +95,17 @@ function snapToCardinal(rad: number): 0 | 1 | 2 | 3 {
   if (f < 3 * s) return 2;           // S
   if (f < 5 * s) return 3;           // W
   return 0;                          // N
+}
+
+// Clamp a panel-jump cursor offset to ±PANEL_JUMP_TARGET_RANGE per axis,
+// then floor to an integer. The wire encoder already clamps in the Task 4
+// Input format, but server-side clamping is defensive against hostile or
+// out-of-spec clients (and against any test that bypasses the encoder).
+function clampPanelJumpOffset(v: number): number {
+  const i = v | 0;
+  if (i > PANEL_JUMP_TARGET_RANGE) return PANEL_JUMP_TARGET_RANGE;
+  if (i < -PANEL_JUMP_TARGET_RANGE) return -PANEL_JUMP_TARGET_RANGE;
+  return i;
 }
 
 // Place new players around the centre, spread on a circle so they don't spawn on top of each other.
@@ -193,6 +207,13 @@ export class Room {
   // falling-edge charged-release path.
   private prevShockBits = new Map<PlayerId, boolean>();
 
+  // Per-player previous jumpHeld bit, used for falling-edge detection on the
+  // panel-jump release (Task 13). The wire bit is held-state ("Shift is
+  // currently down"); we trigger the teleport on prevHeld && !held, i.e.
+  // the release frame. Cleared in startGame() and on player leave. Kept
+  // server-only — never encoded onto wire PlayerState.
+  private prevJumpHeld = new Map<PlayerId, boolean>();
+
   tick = 0;
   private nextPlayerId: PlayerId = 0;
   private startWallMs = 0;
@@ -283,6 +304,7 @@ export class Room {
     this.pilots.delete(playerId);
     this.states.delete(playerId);
     this.prevShockBits.delete(playerId);
+    this.prevJumpHeld.delete(playerId);
     if (this.hostId === playerId) this.hostId = this.pickNewHost();
     this.broadcastAll(PlayerLeftMsg.encode({ playerId }));
     if (!this.isEmpty) this.lastNonEmptyAtMs = performance.now();
@@ -322,8 +344,10 @@ export class Room {
     this.nextCarbonId = 0;
     // Drop any stale rising-edge state from the lobby — no shocks fire there
     // anyway, but resetting keeps the contract clean and prevents a stuck
-    // "held" bit from suppressing the first in-game tap.
+    // "held" bit from suppressing the first in-game tap. Same story for the
+    // panel-jump falling-edge tracker.
     this.prevShockBits.clear();
+    this.prevJumpHeld.clear();
     // Re-centre all players on the active stage's grid. Pre-game they sat
     // at spawn positions sized to whatever grid was active at join time,
     // which can be wrong if the host swapped runs mid-lobby.
@@ -515,8 +539,8 @@ export class Room {
     // Catch up physics with a hard cap (anti-spiral).
     // In lobby phase we skip the actual sim step but still advance tick
     // counters — clients use predictedTick for input lead even in lobby
-    // (so dash-on-start-frame doesn't get mis-targeted), and ackInputTick
-    // bookkeeping needs to keep moving.
+    // (so a panel-jump on the start frame doesn't get mis-targeted), and
+    // ackInputTick bookkeeping needs to keep moving.
     let catchups = 0;
     while (
       now - this.lastPhysicsAtMs >= SERVER_TICK_DT_MS &&
@@ -751,6 +775,42 @@ export class Room {
       } else {
         // Input not held OR no carbon — reset.
         cur = { ...cur, repairProgressS: 0 };
+      }
+      // Panel-jump (Task 13). Held-Shift = aiming; release = teleport. We
+      // detect the falling edge of jumpHeld and, if a cursor offset is set
+      // and the cooldown has drained, snap the player to the target tile
+      // centre. The cursor delta is server-clamped defensively (the wire
+      // encoder also clamps in Task 4, but a hostile client could bypass).
+      // Cooldown drain happens in stepPlayer above; we set the cooldown to
+      // PANEL_JUMP_COOLDOWN_S on a successful jump. Cancel (dx=dy=0) and
+      // passage-rejection do NOT consume cooldown — only a real teleport.
+      // prevJumpHeld is server-only and is NOT encoded onto PlayerState.
+      const prevHeld = this.prevJumpHeld.get(id) ?? false;
+      const heldNow = !!(input && input.jumpHeld);
+      this.prevJumpHeld.set(id, heldNow);
+      if (input && prevHeld && !heldNow && cur.panelJumpCooldownS <= 0) {
+        const dx = clampPanelJumpOffset(input.jumpCursorDx);
+        const dy = clampPanelJumpOffset(input.jumpCursorDy);
+        if (dx !== 0 || dy !== 0) {
+          const px = Math.floor(cur.x / this.grid.panelSize);
+          const py = Math.floor(cur.y / this.grid.panelSize);
+          const tx = px + dx;
+          const ty = py + dy;
+          if (tx >= 0 && tx < this.grid.cols && ty >= 0 && ty < this.grid.rows) {
+            const idx = indexOf(this.grid.cols, tx, ty);
+            // Reject jump onto an L1 passage (both L0 and L1 destroyed —
+            // there's no floor to land on). Reject without consuming cooldown
+            // so the player can immediately re-aim.
+            if (!isPassage(this.tiles, idx)) {
+              cur = {
+                ...cur,
+                x: tx * this.grid.panelSize + this.grid.panelSize / 2,
+                y: ty * this.grid.panelSize + this.grid.panelSize / 2,
+                panelJumpCooldownS: PANEL_JUMP_COOLDOWN_S,
+              };
+            }
+          }
+        }
       }
       this.states.set(id, cur);
     }
