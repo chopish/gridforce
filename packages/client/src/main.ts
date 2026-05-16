@@ -211,8 +211,13 @@ async function bootstrap(): Promise<void> {
         // We still tick the predictor (with idle input) so input lead
         // bookkeeping advances and a clean transition into 'playing' has
         // accurate predictedTick.
+        // Task 17 will pass the local player's predicted world position here
+        // and wire setCursorWorldPosCallback so facingRad becomes cursor-relative;
+        // for now we sample at the origin and step() only reads mx/my/shock/repair.
         const raw = inputs.sample();
-        const sample = world.phase === 'lobby' ? { mx: 0, my: 0, dash: false, sprint: false, shock: false, repair: false } : raw;
+        const sample = world.phase === 'lobby'
+          ? { mx: 0, my: 0, shock: false, repair: false }
+          : { mx: raw.mx, my: raw.my, shock: raw.shock, repair: raw.repair };
         const inp = world.step({ ...sample, clientTimeMs: now });
         socket.sendInput(inp);
         accumulator -= SERVER_TICK_DT_MS;

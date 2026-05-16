@@ -1,50 +1,68 @@
-// Captures keyboard + gamepad and exposes a snapshot the prediction loop can
-// sample once per tick. WASD / arrow keys map to mx/my; space is dash.
+// Captures keyboard + mouse + gamepad and exposes a snapshot the prediction
+// loop can sample once per tick.
 //
-// Dash is rising-edge: a press flags the next several sampled ticks as
-// dash=true. Sending the dash flag for multiple consecutive ticks survives
-// individual packet loss — the server only honours the first one (cooldown
-// gates the rest), so duplicate dashes are not a concern.
-//
-// Shock follows the same rising-edge pattern (F / LMB / gamepad B2).
-// Repair is held-state (R / RMB / gamepad B3).
+// v13 changes vs B1:
+//   - Sprint capture is dropped entirely (Shift is now the jump-target modal).
+//   - Dash rising-edge counter is dropped (panel-jump replaces dash and the
+//     server reads jumpHeld held-state directly).
+//   - Shock is held-state (F / LMB held → shock=true). No rising-edge latch;
+//     the server tracks how long the bit has been continuously set to drive
+//     the charged-shock charge meter.
+//   - Repair stays held-state (R / RMB held → repair=true).
+//   - Cursor-derived facing: while a mousemove listener tracks the cursor's
+//     screen position, the renderer supplies a screen→world callback so
+//     sample() can compute facingRad = atan2(cursor - localPlayer) per tick.
+//   - Jump-targeting modal: while ShiftLeft/ShiftRight is held, WASD keys are
+//     CONSUMED as cursor-tile offsets (clamped to ±PANEL_JUMP_TARGET_RANGE
+//     per axis). Movement vector is forced to zero during jump-hold so the
+//     player can't walk while picking a jump target. The server applies the
+//     jump on the falling edge of jumpHeld (key release).
 
-// How many ticks to keep dash/shock=true after a press. At 5% loss, 1 tick
-// has 5% miss rate; 3 ticks drops it to 0.0125%. Tradeoff: extra latency-of-
-// dash/shock if user spams, but cooldown gating means at most one per cooldown.
-const DASH_PRESS_TICKS = 3;
-const SHOCK_PRESS_TICKS = 3;
+import type { PlayerInput } from '@gridforce/shared';
+import { PANEL_JUMP_TARGET_RANGE } from '@gridforce/shared';
 
-export interface InputSnapshot {
-  mx: number;
-  my: number;
-  dash: boolean;
-  sprint: boolean;
-  shock: boolean;
-  repair: boolean;
-}
+export type SampledInput = Omit<PlayerInput, 'tick' | 'clientTimeMs'>;
 
 export class InputCapture {
+  // WASD held-state.
   private up = false;
   private down = false;
   private left = false;
   private right = false;
-  private sprint = false;
-  private repair = false;
-  private dashTicksRemaining = 0;
-  private shockTicksRemaining = 0;
 
-  // Mouse state. mouseLeftEdge is consumed once per sample() call (rising-edge).
-  private mouseLeftEdge = false;
+  // Held action bits.
+  private shockHeld = false;
+  private repairHeld = false;
+
+  // Mouse held-state. LMB → shock, RMB → repair.
+  private mouseLeftHeld = false;
   private mouseRightHeld = false;
+
+  // Cursor tracking. Screen coords are updated on every mousemove; world coords
+  // are resolved lazily via the renderer-supplied callback so we don't have to
+  // poke a CameraController dependency into this module.
+  private mouseScreenX = 0;
+  private mouseScreenY = 0;
+  private getCursorWorldPos: (() => { x: number; y: number }) | null = null;
+  private facingRad = 0;
+
+  // Jump-target modal state.
+  private jumpHeld = false;
+  private jumpCursorDx = 0;
+  private jumpCursorDy = 0;
 
   private readonly onKey: (e: KeyboardEvent) => void;
   private readonly onBlur: () => void;
+  private readonly onMouseMove = (e: MouseEvent): void => {
+    this.mouseScreenX = e.clientX;
+    this.mouseScreenY = e.clientY;
+  };
   private readonly onMouseDown = (e: MouseEvent): void => {
-    if (e.button === 0) this.mouseLeftEdge = true;
+    if (e.button === 0) this.mouseLeftHeld = true;
     if (e.button === 2) this.mouseRightHeld = true;
   };
   private readonly onMouseUp = (e: MouseEvent): void => {
+    if (e.button === 0) this.mouseLeftHeld = false;
     if (e.button === 2) this.mouseRightHeld = false;
   };
   private readonly onContextMenu = (e: Event): void => {
@@ -59,34 +77,62 @@ export class InputCapture {
       switch (e.code) {
         case 'KeyW':
         case 'ArrowUp':
-          this.up = pressed;
+          if (pressed && this.jumpHeld) {
+            // Jump-modal: W nudges cursor up by one tile, clamped.
+            this.jumpCursorDy = Math.max(-PANEL_JUMP_TARGET_RANGE, this.jumpCursorDy - 1);
+          } else {
+            this.up = pressed;
+          }
           break;
         case 'KeyS':
         case 'ArrowDown':
-          this.down = pressed;
+          if (pressed && this.jumpHeld) {
+            this.jumpCursorDy = Math.min(PANEL_JUMP_TARGET_RANGE, this.jumpCursorDy + 1);
+          } else {
+            this.down = pressed;
+          }
           break;
         case 'KeyA':
         case 'ArrowLeft':
-          this.left = pressed;
+          if (pressed && this.jumpHeld) {
+            this.jumpCursorDx = Math.max(-PANEL_JUMP_TARGET_RANGE, this.jumpCursorDx - 1);
+          } else {
+            this.left = pressed;
+          }
           break;
         case 'KeyD':
         case 'ArrowRight':
-          this.right = pressed;
-          break;
-        case 'Space':
-          if (pressed) this.dashTicksRemaining = DASH_PRESS_TICKS;
+          if (pressed && this.jumpHeld) {
+            this.jumpCursorDx = Math.min(PANEL_JUMP_TARGET_RANGE, this.jumpCursorDx + 1);
+          } else {
+            this.right = pressed;
+          }
           break;
         case 'ShiftLeft':
         case 'ShiftRight':
-          this.sprint = pressed;
+          if (pressed) {
+            // Entering jump-modal: reset cursor offset and zero held WASD so
+            // the player doesn't walk for a frame on jump release.
+            if (!this.jumpHeld) {
+              this.jumpCursorDx = 0;
+              this.jumpCursorDy = 0;
+            }
+            this.jumpHeld = true;
+            this.up = this.down = this.left = this.right = false;
+          } else {
+            // Releasing Shift is the trigger the server reads as "execute
+            // the jump." We leave jumpCursorDx/Dy intact so the falling-edge
+            // sample carries the final target offset.
+            this.jumpHeld = false;
+          }
           break;
         case 'KeyF':
-          // Shock rising-edge. F was previously used for netsim-cycle; that
-          // has been moved to KeyP in main.ts (B1 electrical-defense).
-          if (pressed) this.shockTicksRemaining = SHOCK_PRESS_TICKS;
+          // F is held-state shock (matches LMB). Server tracks held-duration
+          // for the charged-shock charge meter.
+          this.shockHeld = pressed;
           break;
         case 'KeyR':
-          this.repair = pressed;
+          this.repairHeld = pressed;
           break;
         default:
           return;
@@ -98,42 +144,87 @@ export class InputCapture {
     window.addEventListener('keydown', this.onKey);
     window.addEventListener('keyup', this.onKey);
     window.addEventListener('blur', this.onBlur);
+    window.addEventListener('mousemove', this.onMouseMove);
     window.addEventListener('mousedown', this.onMouseDown);
     window.addEventListener('mouseup', this.onMouseUp);
     window.addEventListener('contextmenu', this.onContextMenu);
   }
 
-  // Returns the input for this tick and clears any rising-edge latches.
-  sample(): InputSnapshot {
+  // Wired by main.ts once the CameraController is built (Task 17). The
+  // callback returns the cursor's current world-space position; we keep the
+  // dependency one-way so InputCapture has no direct reference to the camera.
+  setCursorWorldPosCallback(fn: () => { x: number; y: number }): void {
+    this.getCursorWorldPos = fn;
+  }
+
+  // Read-only cursor screen coords — exposed so the renderer can compute
+  // world coords on demand if it wants to share the resolved point.
+  getMouseScreenX(): number {
+    return this.mouseScreenX;
+  }
+  getMouseScreenY(): number {
+    return this.mouseScreenY;
+  }
+
+  // Jump-overlay accessors (Task 22). The overlay draws a tile-highlight at
+  // localPlayer + (dx, dy) tiles while jumpHeld is true.
+  isJumpHeld(): boolean {
+    return this.jumpHeld;
+  }
+  getJumpCursorDx(): number {
+    return this.jumpCursorDx;
+  }
+  getJumpCursorDy(): number {
+    return this.jumpCursorDy;
+  }
+
+  private updateFacingFromCursor(localPlayerPos: { x: number; y: number }): void {
+    if (!this.getCursorWorldPos) return;
+    const c = this.getCursorWorldPos();
+    this.facingRad = Math.atan2(c.y - localPlayerPos.y, c.x - localPlayerPos.x);
+  }
+
+  private computeMoveX(): number {
     let mx = 0;
-    let my = 0;
     if (this.left) mx -= 1;
     if (this.right) mx += 1;
+    return mx;
+  }
+
+  private computeMoveY(): number {
+    let my = 0;
     if (this.up) my -= 1;
     if (this.down) my += 1;
+    return my;
+  }
+
+  // Returns the input for this tick. localPlayerPos is the predicted world
+  // position of the local player (used to compute cursor-relative facing).
+  // Defaults to origin so this remains callable before the renderer wires
+  // up the cursor callback (Task 17 wires both).
+  sample(localPlayerPos: { x: number; y: number } = { x: 0, y: 0 }): SampledInput {
+    this.updateFacingFromCursor(localPlayerPos);
+
+    let mx = this.jumpHeld ? 0 : this.computeMoveX();
+    let my = this.jumpHeld ? 0 : this.computeMoveY();
 
     // Gamepad overrides keyboard if connected and any axis is non-trivial.
+    // Gamepad is suppressed during jump-modal for the same reason WASD is —
+    // we don't want the player walking while picking a jump target.
     const pad = navigator.getGamepads?.()[0];
-    let sprintPressed = false;
-    let gamepadShockPressed = false;
+    let gamepadShockHeld = false;
     let gamepadRepairHeld = false;
     if (pad) {
-      const ax = pad.axes[0] ?? 0;
-      const ay = pad.axes[1] ?? 0;
-      if (Math.hypot(ax, ay) > 0.15) {
-        mx = ax;
-        my = ay;
+      if (!this.jumpHeld) {
+        const ax = pad.axes[0] ?? 0;
+        const ay = pad.axes[1] ?? 0;
+        if (Math.hypot(ax, ay) > 0.15) {
+          mx = ax;
+          my = ay;
+        }
       }
-      if ((pad.buttons[0]?.pressed ?? false) || (pad.buttons[7]?.pressed ?? false)) {
-        this.dashTicksRemaining = DASH_PRESS_TICKS;
-      }
-      sprintPressed = pad.buttons[6]?.pressed ?? false;
-      // B2 = shock rising-edge (matches keyboard F / mouse LMB pattern).
-      // B3 = repair held (matches keyboard R / mouse RMB pattern).
-      if (pad.buttons[2]?.pressed ?? false) {
-        this.shockTicksRemaining = SHOCK_PRESS_TICKS;
-      }
-      gamepadShockPressed = pad.buttons[2]?.pressed ?? false;
+      // B2 = shock held, B3 = repair held.
+      gamepadShockHeld = pad.buttons[2]?.pressed ?? false;
       gamepadRepairHeld = pad.buttons[3]?.pressed ?? false;
     }
 
@@ -144,37 +235,34 @@ export class InputCapture {
       my /= mag;
     }
 
-    const dash = this.dashTicksRemaining > 0;
-    if (this.dashTicksRemaining > 0) this.dashTicksRemaining--;
-
-    const shock = this.shockTicksRemaining > 0 || this.mouseLeftEdge || gamepadShockPressed;
-    if (this.shockTicksRemaining > 0) this.shockTicksRemaining--;
-    // Consume the mouse left rising-edge latch now that it has been read.
-    this.mouseLeftEdge = false;
-
     return {
       mx,
       my,
-      dash,
-      sprint: this.sprint || sprintPressed,
-      shock,
-      repair: this.repair || this.mouseRightHeld || gamepadRepairHeld,
+      shock: this.shockHeld || this.mouseLeftHeld || gamepadShockHeld,
+      repair: this.repairHeld || this.mouseRightHeld || gamepadRepairHeld,
+      jumpHeld: this.jumpHeld,
+      jumpCursorDx: this.jumpCursorDx,
+      jumpCursorDy: this.jumpCursorDy,
+      facingRad: this.facingRad,
     };
   }
 
   clear(): void {
-    this.up = this.down = this.left = this.right = this.sprint = false;
-    this.repair = false;
-    this.dashTicksRemaining = 0;
-    this.shockTicksRemaining = 0;
-    this.mouseLeftEdge = false;
+    this.up = this.down = this.left = this.right = false;
+    this.shockHeld = false;
+    this.repairHeld = false;
+    this.mouseLeftHeld = false;
     this.mouseRightHeld = false;
+    this.jumpHeld = false;
+    this.jumpCursorDx = 0;
+    this.jumpCursorDy = 0;
   }
 
   dispose(): void {
     window.removeEventListener('keydown', this.onKey);
     window.removeEventListener('keyup', this.onKey);
     window.removeEventListener('blur', this.onBlur);
+    window.removeEventListener('mousemove', this.onMouseMove);
     window.removeEventListener('mousedown', this.onMouseDown);
     window.removeEventListener('mouseup', this.onMouseUp);
     window.removeEventListener('contextmenu', this.onContextMenu);
