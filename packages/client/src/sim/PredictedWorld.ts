@@ -221,7 +221,17 @@ export class PredictedWorld {
 
   // Advance one predicted tick using the supplied input for the local player.
   // Returns the input tagged with its predicted tick (for sending to the server).
-  step(local: { mx: number; my: number; shock: boolean; repair: boolean; clientTimeMs: number }): PlayerInput {
+  step(local: {
+    mx: number;
+    my: number;
+    shock: boolean;
+    repair: boolean;
+    jumpHeld: boolean;
+    jumpCursorDx: number;
+    jumpCursorDy: number;
+    facingRad: number;
+    clientTimeMs: number;
+  }): PlayerInput {
     this.predictedTick++;
 
     // Snapshot prev for render-time interpolation.
@@ -237,10 +247,10 @@ export class PredictedWorld {
       my: local.my,
       shock: local.shock,
       repair: local.repair,
-      jumpHeld: false,
-      jumpCursorDx: 0,
-      jumpCursorDy: 0,
-      facingRad: 0,
+      jumpHeld: local.jumpHeld,
+      jumpCursorDx: local.jumpCursorDx,
+      jumpCursorDy: local.jumpCursorDy,
+      facingRad: local.facingRad,
     };
     const nextLocal = stepPlayer(localState, input, SERVER_TICK_DT_S, this.grid);
 

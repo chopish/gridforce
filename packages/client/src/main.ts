@@ -223,13 +223,38 @@ async function bootstrap(): Promise<void> {
         // We still tick the predictor (with idle input) so input lead
         // bookkeeping advances and a clean transition into 'playing' has
         // accurate predictedTick.
-        // Task 17 will pass the local player's predicted world position here
-        // and wire setCursorWorldPosCallback so facingRad becomes cursor-relative;
-        // for now we sample at the origin and step() only reads mx/my/shock/repair.
-        const raw = inputs.sample();
+        //
+        // Feed the local player's predicted world position into sample() so
+        // facingRad is cursor-relative (atan2(cursor - localPlayer)). Before
+        // the first snapshot lands, the local player may not exist yet — fall
+        // back to origin, which produces a meaningless-but-safe facing value
+        // and means no shock can fire in that window anyway (no localPlayer).
+        const localForFacing = world.players.get(world.localPlayerId);
+        const localPos = localForFacing
+          ? { x: localForFacing.x, y: localForFacing.y }
+          : { x: 0, y: 0 };
+        const raw = inputs.sample(localPos);
         const sample = world.phase === 'lobby'
-          ? { mx: 0, my: 0, shock: false, repair: false }
-          : { mx: raw.mx, my: raw.my, shock: raw.shock, repair: raw.repair };
+          ? {
+              mx: 0,
+              my: 0,
+              shock: false,
+              repair: false,
+              jumpHeld: false,
+              jumpCursorDx: 0,
+              jumpCursorDy: 0,
+              facingRad: raw.facingRad,
+            }
+          : {
+              mx: raw.mx,
+              my: raw.my,
+              shock: raw.shock,
+              repair: raw.repair,
+              jumpHeld: raw.jumpHeld,
+              jumpCursorDx: raw.jumpCursorDx,
+              jumpCursorDy: raw.jumpCursorDy,
+              facingRad: raw.facingRad,
+            };
         const inp = world.step({ ...sample, clientTimeMs: now });
         socket.sendInput(inp);
         accumulator -= SERVER_TICK_DT_MS;
