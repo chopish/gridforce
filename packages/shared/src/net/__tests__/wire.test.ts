@@ -2,9 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { SCHEMA_VERSION } from '../../constants.js';
-import { PanelState, allLive } from '../../panels.js';
 import { allocateTiles, type TileBuffers } from '../../tiles.js';
-import type { PlayerState, SnapshotPayload } from '../../types.js';
+import type { PlayerState, SnapshotPayload, WelcomePayload } from '../../types.js';
 import {
   AddBotMsg,
   ErrorMsg,
@@ -58,6 +57,29 @@ function makeBaselineSnapshot(overrides: Partial<SnapshotPayload> = {}): Snapsho
   };
 }
 
+function makeBaselineWelcome(overrides: Partial<WelcomePayload> = {}): WelcomePayload {
+  const grid = overrides.grid ?? { cols: 18, rows: 12, panelSize: 64 };
+  const tiles: TileBuffers = overrides.tiles ?? allocateTiles(grid.cols, grid.rows);
+  return {
+    yourPlayerId: 0,
+    grid,
+    startTick: 0,
+    serverTimeMs: 0,
+    phase: 'lobby',
+    hostId: 0,
+    difficulty: 0,
+    runId: 'test-run',
+    currentStageIndex: 0,
+    currentPhaseIndex: 0,
+    phaseElapsedS: 0,
+    maxPlayers: 4,
+    sessionKey: '',
+    players: [],
+    tiles,
+    ...overrides,
+  };
+}
+
 function roundtrip<T>(
   encoded: Uint8Array,
   expected: { type: MessageType; payload: T },
@@ -99,7 +121,7 @@ test('Hello round-trip', () => {
 });
 
 test('Welcome round-trip', () => {
-  const payload = {
+  const payload = makeBaselineWelcome({
     yourPlayerId: 3,
     grid: { cols: 18, rows: 12, panelSize: 64 },
     startTick: 1234,
@@ -117,8 +139,7 @@ test('Welcome round-trip', () => {
       { ...newPlayerState(0, 100, 100, 'alice'), facing: 1.234, stateSeq: 7 },
       { ...newPlayerState(3, 200, 250, 'bob'), facing: -0.5, stateSeq: 9, ready: true },
     ],
-    panelStates: allLive(18, 12),
-  };
+  });
   const decoded = decodeMessage(WelcomeMsg.encode(payload));
   assert.equal(decoded.type, MessageType.Welcome);
   const w = decoded.payload;
@@ -514,30 +535,42 @@ test('CrawlerEncoder round-trips Crawler state', async () => {
   assert.ok(Math.abs(decoded.y - 200) <= 1, 'y int round-trip');
 });
 
-test('Welcome carries full panel-state byte array', () => {
-  const panelBuf = allLive(18, 12);
-  panelBuf[10] = PanelState.DAMAGED;
-  const decoded = decodeMessage(WelcomeMsg.encode({
+test('Welcome carries full multi-layer tile buffers', () => {
+  const cols = 18, rows = 12;
+  const tiles = allocateTiles(cols, rows);
+  // Mark one tile as damaged-on-L1 to mirror the legacy panel-state shape.
+  tiles.l1Hp[10] = 40;
+  const decoded = decodeMessage(WelcomeMsg.encode(makeBaselineWelcome({
     yourPlayerId: 0,
-    grid: { cols: 18, rows: 12, panelSize: 64 },
-    startTick: 0,
-    serverTimeMs: 0,
-    phase: 'lobby',
-    hostId: 0,
+    grid: { cols, rows, panelSize: 64 },
     difficulty: 1,
-    runId: 'test-run',
-    currentStageIndex: 0,
-    currentPhaseIndex: 0,
-    phaseElapsedS: 0,
-    maxPlayers: 4,
-    sessionKey: '',
-    players: [],
-    panelStates: panelBuf,
-  }));
+    tiles,
+  })));
   assert.equal(decoded.type, MessageType.Welcome);
   const w = decoded.payload;
-  assert.equal(w.panelStates.length, 18 * 12);
-  assert.equal(w.panelStates[10], PanelState.DAMAGED);
+  assert.equal(w.tiles.l1Hp.length, cols * rows);
+  assert.equal(w.tiles.l1Hp[10], 40);
+});
+
+test('Welcome v13 round-trips multi-layer tile state', () => {
+  const cols = 4, rows = 3;
+  const n = cols * rows;
+  const l0Hp = new Uint8Array(n).fill(200);
+  l0Hp[5] = 150;
+  const l1Hp = new Uint8Array(n).fill(100);
+  l1Hp[5] = 50; l1Hp[6] = 0;
+  const l2Kind = new Uint8Array(n);
+  const l2Hp = new Uint8Array(n);
+  const tiles = { l0Hp, l1Hp, l2Kind, l2Hp };
+  const payload = makeBaselineWelcome({ tiles, grid: { cols, rows, panelSize: 64 } });
+  const enc = WelcomeMsg.encode(payload);
+  const dec = decodeMessage(enc);
+  assert.equal(dec.type, MessageType.Welcome);
+  const got = dec.payload as WelcomePayload;
+  assert.deepEqual(Array.from(got.tiles.l0Hp), Array.from(l0Hp));
+  assert.deepEqual(Array.from(got.tiles.l1Hp), Array.from(l1Hp));
+  assert.deepEqual(Array.from(got.tiles.l2Kind), Array.from(l2Kind));
+  assert.deepEqual(Array.from(got.tiles.l2Hp), Array.from(l2Hp));
 });
 
 test('PlayerEncoder v13 round-trips facingCursorRad and shockHeldS', () => {

@@ -419,6 +419,19 @@ export class Room {
   }
 
   private sendWelcome(conn: Connection): void {
+    // Task 7 shim: mirror the broadcastSnapshot approach — derive a fresh
+    // TileBuffers from the legacy panelStates byte buffer each time. Task 9
+    // retires this.panelStates in favor of native TileBuffers storage and
+    // removes both shims.
+    const tiles: TileBuffers = allocateTiles(this.grid.cols, this.grid.rows);
+    for (let i = 0; i < this.panelStates.length; i++) {
+      const s = this.panelStates[i];
+      if (s === PanelState.DAMAGED) {
+        tiles.l1Hp[i] = 40;
+      } else if (s === PanelState.BROKEN) {
+        tiles.l1Hp[i] = 0;
+      }
+    }
     conn.send(
       WelcomeMsg.encode({
         yourPlayerId: conn.playerId,
@@ -435,7 +448,7 @@ export class Room {
         maxPlayers: this.maxPlayers,
         sessionKey: conn.sessionKey,
         players: Array.from(this.states.values()),
-        panelStates: this.panelStates,
+        tiles,
       }),
     );
   }

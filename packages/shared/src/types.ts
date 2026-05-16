@@ -174,8 +174,9 @@ export interface WelcomePayload {
   // (invite creation, future room settings). Sent only inside this
   // player's Welcome — never broadcast to others.
   sessionKey: string;
-  // B1: full panel-state buffer (raw bytes, NOT RLE — joiner-friendly).
-  panelStates: Uint8Array;
+  // C1 v13: full multi-layer tile state (raw bytes, NOT RLE — joiner-friendly).
+  // Four parallel u8 buffers: l0Hp, l1Hp, l2Kind, l2Hp.
+  tiles: TileBuffers;
 }
 
 // Lobby controls. Sent by the client.
