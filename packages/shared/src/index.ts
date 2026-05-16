@@ -12,4 +12,5 @@ export * from './net/index.js';
 export { PanelState, allLive, encodeRle, decodeRle } from './panels.js';
 export type { PanelStateValue } from './panels.js';
 export * from './tiles.js';
+export * from './integrity.js';
 export * from './enemies/crawler.js';
