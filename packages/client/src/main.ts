@@ -307,14 +307,12 @@ async function bootstrap(): Promise<void> {
         lastRenderedStageId = currentStage.id;
       }
 
-      // Push latest panel states to the grid renderer each frame.
-      // Reference-equality check inside setPanelStates avoids redundant redraws.
-      // C1 v13: tiles.l1Hp is the closest legacy analog (panel HP byte buffer).
-      // Task 18 rewrites GridRenderer to consume the full TileBuffers; until
-      // then the renderer treats HP bytes as legacy PanelState values, which
-      // is visually wrong but compiles cleanly.
+      // Push latest layered tile state to the grid renderer each frame.
+      // Reference-equality check inside setTiles avoids redundant redraws —
+      // PredictedWorld swaps the TileBuffers object on snapshot apply, so
+      // most frames are a cheap pointer compare.
       if (world.tiles.l1Hp.length > 0) {
-        renderer.gridRenderer.setPanelStates(world.tiles.l1Hp);
+        renderer.gridRenderer.setTiles(world.tiles);
       }
 
       // Render players: local from prediction, remotes from interpolator.
