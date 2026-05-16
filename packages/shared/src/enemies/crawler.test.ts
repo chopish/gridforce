@@ -22,6 +22,7 @@ test('stepCrawler CHASE walks toward target at full speed', () => {
     y: 5 * GRID.panelSize + GRID.panelSize / 2,
     facing: 0, hp: 1, targetCx: 1, targetCy: 5,
     ai: CrawlerAIState.APPROACHING,
+    windUpInS: 0,
   };
   const task: CrawlerTask = {
     kind: CrawlerTaskKind.CHASE_PLAYER,
@@ -40,6 +41,7 @@ test('stepCrawler CHASE stops and ATTACKS when on top of the target', () => {
     id: 1, x, y,
     facing: 0, hp: 1, targetCx: 5, targetCy: 5,
     ai: CrawlerAIState.APPROACHING,
+    windUpInS: 0,
   };
   const task: CrawlerTask = { kind: CrawlerTaskKind.CHASE_PLAYER, targetX: x, targetY: y };
   const after = stepCrawler(c, task, 0.1, GRID, makeCtx());
@@ -54,6 +56,7 @@ test('stepCrawler ATTACK_TILE freezes the bug on the specified tile', () => {
     y: 5 * GRID.panelSize + 10,
     facing: 0, hp: 1, targetCx: 0, targetCy: 0,
     ai: CrawlerAIState.APPROACHING,
+    windUpInS: 0,
   };
   const task: CrawlerTask = { kind: CrawlerTaskKind.ATTACK_TILE, targetCx: 5, targetCy: 5 };
   const after = stepCrawler(c, task, 0.1, GRID, makeCtx());
@@ -70,6 +73,7 @@ test('stepCrawler does not mutate tile HP (Room aggregates weight)', () => {
     y: 5 * GRID.panelSize + GRID.panelSize / 2,
     facing: 0, hp: 1, targetCx: 5, targetCy: 5,
     ai: CrawlerAIState.ATTACKING,
+    windUpInS: 0,
   };
   const ctx = makeCtx();
   const before = ctx.tiles.l1Hp[indexOf(GRID.cols, 5, 5)];

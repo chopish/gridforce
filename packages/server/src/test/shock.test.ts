@@ -67,6 +67,7 @@ function plantCrawler(r: RoomInternals, id: number, cx: number, cy: number): voi
     y: cy * r.grid.panelSize + r.grid.panelSize / 2,
     facing: Math.PI, hp: 1,
     targetCx: cx, targetCy: cy, ai: CrawlerAIState.ATTACKING,
+    windUpInS: 0,
   });
 }
 

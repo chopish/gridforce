@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { SCHEMA_VERSION } from '../../constants.js';
 import { newPlayerState } from '../../sim.js';
 import { allocateTiles, type TileBuffers } from '../../tiles.js';
+import { CrawlerAIState } from '../../types.js';
 import type { PlayerState, SnapshotPayload, WelcomePayload } from '../../types.js';
 import {
   AddBotMsg,
@@ -503,7 +504,7 @@ test('CarbonEncoder round-trips Carbon state', async () => {
 
 test('CrawlerEncoder round-trips Crawler state', async () => {
   const { CrawlerEncoder } = await import('../entities/CrawlerEncoder.js');
-  const c = { id: 42, x: 320.5, y: 200, facing: Math.PI / 2, hp: 1, targetCx: 5, targetCy: 6, ai: 1 as const };
+  const c = { id: 42, x: 320.5, y: 200, facing: Math.PI / 2, hp: 1, targetCx: 5, targetCy: 6, ai: 1 as const, windUpInS: 0 };
   const w = new BinaryWriter(32);
   CrawlerEncoder.encode(w, c);
   const r = new BinaryReader(w.finish());
@@ -515,6 +516,46 @@ test('CrawlerEncoder round-trips Crawler state', async () => {
   assert.equal(decoded.ai, 1);
   assert.ok(Math.abs(decoded.x - 320) <= 1, 'x int round-trip');
   assert.ok(Math.abs(decoded.y - 200) <= 1, 'y int round-trip');
+});
+
+test('CrawlerEncoder round-trips new AI state values (WIND_UP, RECOVERY, SEARCHING, IDLE)', async () => {
+  const { CrawlerEncoder } = await import('../entities/CrawlerEncoder.js');
+  const states = [
+    CrawlerAIState.WIND_UP,
+    CrawlerAIState.RECOVERY,
+    CrawlerAIState.SEARCHING,
+    CrawlerAIState.IDLE,
+  ];
+  for (const aiState of states) {
+    const w = new BinaryWriter(32);
+    const c = {
+      id: 42, x: 100, y: 200, facing: 0, hp: 1,
+      targetCx: 1, targetCy: 2, ai: aiState, windUpInS: 0,
+    };
+    CrawlerEncoder.encode(w, c);
+    const r = new BinaryReader(w.finish());
+    const decoded = CrawlerEncoder.decode(r);
+    assert.equal(decoded.ai, aiState);
+  }
+});
+
+test('CrawlerEncoder round-trips windUpInS quantized to ~10ms precision', async () => {
+  const { CrawlerEncoder } = await import('../entities/CrawlerEncoder.js');
+  const w = new BinaryWriter(32);
+  const c = {
+    id: 1, x: 0, y: 0, facing: 0, hp: 1,
+    targetCx: 0, targetCy: 0,
+    ai: CrawlerAIState.WIND_UP,
+    windUpInS: 0.6,
+  };
+  CrawlerEncoder.encode(w, c);
+  const r = new BinaryReader(w.finish());
+  const decoded = CrawlerEncoder.decode(r);
+  assert.ok(Math.abs(decoded.windUpInS - 0.6) < 0.02);
+});
+
+test('Schema version is 15', () => {
+  assert.equal(SCHEMA_VERSION, 15);
 });
 
 test('Welcome carries full multi-layer tile buffers', () => {

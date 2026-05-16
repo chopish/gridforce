@@ -14,15 +14,24 @@ function unquantizeFacing(q: number): number {
   return (q / 256) * TWO_PI;
 }
 
-// Layout (10 bytes per Crawler):
-//   u16 id       (2)
-//   i16 x        (2)   px, rounded; world < 32768 px wide
-//   i16 y        (2)   px, rounded
-//   u8  facingQ  (1)   facing quantized 0..255
-//   u8  hp       (1)   default 1 in B1
-//   u8  targetCx (1)   grid column (u8)
-//   u8  targetCy (1)   grid row (u8)
-//   u8  ai       (1)   CrawlerAIState value
+function quantizeWindUp(s: number): number {
+  const q = Math.round(Math.max(0, s) * 100);
+  return q > 0xff ? 0xff : q;
+}
+function unquantizeWindUp(q: number): number {
+  return q / 100;
+}
+
+// Layout (12 bytes per Crawler):
+//   u16 id        (2)
+//   i16 x         (2)   px, rounded; world < 32768 px wide
+//   i16 y         (2)   px, rounded
+//   u8  facingQ   (1)   facing quantized 0..255
+//   u8  hp        (1)
+//   u8  targetCx  (1)   grid column (u8)
+//   u8  targetCy  (1)   grid row (u8)
+//   u8  ai        (1)   CrawlerAIState value
+//   u8  windUpQ   (1)   wind-up seconds remaining × 100; 0 unless WIND_UP
 export const CrawlerEncoder: EntityEncoder<CrawlerState> = {
   type: EntityType.Crawler,
   encode(w: BinaryWriter, c: CrawlerState): void {
@@ -34,6 +43,7 @@ export const CrawlerEncoder: EntityEncoder<CrawlerState> = {
     w.u8(c.targetCx & 0xff);
     w.u8(c.targetCy & 0xff);
     w.u8(c.ai & 0xff);
+    w.u8(quantizeWindUp(c.windUpInS));
   },
   decode(r: BinaryReader): CrawlerState {
     const id = r.u16();
@@ -44,6 +54,7 @@ export const CrawlerEncoder: EntityEncoder<CrawlerState> = {
     const targetCx = r.u8();
     const targetCy = r.u8();
     const ai = r.u8() as CrawlerAIStateValue;
-    return { id, x, y, facing, hp, targetCx, targetCy, ai };
+    const windUpInS = unquantizeWindUp(r.u8());
+    return { id, x, y, facing, hp, targetCx, targetCy, ai, windUpInS };
   },
 };

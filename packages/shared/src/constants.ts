@@ -53,7 +53,11 @@
 //       encoded as a 5th RLE block in snapshot and a 5th raw block in
 //       welcome. Shock is now 360° ray-marched (not cardinal-snapped) and
 //       fires only on falling-edge release; rising-edge tap is gone.
-export const SCHEMA_VERSION = 14;
+//  v15: C2 priority AI. CrawlerAIState gains WIND_UP=3, RECOVERY=4,
+//       SEARCHING=5, IDLE=6. CrawlerEncoder gains a u8 windUpInS field
+//       (quantized at 100 units/second; ~10 ms resolution, max ~2.55 s)
+//       so clients can render a charge-up bar over wind-up bugs.
+export const SCHEMA_VERSION = 15;
 
 // Tick rates
 export const SERVER_TICK_HZ = 30;

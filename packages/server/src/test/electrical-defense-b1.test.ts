@@ -93,7 +93,7 @@ test('B1 endless loop: shock kills a planted crawler and drops carbon', async ()
     const r = room as unknown as {
       states: Map<number, { x: number; y: number }>;
       grid: { cols: number; rows: number; panelSize: number };
-      crawlers: Map<number, { id: number; x: number; y: number; facing: number; hp: number; targetCx: number; targetCy: number; ai: number }>;
+      crawlers: Map<number, { id: number; x: number; y: number; facing: number; hp: number; targetCx: number; targetCy: number; ai: number; windUpInS: number }>;
       tiles: TileBuffers;
     };
     const hostState = r.states.get(id)!;
@@ -105,6 +105,7 @@ test('B1 endless loop: shock kills a planted crawler and drops carbon', async ()
       y: cy * r.grid.panelSize + r.grid.panelSize / 2,
       facing: Math.PI, hp: 1,
       targetCx: cx, targetCy: cy, ai: CrawlerAIState.ATTACKING,
+      windUpInS: 0,
     });
     // Reset tile state so the panel under that crawler is at full L1 HP
     // and therefore conducts.

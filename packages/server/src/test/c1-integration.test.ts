@@ -84,6 +84,7 @@ function planCrawlerAttacking(r: RoomInternals, cx: number, cy: number): number 
     targetCx: cx,
     targetCy: cy,
     ai: CrawlerAIState.ATTACKING,
+    windUpInS: 0,
   });
   return id;
 }

@@ -52,6 +52,7 @@ function plantAttacker(
     targetCx: cx,
     targetCy: cy,
     ai: CrawlerAIState.ATTACKING,
+    windUpInS: 0,
   });
 }
 

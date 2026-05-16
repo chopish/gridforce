@@ -601,6 +601,7 @@ export class Room {
       id, x, y, facing, hp: 1,
       targetCx: cx, targetCy: cy,
       ai: CrawlerAIState.APPROACHING,
+      windUpInS: 0,
     });
   }
 

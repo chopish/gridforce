@@ -42,6 +42,10 @@ export const CrawlerAIState = {
   APPROACHING: 0,
   ATTACKING: 1,
   TRANSITING: 2,
+  WIND_UP: 3,
+  RECOVERY: 4,
+  SEARCHING: 5,
+  IDLE: 6,
 } as const;
 export type CrawlerAIStateValue = (typeof CrawlerAIState)[keyof typeof CrawlerAIState];
 
@@ -54,6 +58,10 @@ export interface CrawlerState {
   targetCx: number; // u8 column
   targetCy: number; // u8 row
   ai: CrawlerAIStateValue;
+  // Seconds remaining on the wind-up timer. Only meaningful when ai is
+  // WIND_UP; encoded as 0 otherwise. Wire-quantized at 100 units/s (u8
+  // capacity 0..2.55 s).
+  windUpInS: number;
 }
 
 // Carbon pickup dropped by destroyed crawlers. Collected by players on
