@@ -6,6 +6,7 @@ import {
   PLAYER_CARBON_MAX,
   PLAYER_RADIUS,
   CRAWLER_SPAWN_INTERVAL_S,
+  CRAWLER_WEIGHT,
   MAX_ALIVE_CRAWLERS,
   SHOCK_COOLDOWN_S,
   REPAIR_DURATION_S,
@@ -23,6 +24,8 @@ import {
   PlayerJoinedMsg,
   allocateTiles,
   conductive,
+  damagePerSecond,
+  damageTopmost,
   topmostLayer,
   type TileBuffers,
   PlayerLeftMsg,
@@ -131,6 +134,14 @@ export class Room {
   // repair, and crawler AI all read/write this directly now; full rewrites
   // of those subsystems land in Tasks 10-13.
   tiles: TileBuffers = allocateTiles(GRID_COLS, GRID_ROWS);
+
+  // Per-tile sub-integer damage accumulator for the weight-integrity loop.
+  // The hp buffers are Uint8 (wire-friendly) so fractional damage per tick
+  // (e.g. 2 hp/s × 1/30 s = 0.067 hp) would otherwise be truncated to 1 hp
+  // on each assignment, massively over-quantizing damage. We accumulate
+  // fractional damage here and only flush whole-integer amounts into the
+  // hp buffers via damageTopmost.
+  private damageAccum: Float32Array = new Float32Array(GRID_COLS * GRID_ROWS);
 
   // The active stage's grid. Derived so a stage advance during play
   // automatically swaps it without rewiring every consumer.
@@ -655,6 +666,13 @@ export class Room {
       }
     }
 
+    // Weight-driven integrity damage: each ATTACKING crawler contributes
+    // CRAWLER_WEIGHT to its target tile; per tile, total load = self + the
+    // four cardinal neighbours. Damage = damagePerSecond(load, armor) × dt,
+    // applied to the topmost layer. Runs after crawlers have stepped so
+    // weight reflects the current frame's AI states.
+    this.applyWeightIntegrity(SERVER_TICK_DT_S);
+
     // Carbon expiry + pickup. Combat kills (Task 10) call spawnCarbon directly.
     for (const [id, carbon] of this.carbons) {
       const nextTtl = carbon.ttlS - SERVER_TICK_DT_S;
@@ -685,6 +703,57 @@ export class Room {
     const cur = this.currentPhaseDef();
     if (cur.durationS !== null && this.phaseElapsedS >= cur.durationS) {
       this.advancePhase();
+    }
+  }
+
+  // Per-tick weight aggregation + integrity damage pass. Only ATTACKING
+  // crawlers contribute weight (APPROACHING haven't arrived; TRANSITING are
+  // leaving). For each tile, load = own weight + 4-cardinal neighbours.
+  // Damage = damagePerSecond(load, armor) × dt → topmost layer. Armor is 0
+  // for L0/L1 in C1; the L2 add-on armor table arrives in a later task.
+  private applyWeightIntegrity(dt: number): void {
+    const cols = this.grid.cols;
+    const rows = this.grid.rows;
+    const n = cols * rows;
+    // Resize the accumulator if the active grid changed (stage swap, etc.).
+    if (this.damageAccum.length !== n) {
+      this.damageAccum = new Float32Array(n);
+    }
+    const weightAt = new Uint16Array(n);
+    for (const c of this.crawlers.values()) {
+      if (c.ai !== CrawlerAIState.ATTACKING) continue;
+      // Guard against out-of-bounds targets just in case.
+      if (
+        c.targetCx < 0 || c.targetCx >= cols ||
+        c.targetCy < 0 || c.targetCy >= rows
+      ) {
+        continue;
+      }
+      weightAt[indexOf(cols, c.targetCx, c.targetCy)]! += CRAWLER_WEIGHT;
+    }
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        const idx = indexOf(cols, x, y);
+        let w = weightAt[idx]!;
+        if (x > 0) w += weightAt[indexOf(cols, x - 1, y)]!;
+        if (x < cols - 1) w += weightAt[indexOf(cols, x + 1, y)]!;
+        if (y > 0) w += weightAt[indexOf(cols, x, y - 1)]!;
+        if (y < rows - 1) w += weightAt[indexOf(cols, x, y + 1)]!;
+        if (w === 0) continue;
+        const top = topmostLayer(this.tiles, idx);
+        if (top === null) continue;
+        // Armor is 0 for L0/L1 in C1 (L2 addon catalog with armor lands later).
+        const armor = 0;
+        const dps = damagePerSecond(w, armor);
+        // The tile hp buffers are Uint8 — assigning fractional damage would
+        // truncate ~0.067 hp to 1 hp each tick, grossly over-damaging. Buffer
+        // sub-integer damage in damageAccum and only flush whole hp once it
+        // crosses 1.0.
+        const acc = this.damageAccum[idx]! + dps * dt;
+        const whole = Math.floor(acc);
+        this.damageAccum[idx] = acc - whole;
+        if (whole > 0) damageTopmost(this.tiles, idx, whole);
+      }
     }
   }
 
