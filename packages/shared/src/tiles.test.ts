@@ -5,6 +5,7 @@ import {
   conductive,
   damageTopmost,
   indexOf,
+  isPassage,
   topmostLayer,
   LayerKind,
 } from './tiles.js';
@@ -64,9 +65,21 @@ test('damageTopmost reduces the topmost layer HP and saturates at 0', () => {
   // Now L0 is the topmost.
   damageTopmost(t, 0, 50);
   assert.equal(t.l0Hp[0], L0_DOME_MAX_HP - 50);
+  damageTopmost(t, 0, 1000); // L0 overkill
+  assert.equal(t.l0Hp[0], 0);
   // L2 absorption.
+  t.l1Hp[0] = 50; // re-arm L1 so we can verify the L2 hit doesn't touch it
   t.l2Kind[0] = 1; t.l2Hp[0] = 40;
   damageTopmost(t, 0, 30);
   assert.equal(t.l2Hp[0], 10);
-  assert.equal(t.l1Hp[0], 0); // untouched by L2 absorption
+  assert.equal(t.l1Hp[0], 50); // L2 absorbed; L1 untouched
+});
+
+test('isPassage returns true only when L1 and L0 are both destroyed', () => {
+  const t = allocateTiles(1, 1);
+  assert.equal(isPassage(t, 0), false); // fresh tile
+  t.l1Hp[0] = 0;
+  assert.equal(isPassage(t, 0), false); // L1 gone, L0 intact
+  t.l0Hp[0] = 0;
+  assert.equal(isPassage(t, 0), true);  // both gone — passage
 });
