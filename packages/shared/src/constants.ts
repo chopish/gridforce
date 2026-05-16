@@ -171,11 +171,14 @@ export const CARBON_TTL_S = 10;
 export const CARBON_PICKUP_RADIUS = 16;
 export const PLAYER_CARBON_MAX = 99;
 
-// Crawlers.
+// Crawlers. Spawn rate + cap were bumped in C1.6 so a real swarm can form
+// — the priority-AI's "critical mass" threshold needs ~15+ bugs in a
+// small radius before chasing folds to attacking, which can't happen at
+// the old cap of 8.
 export const CRAWLER_MOVE_SPEED = 80;        // px/s
 export const CRAWLER_RADIUS = 14;            // px
-export const CRAWLER_SPAWN_INTERVAL_S = 1.0; // continuous trickle in B1
-export const MAX_ALIVE_CRAWLERS = 8;         // B1 cap; B2 wave manager raises this
+export const CRAWLER_SPAWN_INTERVAL_S = 0.5; // continuous trickle
+export const MAX_ALIVE_CRAWLERS = 25;        // ceiling on live mites
 
 // --- C1 layered-tiles & priority-AI tuning (placeholders, expect playtest changes) ---
 

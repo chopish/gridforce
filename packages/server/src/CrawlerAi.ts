@@ -10,37 +10,65 @@ import {
   type TileBuffers,
 } from '@gridforce/shared';
 
-// Mite baseline priority profile, refined for C1.5:
+// Mite baseline priority profile, refined for C1.6:
 //
-//   - `player` is the base score for chasing a pilot. Crowd boredom subtracts
-//     `crowdPenaltyPerNearbyBug` × (#bugs within `crowdRadiusPx`) from this,
-//     so a swarm gets more interested in breaking down structure the larger
-//     it gets.
+//   - `player` is the base score for chasing a pilot. Crowd boredom is a
+//     piecewise curve (see crowdPenalty below) that DIPS for a tight squad
+//     (2-4 peers nearby) — a coherent pack chases harder — then climbs
+//     quadratically once the group passes ~6 peers, hitting critical mass
+//     in the 12-15 range where chasing the player breaks down.
 //   - Attack score is layer-aware. Healthy panels are an unattractive target
 //     (`panelBase` is tiny); priority climbs as the panel takes damage, then
 //     jumps to a much higher band when L1 is gone and the dome is exposed.
 //     The "huge problem near a tunneled tile" scenario falls out of this:
-//     dome-exposed tiles outscore most chase opportunities even before
-//     crowd boredom kicks in.
+//     dome-exposed tiles outscore most chase opportunities, especially once
+//     a crowd is present.
 //   - Attention is the per-scan boredom penalty on whichever task is
-//     currently active. Drives the eventual task switch after a long
-//     commitment.
+//     currently active. Slower decay than C1.5 since rolls are less
+//     frequent (see TASK_REEVAL_INTERVAL_S below).
+//
+// TODO (future): proper swarm AI — formation, lead-follow, designated
+// breachers. The crowd-dip term is a stand-in for "coherent squad
+// behaviour" until that lands.
 const MITE_PROFILE = {
   player: 100,
   panelBase: 5,
   panelDamageScale: 15,
   domeBase: 25,
   domeDamageScale: 35,
-  attentionPerScan: 10,
-  crowdPenaltyPerNearbyBug: 5,
-  crowdRadiusPx: 192, // 3 tiles
+  attentionPerScan: 5,
+  crowdRadiusPx: 128, // 2 tiles — tighter than C1.5's 3
 };
 
-const TASK_REEVAL_INTERVAL_S = 0.5;
+// Priority rolls used to fire every 0.5s in C1.5. Even at low odds of
+// switching, a frequent roll guarantees a switch within a minute or so
+// purely from the stochastic tail. Slowing the roll cadence to 2s lets
+// commitment actually mean something — and the player's movement is still
+// tracked smoothly because chase targets refresh every tick regardless of
+// the reeval cadence.
+const TASK_REEVAL_INTERVAL_S = 2.0;
 // Commit lock applied after switching INTO a chase task. Attacks use a
 // different lock — they're committed-until-completion (the tile being
 // destroyed) and ignore this constant.
-const CHASE_COMMIT_S = 1.5;
+const CHASE_COMMIT_S = 2.0;
+
+// Crowd-boredom curve. n = #peers within crowdRadiusPx.
+//   n = 0       →  0   (lone bug: no effect)
+//   n = 2..4    → -10  (tight squad: chase is REINFORCED)
+//   n = 5..6    →  ~0  (returning to neutral)
+//   n = 8       →  +18
+//   n = 10      →  +50
+//   n = 13+     →  +100+ (critical mass; chasing folds to attacking)
+// Squad bonus dips between n=1 and n=5 with a peak at n=3. Above n=5 the
+// penalty rises as (n-5)² × 2 — flat-ish into the medium range and steep
+// once the swarm tips over.
+function crowdPenalty(n: number): number {
+  if (n <= 0) return 0;
+  if (n <= 3) return -10 * (n / 3);
+  if (n <= 5) return -10 * (5 - n) / 2;
+  const excess = n - 5;
+  return excess * excess * 2;
+}
 
 function noise(): number {
   return 0.85 + Math.random() * 0.3; // ±15%
@@ -182,11 +210,12 @@ export class CrawlerAiManager {
     const tcy = Math.floor(c.y / grid.panelSize);
     const inBounds = tcx >= 0 && tcx < grid.cols && tcy >= 0 && tcy < grid.rows;
 
-    // Chase — base 100, reduced by crowd boredom (bugs within radius).
+    // Chase — base 100, modulated by the squad/swarm crowd curve. Small
+    // groups boost it (coherent pack); large groups break it down.
     let chaseScore = -Infinity;
     if (target) {
       const crowd = countNearbyBugs(c, bugs, MITE_PROFILE.crowdRadiusPx);
-      chaseScore = MITE_PROFILE.player - crowd * MITE_PROFILE.crowdPenaltyPerNearbyBug;
+      chaseScore = MITE_PROFILE.player - crowdPenalty(crowd);
     }
 
     // Attack the topmost surviving layer on the bug's current tile. Layer
