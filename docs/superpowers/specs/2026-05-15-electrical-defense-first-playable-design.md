@@ -2,6 +2,8 @@
 
 *Design spec. The implementation plan that translates this into tasks is a separate document, to be written after this design stabilizes. See `docs/superpowers/plans/2026-05-15-larger-maps-and-sprint.md` for the pattern.*
 
+> **⚠️ Superseded for the B2 portion.** B1 (panels + Crawler + uncharged shock + carbon + repair) shipped from this spec at commit `4ec9a91`. The B2 portion of this spec (charged shock, rebuild, HP/revive, waves, city HP, win/loss) is **superseded** by `2026-05-15-layered-tiles-and-priority-ai-design.md`, which re-bases everything downstream of B1 on a layered tile model, weight-based integrity, priority-driven enemy AI, and a top-down twin-stick input model. Read that spec for the canonical post-B1 direction. This spec remains as the historical record of B1's design intent.
+
 ## Context
 
 Sub-spec 2 (larger maps + sprint + panel-jump) shipped at commit `03e41f8` and is live at https://grid.clab.su. Players can run, sprint, and panel-jump on the Large Run arena, but there is still no gameplay — no enemies, no panel state, no combat, no objective.

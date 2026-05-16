@@ -1,0 +1,90 @@
+﻿GridForce
+Title:
+GridForce
+
+Pitch:
+Cooperative electrical weapon and tower-defense mechanics meets hordes of enemies through an escalating difficulty stage progression
+
+
+Story:
+It's pretty far into the future, a dystopian setting. Much of what's left of human society is inside a single dome lined with a grid of solar panels that power the city. The rest of the planet is fairly desolate. The outside wildlife that has long since mutated and grown desperate is constantly trying to break into the city. There are grid enforcers that patrol the grid on the outside and stop the mutated wildlife from getting in. They use their electrical equipment to shock tiles and literally fry the animals as they're trying to break through the tiles. These enforcers must also repair the damaged and broken solar panels otherwise the city begins to lose power, they can't shock through the tiles, and animals can more easily break through inactive panels. You and your friends are grid enforcers. The threats keep getting worse and worse and it's up to you guys to put a stop to the threats once and for all.
+
+
+Mechanics:
+The players will path around in analog motion but also have panel-to-panel jump motions to get around the stage. It is an aerial perspective and you're running around defending a massive onslaught of enemies with larger enemies popping up too. THINK SMASH TV. 
+
+
+The players have access to an increasing number of tools to help deal with enemies that they unlock throughout the game.
+
+
+(1) Local shock -
+uncharged is just 1 tile adjacent to the player shocking enemies and dealing low damage. Ineffective for larger enemies and too risky for faster moving enemies
+- charged is 2 tiles adjacent to the player (takes some time to do so)
+(2) Repair -
+takes a couple seconds at first but speeds up as you get upgrades to repair damaged or broken solar panels
+(3) Electrodes -
+Place an electrode on the ground that you can shock, however it does not travel anywhere unless another electrode is placed in the same row/column (?) Your teammates can work with you placing temporary electrodes so you can take out larger clusters of creatures as well as the bosses when the other tools are not as effective. Electrodes will do far more damage than local shocks but they require teamwork to execute. Players will likely not be able to place a bunch of electrodes at once.
+(4) Discharge -
+Somewhat like an ultimate attack/board clear. Shocks every live tile on-screen. Probably does high damage as well.
+(5) Push/Pull magnetic tool -
+Allows you to pull teammates toward you or push them away from you to help each other survive and navigate the scene while you're being bombarded.
+(6) Bright Panel -
+Like a lantern, the bright panel will attract smaller enemies toward it. You use it as a distraction when things start becoming unmanageable.
+(7) Walls (?)
+Adding walls to press enemies into specific areas
+(8) Reinforce Tiles - 
+Allows you to reinforce tiles so they do not crack as easily
+
+
+How does repairing work?
+When you fry creatures they will drop ___CARBON___ that you will use to repair broken and damaged tiles. If you save up enough you can also build other useful things like potentially requirements for discharge/magnets/electrodes.
+
+
+Damaged Tiles?
+Damaged tiles are no longer LIVE so they will not TRANSMIT electricity through them. Players must balance the repair mechanic with their electric extermination efforts.
+
+
+Enemy types
+1. Normal creatures just path around and try to break in
+2. Red toned creatures attack players in addition
+3. Bosses can be either tone but are generally very large
+
+
+Extras?
+Probably would have difficulty modes adjusting the rate at which things get more violent and maybe # of lives/continues
+
+
+Potentially have the players move between the panels instead of on the panels directly ? 
+
+
+Aesthetic:
+Not sure. Probably retro-y but maybe 3d with 2-dimensional movement and an aerial perspective. I like the idea of the grid enforcers being TINY compared to the massive mutated creatures trying to break in with lots of electricity animations that look really violent and cool. Definitely dystopian futurey robotic deserty desolate themed. Music no idea whatsoever. Needs to go well with the gameplay that's all I know. I also love the idea of music synchronizing somewhat rhythmically with gameplay.
+
+
+I’m a little concerned about the grid getting boring after a couple of stages, just scenery wise so maybe there will have to be tiers to the grid like where more power is coming from and have the color scheme and decorations on the grid change or something. Maybe as you climb to the top of the dome. Then final boss at the top of the dome, or something. 
+
+
+How does losing work:
+Everyone dies
+Too many enemies break into the city
+Once tiles are broken through you can't repair them anymore so it gets a lot harder pretty quickly at that point creatures will just go through those openings (i was thinking there's a set # of creatures per screen and they all won't directly path to the opening but if it breaks in the beginning of a screen then you might lose on that screen but if it's later on in the screen probably not).
+
+
+Multiplayer:
+I was thinking 1-4 players local COOP with AI if you aren't able to have friends play with you but might be rather difficult to get AIs to work with you on electrodes. Might need a signalling mechanism to tell the AI to work with you right as you place electrodes.
+
+
+I also thought of a game mode where one player is the big monster in the middle and the rest are on the outsides but not sure if that will be fun or work well.
+
+
+Progression:
+Think SMASH TV
+You’re moving along the grid stage by stage, clearing all creatures on the screen, then moving to another screen and more creatures start showing up. I’m wanting the gameplay to get more and more hectic as the stages go on. Requiring more and more electrode teamwork and even
+Synchronizing discharge ultimates so you can manage the creature load.
+
+
+I was thinking the solar cells would get smaller and smaller as you make your way to the top of the dome throughout the game. The gameplay would naturally get harder as well. 
+
+
+Below is a basic proof of concept image showing local shocking, electrode usage, cracked solar panels, the grid enforcers, and some creatures
+ basic demonstration.png
