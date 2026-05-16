@@ -480,7 +480,7 @@ test('Snapshot v13 round-trips multi-layer tile state', () => {
   const enc = SnapshotMsg.encode(payload);
   const dec = decodeMessage(enc);
   assert.equal(dec.type, MessageType.Snapshot);
-  const got = dec.payload as SnapshotPayload;
+  const got = dec.payload;
   assert.deepEqual(Array.from(got.tiles.l0Hp), Array.from(l0Hp));
   assert.deepEqual(Array.from(got.tiles.l1Hp), Array.from(l1Hp));
   assert.deepEqual(Array.from(got.tiles.l2Kind), Array.from(l2Kind));
@@ -547,7 +547,7 @@ test('Welcome v13 round-trips multi-layer tile state', () => {
   const enc = WelcomeMsg.encode(payload);
   const dec = decodeMessage(enc);
   assert.equal(dec.type, MessageType.Welcome);
-  const got = dec.payload as WelcomePayload;
+  const got = dec.payload;
   assert.deepEqual(Array.from(got.tiles.l0Hp), Array.from(l0Hp));
   assert.deepEqual(Array.from(got.tiles.l1Hp), Array.from(l1Hp));
   assert.deepEqual(Array.from(got.tiles.l2Kind), Array.from(l2Kind));

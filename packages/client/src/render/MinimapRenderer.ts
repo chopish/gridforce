@@ -14,7 +14,8 @@
 // Click-to-pan: clicking a minimap cell calls back into the camera with a
 // world-space point, which Renderer wires to camera.setCenter().
 
-import { Container, FederatedPointerEvent, Graphics } from 'pixi.js';
+import { Container, Graphics } from 'pixi.js';
+import type { FederatedPointerEvent } from 'pixi.js';
 
 import {
   CONDUCTION_THRESHOLD,
