@@ -10,57 +10,70 @@ import {
   type TileBuffers,
 } from '@gridforce/shared';
 
-// Mite baseline priority profile.
+// Mite priority profile.
 //
 //   - `player` is the base score for chasing a pilot. Crowd boredom is a
 //     piecewise curve (see crowdPenalty below) that DIPS for a tight squad
 //     (2-4 peers nearby) — a coherent pack chases harder — then climbs
 //     quadratically once the group passes ~6 peers, hitting critical mass
 //     in the 12-15 range where chasing the player breaks down.
-//   - Attack score is layer-aware. Panels are MILDLY appealing baseline —
-//     `panelBase` lives just below the chase score so the per-roll noise
-//     bands overlap, producing a low natural probability that a lone mite
-//     commits to the tile under it. Score climbs as the panel takes
-//     damage, then jumps into a much higher band when L1 is gone and the
-//     dome is exposed; dome-exposed tiles still dominate at any crowd
-//     size. The "small chance per roll" behaviour is therefore an
-//     emergent property of the score band overlap + stochastic noise —
-//     no hardcoded probability gate elsewhere in this file.
-//   - Attention is the per-scan boredom penalty on whichever task is
-//     currently active. Slower decay than C1.5 since rolls are less
-//     frequent (see TASK_REEVAL_INTERVAL_S below).
-//
-// Tuning intuition for the panel band: chase = 100 with ±15% noise spans
-// 85–115. `panelBase = 80` with ±15% noise spans 68–92. The narrow
-// overlap (85–92) is where attack can win — only a few percent per roll
-// at lone-mite-healthy-panel, rising as the panel takes damage. Tight
-// squads (chase ≈ 110) never overlap, so squads stay committed to the
-// chase. Critical mass (chase ≪ 70) puts attack firmly above chase.
-//
-// TODO (future): proper swarm AI — formation, lead-follow, designated
-// breachers. The crowd-dip term is a stand-in for "coherent squad
-// behaviour" until that lands.
+//   - Attack scores are layer-aware. Healthy panels are intentionally
+//     unappealing on their own (panelBase tiny); priority climbs as the
+//     panel takes damage, then jumps to a much higher band when L1 is gone
+//     and the dome is exposed. The score gap between panel and dome is
+//     what conveys "dome breach is urgent" — keep it wide.
+//   - Final pick is SOFTMAX over (chaseScore, attackScore), not argmax. A
+//     lone mite on a healthy panel sees chase=100, attack=5 — softmax
+//     gives attack a low but non-zero probability per roll. As the swarm
+//     grows and chaseScore is eroded by crowdPenalty, the attack
+//     probability climbs SMOOTHLY rather than flipping all at once.
 const MITE_PROFILE = {
   player: 100,
-  panelBase: 80,
+  panelBase: 5,
   panelDamageScale: 15,
-  domeBase: 100,
+  domeBase: 25,
   domeDamageScale: 35,
   attentionPerScan: 5,
   crowdRadiusPx: 128, // 2 tiles — tighter than C1.5's 3
 };
 
-// Priority rolls used to fire every 0.5s in C1.5. Even at low odds of
-// switching, a frequent roll guarantees a switch within a minute or so
-// purely from the stochastic tail. Slowing the roll cadence to 2s lets
-// commitment actually mean something — and the player's movement is still
-// tracked smoothly because chase targets refresh every tick regardless of
-// the reeval cadence.
-const TASK_REEVAL_INTERVAL_S = 2.0;
-// Commit lock applied after switching INTO a chase task. Attacks use a
-// different lock — they're committed-until-completion (the tile being
-// destroyed) and ignore this constant.
-const CHASE_COMMIT_S = 2.0;
+// Re-evaluation cadence. Each bug rolls its task this often (assuming no
+// task is currently held — see commit windows below). Higher = stickier
+// decisions, lower = floppier. 4s gives roughly 15 rolls/minute/bug; at
+// the softmax-derived ~3% attack probability for a lone mite on a healthy
+// panel, that's ~0.5 attack-switches/min/bug — sparse enough that the
+// pattern reads as "occasional breachers" not "constant flip-flopping".
+const TASK_REEVAL_INTERVAL_S = 4.0;
+// Commit lock applied after switching INTO a chase task. Attack tasks
+// commit-until-tile-destroyed instead (see decide).
+const CHASE_COMMIT_S = 4.0;
+
+// Softmax temperature. Probability of picking attack over chase is
+//   exp(attack/τ) / (exp(chase/τ) + exp(attack/τ))
+// At τ=30: a 95-point gap (lone mite, healthy panel) gives the loser ≈3%;
+// a 40-point gap (lone mite, intact dome) gives ≈22%; equal scores give
+// 50/50. Lower τ → closer to argmax; higher τ → closer to uniform.
+const SCORE_SOFTMAX_TEMPERATURE = 30;
+
+// Anti-pile-on. For each bug currently committed to an ATTACK_TILE task
+// across the level, subtract this from `attackScore` at decision time.
+// First breacher sees the full score; the 5th sees -15; the 10th sees
+// -30 — usually below any plausible chase score, so attack stops being
+// picked. Self-balances breacher count without a hard cap.
+const ACTIVE_ATTACKER_PENALTY = 3;
+
+// After a bug finishes destroying its tile, force-block ATTACK picks for
+// this long. Kills the "tile dies → bug instantly picks the adjacent
+// tile" pile-on. Bug must chase or hover for the rest window before
+// becoming eligible to commit to another tile.
+const POST_KILL_REST_S = 5.0;
+
+// Passive player-proximity aggro. Any non-chase task is interrupted (no
+// matter the commit state) the moment a player crosses this radius.
+// Future: per-player aggro multipliers (loud attacks, taunt skills, etc.)
+// can widen this conditionally — for now it's a flat threshold.
+const PLAYER_AGGRO_RADIUS_PX = 192; // 3 tiles
+const PLAYER_AGGRO_RADIUS_SQ = PLAYER_AGGRO_RADIUS_PX * PLAYER_AGGRO_RADIUS_PX;
 
 // Crowd-boredom curve. n = #peers within crowdRadiusPx.
 //   n = 0       →  0   (lone bug: no effect)
@@ -68,10 +81,13 @@ const CHASE_COMMIT_S = 2.0;
 //   n = 5..6    →  ~0  (returning to neutral)
 //   n = 8       →  +18
 //   n = 10      →  +50
-//   n = 13+     →  +100+ (critical mass; chasing folds to attacking)
+//   n = 13+     →  +100+ (critical mass; chasing collapses)
 // Squad bonus dips between n=1 and n=5 with a peak at n=3. Above n=5 the
 // penalty rises as (n-5)² × 2 — flat-ish into the medium range and steep
-// once the swarm tips over.
+// once the swarm tips over. Combined with softmax sampling, the
+// "critical mass" transition is a SMOOTH probability ramp rather than a
+// binary flip — more bugs join the attack as chaseScore falls, not all
+// at once.
 function crowdPenalty(n: number): number {
   if (n <= 0) return 0;
   if (n <= 3) return -10 * (n / 3);
@@ -84,7 +100,10 @@ function noise(): number {
   return 0.85 + Math.random() * 0.3; // ±15%
 }
 
-function nearestPlayer(c: CrawlerState, players: ReadonlyArray<PlayerState>): PlayerState | null {
+function nearestPlayer(c: CrawlerState, players: ReadonlyArray<PlayerState>): {
+  player: PlayerState;
+  dist2: number;
+} | null {
   let best: PlayerState | null = null;
   let bestD2 = Infinity;
   for (const p of players) {
@@ -96,7 +115,7 @@ function nearestPlayer(c: CrawlerState, players: ReadonlyArray<PlayerState>): Pl
       best = p;
     }
   }
-  return best;
+  return best ? { player: best, dist2: bestD2 } : null;
 }
 
 function countNearbyBugs(
@@ -115,13 +134,32 @@ function countNearbyBugs(
   return n;
 }
 
+// Sample a binary choice with softmax probabilities. Returns `true` for
+// attack, `false` for chase. -Infinity scores are treated as ineligible.
+function pickSoftmax(chaseScore: number, attackScore: number, tau: number): 'chase' | 'attack' {
+  const chaseEligible = Number.isFinite(chaseScore);
+  const attackEligible = Number.isFinite(attackScore);
+  if (!chaseEligible && !attackEligible) return 'chase';
+  if (!chaseEligible) return 'attack';
+  if (!attackEligible) return 'chase';
+  // Numerical stability: subtract the max before exponentiating.
+  const m = Math.max(chaseScore, attackScore);
+  const eC = Math.exp((chaseScore - m) / tau);
+  const eA = Math.exp((attackScore - m) / tau);
+  const pAttack = eA / (eC + eA);
+  return Math.random() < pAttack ? 'attack' : 'chase';
+}
+
 interface CrawlerAi {
   task: CrawlerTask;
   attentionPenalty: number;
   reevalInS: number;
   // Time left in the chase-commit window. ATTACK tasks ignore this — they
-  // hold until the target tile is destroyed (see "lockedOnAttack" below).
+  // hold until the target tile is destroyed.
   chaseCommitInS: number;
+  // Post-kill rest. While >0, this bug cannot pick ATTACK_TILE. Reset to
+  // POST_KILL_REST_S when an ATTACK task ends because the tile died.
+  attackRestInS: number;
 }
 
 function defaultTask(): CrawlerTask {
@@ -130,6 +168,16 @@ function defaultTask(): CrawlerTask {
 
 export class CrawlerAiManager {
   private states = new Map<number, CrawlerAi>();
+
+  // O(n) but n ≤ MAX_ALIVE_CRAWLERS ≈ 25; cheap. Called once per decide()
+  // so each bug sees the current attacker count when scoring.
+  private activeAttackerCount(): number {
+    let n = 0;
+    for (const ai of this.states.values()) {
+      if (ai.task.kind === CrawlerTaskKind.ATTACK_TILE) n++;
+    }
+    return n;
+  }
 
   decide(
     c: CrawlerState,
@@ -141,16 +189,40 @@ export class CrawlerAiManager {
   ): CrawlerTask {
     let ai = this.states.get(c.id);
     if (!ai) {
-      ai = { task: defaultTask(), attentionPenalty: 0, reevalInS: 0, chaseCommitInS: 0 };
+      ai = {
+        task: defaultTask(),
+        attentionPenalty: 0,
+        reevalInS: 0,
+        chaseCommitInS: 0,
+        attackRestInS: 0,
+      };
       this.states.set(c.id, ai);
     }
     ai.chaseCommitInS = Math.max(0, ai.chaseCommitInS - dt);
+    ai.attackRestInS = Math.max(0, ai.attackRestInS - dt);
     ai.reevalInS -= dt;
 
-    // Commit-until-completion for ATTACK tasks. The bug holds the bite until
-    // the target tile is fully tunneled (passage). Re-evaluation is
-    // suppressed for the duration of the attack — attention is the boredom
-    // counter that influences what they do NEXT, once they're free.
+    // Passive aggro. A nearby player is a hard interrupt: regardless of
+    // current task or commit state, the bug breaks off and chases. This
+    // is the first thing the future "player aggro modifiers" will hook
+    // into — increase the radius conditionally per player to model loud
+    // actions, taunts, etc.
+    const near = nearestPlayer(c, players);
+    if (near && near.dist2 <= PLAYER_AGGRO_RADIUS_SQ) {
+      ai.task = {
+        kind: CrawlerTaskKind.CHASE_PLAYER,
+        targetX: near.player.x,
+        targetY: near.player.y,
+      };
+      ai.attentionPenalty = 0;
+      ai.chaseCommitInS = CHASE_COMMIT_S;
+      // Reset reeval too so we don't immediately re-score right after the
+      // forced aggro — let the chase stick for the commit window.
+      ai.reevalInS = TASK_REEVAL_INTERVAL_S;
+      return ai.task;
+    }
+
+    // Commit-until-completion for ATTACK tasks.
     if (ai.task.kind === CrawlerTaskKind.ATTACK_TILE) {
       const tcx = ai.task.targetCx;
       const tcy = ai.task.targetCy;
@@ -165,26 +237,34 @@ export class CrawlerAiManager {
           }
           return ai.task;
         }
-        // Tile is dead — task complete. Fall through to re-eval immediately;
-        // the accumulated attention biases the next pick away from
-        // attacking again, which is the intended "go chase or look around"
-        // post-kill behaviour.
+        // Tile dead — task complete. Trigger the post-kill rest so this
+        // bug doesn't immediately commit to the next adjacent tile.
+        ai.attackRestInS = POST_KILL_REST_S;
       }
     }
 
     // Chase commitment — short lock so the bug doesn't flap to a different
     // task every single scan.
     if (ai.task.kind === CrawlerTaskKind.CHASE_PLAYER && ai.chaseCommitInS > 0 && ai.reevalInS > 0) {
-      const t = nearestPlayer(c, players);
-      if (t) ai.task = { kind: CrawlerTaskKind.CHASE_PLAYER, targetX: t.x, targetY: t.y };
+      if (near) {
+        ai.task = {
+          kind: CrawlerTaskKind.CHASE_PLAYER,
+          targetX: near.player.x,
+          targetY: near.player.y,
+        };
+      }
       return ai.task;
     }
 
-    // Re-evaluate.
+    // Within the reeval window but not commit-locked → keep current task,
+    // refreshing the chase target each tick if applicable.
     if (ai.reevalInS > 0) {
-      if (ai.task.kind === CrawlerTaskKind.CHASE_PLAYER) {
-        const t = nearestPlayer(c, players);
-        if (t) ai.task = { kind: CrawlerTaskKind.CHASE_PLAYER, targetX: t.x, targetY: t.y };
+      if (ai.task.kind === CrawlerTaskKind.CHASE_PLAYER && near) {
+        ai.task = {
+          kind: CrawlerTaskKind.CHASE_PLAYER,
+          targetX: near.player.x,
+          targetY: near.player.y,
+        };
       }
       return ai.task;
     }
@@ -215,23 +295,21 @@ export class CrawlerAiManager {
     tiles: TileBuffers,
     grid: GridDef,
   ): CrawlerTask {
-    const target = nearestPlayer(c, players);
+    const near = nearestPlayer(c, players);
     const tcx = Math.floor(c.x / grid.panelSize);
     const tcy = Math.floor(c.y / grid.panelSize);
     const inBounds = tcx >= 0 && tcx < grid.cols && tcy >= 0 && tcy < grid.rows;
 
-    // Chase — base 100, modulated by the squad/swarm crowd curve. Small
-    // groups boost it (coherent pack); large groups break it down.
+    // Chase — base score modulated by the squad/swarm crowd curve. Tight
+    // packs reinforce chase; large crowds erode it (critical mass).
     let chaseScore = -Infinity;
-    if (target) {
+    if (near) {
       const crowd = countNearbyBugs(c, bugs, MITE_PROFILE.crowdRadiusPx);
       chaseScore = MITE_PROFILE.player - crowdPenalty(crowd);
     }
 
-    // Attack the topmost surviving layer on the bug's current tile. Layer
-    // preference is baked into the base+scale numbers: panels start
-    // unappealing and climb a little as they take damage; dome starts
-    // appealing and climbs aggressively as it cracks.
+    // Attack — score is layer-aware. Dome (L0 exposed) is always wider-
+    // scored than panel, conveying the "dome breach is urgent" signal.
     let attackScore = -Infinity;
     if (inBounds) {
       const idx = indexOf(grid.cols, tcx, tcy);
@@ -244,18 +322,48 @@ export class CrawlerAiManager {
       }
     }
 
-    // Apply stochastic noise + attention to current task only. The noise
-    // bands on chase and attack are where the "low baseline chance of a
-    // lone mite attacking the tile under it" comes from — panelBase sits
-    // close enough to `player` that the bands overlap on the tails. No
-    // separate probability gate.
-    chaseScore = chaseScore * noise() - (ai.task.kind === CrawlerTaskKind.CHASE_PLAYER ? ai.attentionPenalty : 0);
-    attackScore = attackScore * noise() - (ai.task.kind === CrawlerTaskKind.ATTACK_TILE ? ai.attentionPenalty : 0);
-
-    if (chaseScore >= attackScore && target) {
-      return { kind: CrawlerTaskKind.CHASE_PLAYER, targetX: target.x, targetY: target.y };
+    // Post-kill rest: bug literally cannot pick attack right now.
+    if (ai.attackRestInS > 0) {
+      attackScore = -Infinity;
     }
-    return { kind: CrawlerTaskKind.ATTACK_TILE, targetCx: tcx, targetCy: tcy };
+
+    // Global anti-pile-on: each existing attacker on the level pulls the
+    // attack score down. By the time ~5-8 bugs are attacking, joining
+    // them costs more than the panel/dome score itself, so new bugs stay
+    // on chase.
+    if (Number.isFinite(attackScore)) {
+      attackScore -= ACTIVE_ATTACKER_PENALTY * this.activeAttackerCount();
+    }
+
+    // Stochastic noise + per-task attention penalty. Noise stays for
+    // micro-variation; the heavy lifting on stochasticity now lives in
+    // the softmax sampler below.
+    if (Number.isFinite(chaseScore)) {
+      chaseScore =
+        chaseScore * noise() -
+        (ai.task.kind === CrawlerTaskKind.CHASE_PLAYER ? ai.attentionPenalty : 0);
+    }
+    if (Number.isFinite(attackScore)) {
+      attackScore =
+        attackScore * noise() -
+        (ai.task.kind === CrawlerTaskKind.ATTACK_TILE ? ai.attentionPenalty : 0);
+    }
+
+    const pick = pickSoftmax(chaseScore, attackScore, SCORE_SOFTMAX_TEMPERATURE);
+    if (pick === 'chase' && near) {
+      return {
+        kind: CrawlerTaskKind.CHASE_PLAYER,
+        targetX: near.player.x,
+        targetY: near.player.y,
+      };
+    }
+    if (pick === 'attack' && inBounds) {
+      return { kind: CrawlerTaskKind.ATTACK_TILE, targetCx: tcx, targetCy: tcy };
+    }
+    // Degenerate case: neither task is viable. Hold current task; the
+    // next tick will re-evaluate as state changes (a player respawns, the
+    // bug walks onto a new tile, etc.).
+    return ai.task;
   }
 
   remove(id: number): void {
