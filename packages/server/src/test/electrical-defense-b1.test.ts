@@ -72,11 +72,18 @@ test('B1 endless loop: shock kills a planted crawler and drops carbon', async ()
   const h = await startHarness();
   try {
     const room = h.manager.createRoom({ visibility: 'unlisted' });
+    // C1.2 shock fires on falling edge — pulse the bit each tick (true for
+    // a few ticks, then false) so the server sees a release-edge to fire on.
     const c = new TestClient({
       url: h.wsUrl,
       roomCode: room.code,
       name: 'p',
-      drive: () => ({ mx: 0, my: 0, shock: true, repair: false }),
+      drive: (tick) => ({
+        mx: 0, my: 0,
+        // Held for ticks 0..2 (charging), released at tick 3 → fire.
+        shock: (tick % 6) < 3,
+        repair: false,
+      }),
     });
     await c.connect();
     await new Promise<void>((r) => setTimeout(r, 100));

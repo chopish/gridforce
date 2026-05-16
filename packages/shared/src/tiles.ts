@@ -13,14 +13,20 @@ export const LayerKind = {
 } as const;
 export type LayerKindValue = (typeof LayerKind)[keyof typeof LayerKind];
 
-// Four parallel byte buffers, each of length cols*rows. Storing per-layer
+// Five parallel byte buffers, each of length cols*rows. Storing per-layer
 // (rather than struct-of-arrays per tile) makes RLE encoding per layer
 // trivial — a flat-LIVE arena is one or two runs in each buffer.
+//
+// l1Charge holds ticks-remaining of electrification (v14): a tile that was
+// hit by a shock beam stays "live wired" for ~SHOCK_LINGER_TICKS ticks and
+// kills any bug that walks onto it during that window. Decremented each
+// server tick in Room.physicsStep.
 export interface TileBuffers {
   l0Hp: Uint8Array;
   l1Hp: Uint8Array;
   l2Kind: Uint8Array; // 0 = none; future addon kinds get nonzero
   l2Hp: Uint8Array;
+  l1Charge: Uint8Array;
 }
 
 export function allocateTiles(cols: number, rows: number): TileBuffers {
@@ -34,6 +40,7 @@ export function allocateTiles(cols: number, rows: number): TileBuffers {
     l1Hp,
     l2Kind: new Uint8Array(n),
     l2Hp: new Uint8Array(n),
+    l1Charge: new Uint8Array(n),
   };
 }
 

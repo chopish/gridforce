@@ -5,7 +5,7 @@ import {
   CrawlerAIState,
   CONDUCTION_THRESHOLD,
   L1_PANEL_MAX_HP,
-  SHOCK_COOLDOWN_S,
+  SHOCK_LINGER_TICKS,
   allocateTiles,
   indexOf,
   type CrawlerState,
@@ -14,9 +14,14 @@ import {
   type TileBuffers,
 } from '@gridforce/shared';
 
-// Internal handles into the Room. Mirrors the pattern in repair.test.ts /
-// integrity.test.ts: cast through `unknown` to a minimal interface so the
-// test can poke at private state without making everything public.
+// C1.2 hold-charge shock model:
+//   - Held bit accumulates shockHeldS while down.
+//   - Falling edge fires a ray-marched beam of length 1..MAX tiles, scaling
+//     with shockHeldS.
+//   - Each conductive tile in the path is electrified for SHOCK_LINGER_TICKS
+//     server ticks; bugs on those tiles die immediately, and bugs that
+//     walk onto a still-charged tile die on the next physicsStep linger sweep.
+
 interface RoomInternals {
   phase: string;
   hostId: number;
@@ -29,8 +34,6 @@ interface RoomInternals {
   physicsStep(): void;
 }
 
-// Non-conductive L1 HP: below CONDUCTION_THRESHOLD × max but still > 0 so the
-// panel exists. Mirrors what "DAMAGED" used to mean in the legacy trinary.
 const NON_CONDUCTIVE_HP =
   Math.max(0, Math.ceil(L1_PANEL_MAX_HP * CONDUCTION_THRESHOLD) - 1);
 
@@ -50,18 +53,10 @@ function setPlayerAt(r: RoomInternals, cx: number, cy: number): void {
   const x = cx * r.grid.panelSize + r.grid.panelSize / 2;
   const y = cy * r.grid.panelSize + r.grid.panelSize / 2;
   r.states.set(PLAYER_ID, {
-    id: PLAYER_ID,
-    x, y,
-    facing: 0,
-    facingCursorRad: 0,
-    panelJumpCooldownS: 0,
-    stateSeq: 0,
-    name: 'p',
-    ready: true,
-    carbon: 0,
-    shockCooldownS: 0,
-    repairProgressS: 0,
-    shockHeldS: 0,
+    id: PLAYER_ID, x, y,
+    facing: 0, facingCursorRad: 0, panelJumpCooldownS: 0, stateSeq: 0,
+    name: 'p', ready: true,
+    carbon: 0, shockCooldownS: 0, repairProgressS: 0, shockHeldS: 0,
   });
 }
 
@@ -70,49 +65,38 @@ function plantCrawler(r: RoomInternals, id: number, cx: number, cy: number): voi
     id,
     x: cx * r.grid.panelSize + r.grid.panelSize / 2,
     y: cy * r.grid.panelSize + r.grid.panelSize / 2,
-    facing: Math.PI,
-    hp: 1,
-    targetCx: cx,
-    targetCy: cy,
-    ai: CrawlerAIState.ATTACKING,
+    facing: Math.PI, hp: 1,
+    targetCx: cx, targetCy: cy, ai: CrawlerAIState.ATTACKING,
   });
 }
 
-function inputPlayer(
-  r: RoomInternals,
-  opts: { shock: boolean; facingRad: number },
-): void {
+// Programmable per-tick input. Pop the head of `queue` each tick; once
+// exhausted, return the last input forever (simulates "still held").
+function setInputQueue(r: RoomInternals, queue: Array<{ shock: boolean; facingRad: number }>): void {
+  let i = 0;
+  const last = (): { shock: boolean; facingRad: number } =>
+    queue.length === 0 ? { shock: false, facingRad: 0 } : queue[Math.min(i, queue.length - 1)]!;
   const fakePilot = {
-    isBot: false,
-    ready: true,
-    name: 'p',
-    ackInputTick: 0,
-    computeAckBitmask: () => 0,
-    send: () => {},
-    dispose: () => {},
-    consumeInputForTick: (): PlayerInput => ({
-      tick: 0,
-      clientTimeMs: 0,
-      mx: 0,
-      my: 0,
-      shock: opts.shock,
-      repair: false,
-      jumpHeld: false,
-      jumpCursorDx: 0,
-      jumpCursorDy: 0,
-      facingRad: opts.facingRad,
-    }),
+    isBot: false, ready: true, name: 'p',
+    ackInputTick: 0, computeAckBitmask: () => 0,
+    send: () => {}, dispose: () => {},
+    consumeInputForTick: (): PlayerInput => {
+      const cur = last();
+      i++;
+      return {
+        tick: 0, clientTimeMs: 0, mx: 0, my: 0,
+        shock: cur.shock, repair: false,
+        jumpHeld: false, jumpCursorDx: 0, jumpCursorDy: 0,
+        facingRad: cur.facingRad,
+      };
+    },
   };
   r.pilots.set(PLAYER_ID, fakePilot);
 }
 
-function tick(r: RoomInternals): void {
-  r.physicsStep();
-}
+function tick(r: RoomInternals): void { r.physicsStep(); }
 
-function playerState(r: RoomInternals): PlayerState {
-  return r.states.get(PLAYER_ID)!;
-}
+function playerState(r: RoomInternals): PlayerState { return r.states.get(PLAYER_ID)!; }
 
 function crawlerAtTile(r: RoomInternals, cx: number, cy: number): CrawlerState | undefined {
   for (const c of r.crawlers.values()) {
@@ -123,123 +107,146 @@ function crawlerAtTile(r: RoomInternals, cx: number, cy: number): CrawlerState |
   return undefined;
 }
 
-function assertCrawlerDead(r: RoomInternals, cx: number, cy: number): void {
-  assert.equal(
-    crawlerAtTile(r, cx, cy),
-    undefined,
-    `expected crawler at (${cx},${cy}) to be dead`,
-  );
+function assertCrawlerDead(r: RoomInternals, cx: number, cy: number, msg?: string): void {
+  assert.equal(crawlerAtTile(r, cx, cy), undefined, msg ?? `crawler at (${cx},${cy}) should be dead`);
 }
 
-function assertCrawlerAlive(r: RoomInternals, cx: number, cy: number): void {
-  assert.ok(
-    crawlerAtTile(r, cx, cy) !== undefined,
-    `expected crawler at (${cx},${cy}) to be alive`,
-  );
+function assertCrawlerAlive(r: RoomInternals, cx: number, cy: number, msg?: string): void {
+  assert.ok(crawlerAtTile(r, cx, cy) !== undefined, msg ?? `crawler at (${cx},${cy}) should be alive`);
 }
 
-function makeRoomWithCrawlers(positions: Array<[number, number]>): RoomInternals {
+// ─── Tests ─────────────────────────────────────────────────────────────
+
+test('shock: held bit alone does NOT fire (rising edge retired)', () => {
   const r = makeRoomInPlaying();
-  let id = 1;
-  for (const [cx, cy] of positions) {
-    plantCrawler(r, id++, cx, cy);
-  }
-  return r;
-}
-
-test('uncharged shock fires on cursor-snapped cardinal only — east', () => {
-  // Player center at tile (5,5); crawlers at (6,5) (east) and (4,5) (west).
-  const r = makeRoomWithCrawlers([[6, 5], [4, 5]]);
   setPlayerAt(r, 5, 5);
-  inputPlayer(r, { shock: true, facingRad: 0 /* east in screen-y-down */ });
-  tick(r);
-  assertCrawlerDead(r, 6, 5);
-  assertCrawlerAlive(r, 4, 5);
+  plantCrawler(r, 1, 6, 5);
+  // Hold for many ticks without ever releasing.
+  setInputQueue(r, [{ shock: true, facingRad: 0 }]);
+  for (let i = 0; i < 20; i++) tick(r);
+  assertCrawlerAlive(r, 6, 5, 'no shock should fire while bit is held');
 });
 
-test('uncharged shock at cursor pointing west hits west tile only', () => {
-  const r = makeRoomWithCrawlers([[6, 5], [4, 5]]);
+test('shock: tap (release after one held tick) fires a 1-tile beam east', () => {
+  const r = makeRoomInPlaying();
   setPlayerAt(r, 5, 5);
-  inputPlayer(r, { shock: true, facingRad: Math.PI });
+  plantCrawler(r, 1, 6, 5);
+  setInputQueue(r, [
+    { shock: true, facingRad: 0 },   // tick 1: held
+    { shock: false, facingRad: 0 },  // tick 2: released → fires
+  ]);
   tick(r);
+  tick(r);
+  assertCrawlerDead(r, 6, 5);
+  assert.ok(playerState(r).shockCooldownS > 0, 'cooldown should be set after fire');
+});
+
+test('shock: tap pointed west hits west tile', () => {
+  const r = makeRoomInPlaying();
+  setPlayerAt(r, 5, 5);
+  plantCrawler(r, 1, 4, 5);
+  plantCrawler(r, 2, 6, 5);
+  setInputQueue(r, [
+    { shock: true, facingRad: Math.PI },
+    { shock: false, facingRad: Math.PI },
+  ]);
+  tick(r); tick(r);
   assertCrawlerDead(r, 4, 5);
   assertCrawlerAlive(r, 6, 5);
 });
 
-test('uncharged shock pointing south hits south tile only', () => {
-  const r = makeRoomWithCrawlers([[5, 6], [5, 4]]);
+test('shock: longer hold reaches more tiles in 360° aim direction', () => {
+  const r = makeRoomInPlaying();
   setPlayerAt(r, 5, 5);
-  inputPlayer(r, { shock: true, facingRad: Math.PI / 2 });
-  tick(r);
-  assertCrawlerDead(r, 5, 6);
-  assertCrawlerAlive(r, 5, 4);
-});
-
-test('uncharged shock pointing north hits north tile only', () => {
-  const r = makeRoomWithCrawlers([[5, 6], [5, 4]]);
-  setPlayerAt(r, 5, 5);
-  inputPlayer(r, { shock: true, facingRad: -Math.PI / 2 });
-  tick(r);
-  assertCrawlerDead(r, 5, 4);
-  assertCrawlerAlive(r, 5, 6);
-});
-
-test('uncharged shock on non-conductive tile is a no-op (damaged below threshold)', () => {
-  const r = makeRoomWithCrawlers([[6, 5]]);
-  setPlayerAt(r, 5, 5);
-  r.tiles.l1Hp[indexOf(r.grid.cols, 6, 5)] = NON_CONDUCTIVE_HP;
-  inputPlayer(r, { shock: true, facingRad: 0 });
-  tick(r);
-  assertCrawlerAlive(r, 6, 5);
-});
-
-test('uncharged shock sets cooldown on PlayerState', () => {
-  const r = makeRoomWithCrawlers([[6, 5]]);
-  setPlayerAt(r, 5, 5);
-  inputPlayer(r, { shock: true, facingRad: 0 });
-  tick(r);
-  const pl = playerState(r);
-  assert.ok(pl.shockCooldownS > 0, `expected cooldown > 0, got ${pl.shockCooldownS}`);
-  assert.ok(pl.shockCooldownS <= SHOCK_COOLDOWN_S);
-});
-
-test('uncharged shock pointed off-grid is a no-op (no cooldown charged)', () => {
-  // Player at top-left edge tile (0,0); aim north — no tile there.
-  const r = makeRoomWithCrawlers([]);
-  setPlayerAt(r, 0, 0);
-  inputPlayer(r, { shock: true, facingRad: -Math.PI / 2 });
-  tick(r);
-  // Plan pseudocode early-returns BEFORE setting cooldown, so cooldown stays 0.
-  const pl = playerState(r);
-  assert.equal(pl.shockCooldownS, 0);
-});
-
-test('holding shock for multiple ticks fires only on rising edge', () => {
-  const r = makeRoomWithCrawlers([[6, 5]]);
-  setPlayerAt(r, 5, 5);
-  inputPlayer(r, { shock: true, facingRad: 0 });
-  tick(r);
-  // Crawler dies on first tick; cooldown now > 0.
+  // Bugs at +1, +2, +3 tiles east. With a full-charge release, all three
+  // should die. With a tap, only the +1 bug dies.
+  plantCrawler(r, 1, 6, 5);
+  plantCrawler(r, 2, 7, 5);
+  plantCrawler(r, 3, 8, 5);
+  // Hold for ~SHOCK_CHARGE_FULL_S ticks (~30 ticks) then release.
+  const held = Array.from({ length: 32 }, () => ({ shock: true, facingRad: 0 }));
+  held.push({ shock: false, facingRad: 0 });
+  setInputQueue(r, held);
+  for (let i = 0; i < held.length; i++) tick(r);
   assertCrawlerDead(r, 6, 5);
-  const after1 = playerState(r);
-  assert.ok(after1.shockCooldownS > 0);
-  // Replant a crawler and hold shock — same held bit, no rising edge, so
-  // no additional shock fires even after cooldown ticks down. We hammer
-  // many ticks with shock continuously held; not a single one should fire.
-  plantCrawler(r, 99, 6, 5);
-  // Drain ticks. shockCooldownS is SHOCK_COOLDOWN_S; SERVER_TICK_DT_S=1/30,
-  // so ~8 ticks at 0.25s/0.033s ≈ 8. Run 30 to be safe (~1s of held shock).
-  for (let i = 0; i < 30; i++) tick(r);
-  // Crawler should still be alive because rising-edge never fired again.
-  assertCrawlerAlive(r, 6, 5);
+  assertCrawlerDead(r, 7, 5);
+  assertCrawlerDead(r, 8, 5);
 });
 
-test('shock does not reach across a non-conductive tile (regression)', () => {
-  // Belt-and-suspenders: damaged-below-threshold tile to the east blocks shock.
-  const r = makeRoomWithCrawlers([[6, 5]]);
+test('shock: a tap kills only the nearest tile, not further ones', () => {
+  const r = makeRoomInPlaying();
   setPlayerAt(r, 5, 5);
+  plantCrawler(r, 1, 6, 5);
+  plantCrawler(r, 2, 7, 5);
+  setInputQueue(r, [
+    { shock: true, facingRad: 0 },
+    { shock: false, facingRad: 0 },
+  ]);
+  tick(r); tick(r);
+  assertCrawlerDead(r, 6, 5);
+  assertCrawlerAlive(r, 7, 5, 'tap should only reach 1 tile');
+});
+
+test('shock: beam breaks at a non-conductive tile', () => {
+  const r = makeRoomInPlaying();
+  setPlayerAt(r, 5, 5);
+  // Tile 6,5 is damaged-below-threshold; tile 7,5 has a bug.
   r.tiles.l1Hp[indexOf(r.grid.cols, 6, 5)] = NON_CONDUCTIVE_HP;
-  inputPlayer(r, { shock: true, facingRad: 0 });
+  plantCrawler(r, 1, 7, 5);
+  // Long hold so the beam would naturally reach 7,5 if not blocked.
+  const held = Array.from({ length: 32 }, () => ({ shock: true, facingRad: 0 }));
+  held.push({ shock: false, facingRad: 0 });
+  setInputQueue(r, held);
+  for (let i = 0; i < held.length; i++) tick(r);
+  assertCrawlerAlive(r, 7, 5, 'non-conductive tile should break the beam');
+});
+
+test('shock: electrified tiles linger and kill bugs that walk into them', () => {
+  const r = makeRoomInPlaying();
+  setPlayerAt(r, 5, 5);
+  // Fire east — no bug present yet.
+  setInputQueue(r, [
+    { shock: true, facingRad: 0 },
+    { shock: false, facingRad: 0 },
+  ]);
+  tick(r); tick(r);
+  const idx = indexOf(r.grid.cols, 6, 5);
+  assert.ok(r.tiles.l1Charge[idx]! > 0, 'tile should be charged after fire');
+  // Now plant a bug onto the charged tile.
+  plantCrawler(r, 99, 6, 5);
+  // The next tick's linger sweep should fry it.
   tick(r);
-  assertCrawlerAlive(r, 6, 5);
+  assertCrawlerDead(r, 6, 5, 'bug should die from lingering electricity');
+});
+
+test('shock: tile charge decays over time', () => {
+  const r = makeRoomInPlaying();
+  setPlayerAt(r, 5, 5);
+  setInputQueue(r, [
+    { shock: true, facingRad: 0 },
+    { shock: false, facingRad: 0 },
+  ]);
+  tick(r); tick(r);
+  const idx = indexOf(r.grid.cols, 6, 5);
+  const initial = r.tiles.l1Charge[idx]!;
+  assert.ok(initial > 0);
+  // After 5 more ticks, charge should have dropped by 5.
+  for (let i = 0; i < 5; i++) tick(r);
+  assert.ok(
+    r.tiles.l1Charge[idx]! < initial,
+    `charge should decay; was ${initial}, now ${r.tiles.l1Charge[idx]}`,
+  );
+});
+
+test('shock: SHOCK_LINGER_TICKS sanity — charge stops after at most that many ticks', () => {
+  const r = makeRoomInPlaying();
+  setPlayerAt(r, 5, 5);
+  setInputQueue(r, [
+    { shock: true, facingRad: 0 },
+    { shock: false, facingRad: 0 },
+  ]);
+  tick(r); tick(r);
+  const idx = indexOf(r.grid.cols, 6, 5);
+  for (let i = 0; i < SHOCK_LINGER_TICKS + 5; i++) tick(r);
+  assert.equal(r.tiles.l1Charge[idx], 0, 'charge should have fully decayed');
 });

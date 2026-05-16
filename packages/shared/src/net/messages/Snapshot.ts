@@ -27,6 +27,7 @@ void registerEntityEncoder;
 //   RLE l1Hp                 (length = tileCount)
 //   RLE l2Kind               (length = tileCount)
 //   RLE l2Hp                 (length = tileCount)
+//   RLE l1Charge             (length = tileCount) — v14, ticks-remaining of electrification
 //   u8  groupCount
 //   for each group:
 //     u8 entityType
@@ -63,6 +64,7 @@ export function encode(p: SnapshotPayload): Uint8Array {
   encodeRle(w, p.tiles.l1Hp);
   encodeRle(w, p.tiles.l2Kind);
   encodeRle(w, p.tiles.l2Hp);
+  encodeRle(w, p.tiles.l1Charge);
 
   // Group count is dynamic — Player is always present; NPC, Crawler, and
   // Carbon groups are omitted when empty (saves the 2-byte group header each).
@@ -122,6 +124,7 @@ export function decode(r: BinaryReader): SnapshotPayload {
     l1Hp: decodeRle(r, tilesLen),
     l2Kind: decodeRle(r, tilesLen),
     l2Hp: decodeRle(r, tilesLen),
+    l1Charge: decodeRle(r, tilesLen),
   };
 
   const groupCount = r.u8();

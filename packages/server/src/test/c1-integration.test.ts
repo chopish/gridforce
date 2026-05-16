@@ -161,61 +161,38 @@ function playerState(r: RoomInternals): PlayerState {
   return r.states.get(PLAYER_ID)!;
 }
 
-test('C1 e2e: single ATTACKING bug grinds L1 → exposed dome → passage → bug transits', () => {
+test('C1 e2e: single ATTACKING bug with no player around still grinds L1 to zero', () => {
+  // With no players in the room the C1.2 AI keeps the bug idling on its
+  // current tile in ATTACKING state — so weight-integrity still grinds the
+  // panel exactly as before.
   const room = makeRoomInPlaying();
-  const id = planCrawlerAttacking(room, 0, 0);
-  const idx = indexOf(room.grid.cols, 0, 0);
+  const id = planCrawlerAttacking(room, 5, 5);
+  const idx = indexOf(room.grid.cols, 5, 5);
 
-  // L1 grinds down. WEIGHT_THRESHOLD=4, 1 bug → 2 hp/s; L1=100 → ~50 seconds.
-  // Take a quick check after 5s to confirm L1 is going down.
   tickFor(room, 5);
   assert.ok(
     room.tiles.l1Hp[idx]! < L1_PANEL_MAX_HP,
     `L1 should be reduced after 5s, got ${room.tiles.l1Hp[idx]!}`,
   );
-
-  // Long-grind: an additional 60s pushes total to 65s — well past the ~50s
-  // needed to drive a single-bug L1 to zero.
   tickFor(room, 60);
   assert.equal(room.tiles.l1Hp[idx]!, 0, 'L1 should be fully ground out');
-  assert.ok(
-    room.tiles.l0Hp[idx]! > 0,
-    `L0 should still be intact, got ${room.tiles.l0Hp[idx]!}`,
-  );
-
-  // Crawler is still ATTACKING (L0 alive means tile is not yet a passage).
-  const before = room.crawlers.get(id);
-  assert.ok(before, 'planted crawler should still be alive');
-  assert.equal(before.ai, CrawlerAIState.ATTACKING);
-
-  // Speed-run by setting L0 close to 0 to avoid another ~100s of ticks.
-  room.tiles.l0Hp[idx] = 5;
-  tickFor(room, 5);
-  assert.equal(room.tiles.l0Hp[idx], 0, 'L0 should now be destroyed');
-
-  // Once both layers are 0 the tile is a passage and the planted bug should
-  // transition out of ATTACKING (it walks off as TRANSITING). It may already
-  // have left the world this same tick if facing carries it off the edge —
-  // accept either "still alive and TRANSITING" or "already reaped".
+  // Bug must still exist and still be ATTACKING (no players to chase).
   const after = room.crawlers.get(id);
-  if (after) {
-    assert.equal(
-      after.ai,
-      CrawlerAIState.TRANSITING,
-      'planted crawler should leave ATTACKING once tile becomes a passage',
-    );
-  }
+  assert.ok(after, 'bug should still be alive');
+  assert.equal(after.ai, CrawlerAIState.ATTACKING);
 });
 
-test('C1 e2e: cursor-aim uncharged shock kills only the cursor-direction crawler', () => {
+test('C1 e2e: hold-charge shock kills only the cursor-direction crawler', () => {
   const room = makeRoomInPlaying();
   const eastId = planCrawlerAttacking(room, 6, 5);
   const westId = planCrawlerAttacking(room, 4, 5);
   setPlayerAt(room, 5, 5);
 
-  // Aim east. Uncharged shock snaps to the cardinal nearest the cursor and
-  // hits exactly one tile.
+  // Aim east. C1.2 fires on the falling edge: one tick of held, one tick
+  // of released. With a tap (one tick of charge) the beam is 1 tile long.
   inputPlayerShock(room, { shock: true, facingRad: 0 });
+  tick(room);
+  inputPlayerShock(room, { shock: false, facingRad: 0 });
   tick(room);
 
   assert.equal(
@@ -225,7 +202,6 @@ test('C1 e2e: cursor-aim uncharged shock kills only the cursor-direction crawler
   );
   const survivor = room.crawlers.get(westId);
   assert.ok(survivor, 'west crawler should survive (not in cursor direction)');
-  assert.equal(survivor.targetCx, 4);
 });
 
 test('C1 e2e: panel-jump teleports via cursor offsets within the 5×5 box', () => {

@@ -11,17 +11,19 @@ import {
 } from './tiles.js';
 import { L0_DOME_MAX_HP, L1_PANEL_MAX_HP } from './constants.js';
 
-test('allocateTiles initializes L0 and L1 at max HP and L2 empty', () => {
+test('allocateTiles initializes L0 and L1 at max HP and L2/l1Charge empty', () => {
   const t = allocateTiles(3, 2);
   assert.equal(t.l0Hp.length, 6);
   assert.equal(t.l1Hp.length, 6);
   assert.equal(t.l2Kind.length, 6);
   assert.equal(t.l2Hp.length, 6);
+  assert.equal(t.l1Charge.length, 6);
   for (let i = 0; i < 6; i++) {
     assert.equal(t.l0Hp[i], L0_DOME_MAX_HP);
     assert.equal(t.l1Hp[i], L1_PANEL_MAX_HP);
     assert.equal(t.l2Kind[i], 0);
     assert.equal(t.l2Hp[i], 0);
+    assert.equal(t.l1Charge[i], 0);
   }
 });
 

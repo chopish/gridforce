@@ -4,6 +4,7 @@ import {
   CONDUCTION_THRESHOLD,
   L0_DOME_MAX_HP,
   L1_PANEL_MAX_HP,
+  SHOCK_LINGER_TICKS,
   indexOf,
   type GridDef,
   type TileBuffers,
@@ -88,6 +89,29 @@ export class GridRenderer {
     } else if (l1 === 0 && l0 > 0 && l0 < L0_DOME_MAX_HP) {
       this.drawHpBar(x, y, ps, l0 / L0_DOME_MAX_HP, 0xc26d4c);
     }
+
+    // Lingering electricity glow (v14). Tiles hit by a shock beam carry a
+    // l1Charge counter in server ticks that decays toward 0; while > 0 the
+    // tile kills any bug that touches it. Render a yellow inner glow whose
+    // intensity tracks the remaining charge.
+    const charge = this.tiles.l1Charge[idx]!;
+    if (charge > 0) {
+      this.drawChargeGlow(x, y, ps, charge / SHOCK_LINGER_TICKS);
+    }
+  }
+
+  // Bright yellow inner frame whose alpha tracks remaining charge. Drawn
+  // OVER any HP bar / panel fill so a freshly-electrified tile reads as
+  // "live wires" at a glance. `ratio` (0..1) is remaining charge fraction.
+  private drawChargeGlow(x: number, y: number, ps: number, ratio: number): void {
+    const g = this.gfx;
+    const alpha = 0.25 + 0.55 * Math.max(0, Math.min(1, ratio));
+    // Outer arc frame.
+    g.rect(x + 1, y + 1, ps - 2, ps - 2)
+      .stroke({ width: 3, color: 0xfff066, alpha });
+    // Inner pulse — softer.
+    g.rect(x + 6, y + 6, ps - 12, ps - 12)
+      .fill({ color: 0xfff066, alpha: alpha * 0.25 });
   }
 
   // Thin bar pinned to the bottom of a tile. `ratio` (0..1) is the fill, color

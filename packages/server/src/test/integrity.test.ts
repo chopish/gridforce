@@ -55,44 +55,6 @@ function plantAttacker(
   });
 }
 
-function plantTransiting(
-  r: RoomInternals,
-  id: number,
-  cx: number,
-  cy: number,
-): void {
-  r.crawlers.set(id, {
-    id,
-    x: cx * r.grid.panelSize + r.grid.panelSize / 2,
-    y: cy * r.grid.panelSize + r.grid.panelSize / 2,
-    facing: 0,
-    hp: 1,
-    targetCx: cx,
-    targetCy: cy,
-    ai: CrawlerAIState.TRANSITING,
-  });
-}
-
-function plantApproaching(
-  r: RoomInternals,
-  id: number,
-  cx: number,
-  cy: number,
-): void {
-  r.crawlers.set(id, {
-    id,
-    // Park well outside the half-panel transition threshold so stepCrawler
-    // keeps it APPROACHING rather than flipping it to ATTACKING.
-    x: cx * r.grid.panelSize + r.grid.panelSize / 2 + r.grid.panelSize * 4,
-    y: cy * r.grid.panelSize + r.grid.panelSize / 2,
-    facing: Math.PI,
-    hp: 1,
-    targetCx: cx,
-    targetCy: cy,
-    ai: CrawlerAIState.APPROACHING,
-  });
-}
-
 // Run `seconds` worth of ticks at the server tick rate.
 function tickFor(r: RoomInternals, seconds: number): void {
   const dt = 1 / 30; // SERVER_TICK_DT_S
@@ -152,35 +114,11 @@ test('integrity: five ATTACKING crawlers stacked on one tile cross into quadrati
   );
 });
 
-test('integrity: TRANSITING crawler contributes no weight (no damage)', () => {
-  const cx = 10;
-  const cy = 10;
-  const r = makeRoomForIntegrity();
-  plantTransiting(r, TEST_ID_BASE, cx, cy);
-
-  const idx = indexOf(r.grid.cols, cx, cy);
-  const before = r.tiles.l1Hp[idx]!;
-  // One tick only — TRANSITING bugs drift and may exit/respawn over longer
-  // windows; we only care that they don't damage tiles.
-  r.physicsStep();
-  const after = r.tiles.l1Hp[idx]!;
-  assert.equal(after, before, 'TRANSITING bug should not damage its tile');
-});
-
-test('integrity: APPROACHING crawler contributes no weight (no damage)', () => {
-  const cx = 10;
-  const cy = 10;
-  const r = makeRoomForIntegrity();
-  plantApproaching(r, TEST_ID_BASE, cx, cy);
-
-  const idx = indexOf(r.grid.cols, cx, cy);
-  const before = r.tiles.l1Hp[idx]!;
-  // One tick — the bug walks toward target but stays APPROACHING for many
-  // ticks given the parking distance.
-  r.physicsStep();
-  const after = r.tiles.l1Hp[idx]!;
-  assert.equal(after, before, 'APPROACHING bug should not damage its tile');
-});
+// TRANSITING is no longer reachable in the C1.2 chase-player AI — the bug
+// state machine never produces it — so the dedicated "TRANSITING doesn't
+// contribute weight" test was removed. The integrity loop still gates on
+// ai === ATTACKING and dead states (APPROACHING during a panel-grind chase)
+// are exercised by the c1-integration tests.
 
 test('integrity: cardinal neighbours are untouched by a single attacker', () => {
   // A single ATTACKING crawler should damage ONLY its target tile. The

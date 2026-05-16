@@ -19,8 +19,8 @@ import { BinaryWriter, MessageType, writeHeader } from '../wire.js';
 //   u8 maxPlayers
 //   string sessionKey
 //   varuint playerCount, then [PlayerEncoder]*
-//   varuint n (= cols*rows), then four raw u8[n] blocks in order:
-//     l0Hp[n], l1Hp[n], l2Kind[n], l2Hp[n]
+//   varuint n (= cols*rows), then five raw u8[n] blocks in order:
+//     l0Hp[n], l1Hp[n], l2Kind[n], l2Hp[n], l1Charge[n]   (v14)
 // Raw (not RLE) to keep joiner-decode trivial; Welcome fires once per
 // connection so the bandwidth difference vs. snapshot RLE is negligible.
 
@@ -62,6 +62,7 @@ export function encode(p: WelcomePayload): Uint8Array {
   for (let i = 0; i < n; i++) w.u8(p.tiles.l1Hp[i]!);
   for (let i = 0; i < n; i++) w.u8(p.tiles.l2Kind[i]!);
   for (let i = 0; i < n; i++) w.u8(p.tiles.l2Hp[i]!);
+  for (let i = 0; i < n; i++) w.u8(p.tiles.l1Charge[i]!);
   return w.finish();
 }
 
@@ -90,11 +91,13 @@ export function decode(r: BinaryReader): WelcomePayload {
     l1Hp: new Uint8Array(n),
     l2Kind: new Uint8Array(n),
     l2Hp: new Uint8Array(n),
+    l1Charge: new Uint8Array(n),
   };
   for (let i = 0; i < n; i++) tiles.l0Hp[i] = r.u8();
   for (let i = 0; i < n; i++) tiles.l1Hp[i] = r.u8();
   for (let i = 0; i < n; i++) tiles.l2Kind[i] = r.u8();
   for (let i = 0; i < n; i++) tiles.l2Hp[i] = r.u8();
+  for (let i = 0; i < n; i++) tiles.l1Charge[i] = r.u8();
   return {
     yourPlayerId,
     grid: { cols, rows, panelSize },

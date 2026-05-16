@@ -48,7 +48,12 @@
 //       replace the single `panelStates` RLE block with four per-layer
 //       byte buffers (l0Hp, l1Hp, l2Kind, l2Hp), RLE-encoded in snapshot
 //       and raw in welcome.
-export const SCHEMA_VERSION = 13;
+//  v14: C1.2 — hold-charge shock + lingering electricity. TileBuffers gains
+//       a 5th byte buffer `l1Charge` (ticks remaining of electrification),
+//       encoded as a 5th RLE block in snapshot and a 5th raw block in
+//       welcome. Shock is now 360° ray-marched (not cardinal-snapped) and
+//       fires only on falling-edge release; rising-edge tap is gone.
+export const SCHEMA_VERSION = 14;
 
 // Tick rates
 export const SERVER_TICK_HZ = 30;
@@ -148,6 +153,16 @@ export const REPAIR_CARBON_COST = 1;
 
 // Uncharged local shock (charged shock lands in B2).
 export const SHOCK_COOLDOWN_S = 0.25;
+
+// C1.2 hold-charge shock model. Shock fires only on falling-edge release
+// (the rising-edge tap is retired). Charge time scales beam length 1..MAX
+// tiles. Each tile in the beam path becomes electrified for SHOCK_LINGER_S
+// seconds, killing any bug that walks onto it during that window.
+export const SHOCK_BEAM_MAX_TILES = 4;
+export const SHOCK_CHARGE_FULL_S = 1.0;   // hold this long for max-length beam
+export const SHOCK_LINGER_S = 1.5;        // electrified-tile lifetime
+// Quantized to server-tick units (Uint8 buffer); 30 Hz × 1.5s ≈ 45 ticks.
+export const SHOCK_LINGER_TICKS = 45;
 
 // Carbon pickups.
 export const CARBON_TTL_S = 10;

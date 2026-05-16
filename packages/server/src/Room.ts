@@ -8,9 +8,11 @@ import {
   CRAWLER_SPAWN_INTERVAL_S,
   CRAWLER_WEIGHT,
   MAX_ALIVE_CRAWLERS,
+  SHOCK_BEAM_MAX_TILES,
   SHOCK_CHARGE_COOLDOWN_S,
-  SHOCK_CHARGE_TIME_S,
+  SHOCK_CHARGE_FULL_S,
   SHOCK_COOLDOWN_S,
+  SHOCK_LINGER_TICKS,
   REPAIR_DURATION_S,
   REPAIR_CARBON_COST,
   CrawlerAIState,
@@ -80,21 +82,6 @@ const MAX_NPCS_PER_ROOM = Math.max(
   1,
   Math.min(0xffff, Number(process.env.GRIDFORCE_MAX_NPCS) || 8192),
 );
-
-// Snap a radian angle to its nearest cardinal direction. 0=N (up), 1=E,
-// 2=S (down), 3=W. Note the screen-y-down convention: east = 0 rad,
-// south = +π/2, west = π, north = -π/2 (or +3π/2).
-// Sectors are π/2 wide and centered on each cardinal: E=[-π/4..π/4],
-// S=[π/4..3π/4], W=[3π/4..5π/4], N=[5π/4..7π/4].
-function snapToCardinal(rad: number): 0 | 1 | 2 | 3 {
-  let f = rad % (Math.PI * 2);
-  if (f < 0) f += Math.PI * 2;
-  const s = Math.PI / 4;
-  if (f < s || f >= 7 * s) return 1; // E
-  if (f < 3 * s) return 2;           // S
-  if (f < 5 * s) return 3;           // W
-  return 0;                          // N
-}
 
 // Place new players around the centre, spread on a circle so they don't spawn on top of each other.
 function spawnPosition(grid: GridDef, slot: number): { x: number; y: number } {
@@ -565,32 +552,35 @@ export class Room {
   private spawnCrawler(): void {
     if (this.crawlers.size >= MAX_ALIVE_CRAWLERS) return;
     const { cols, rows, panelSize } = this.grid;
-    const edge = Math.floor(Math.random() * 4); // 0=top, 1=right, 2=bottom, 3=left
-    let cx: number, cy: number, x: number, y: number, facing: number;
+    // Spawn just outside a random edge of the map. C1.2 AI retargets each
+    // tick to the nearest pilot, so we no longer pick a fixed edge tile —
+    // the bug picks its first target the moment it's stepped.
+    const edge = Math.floor(Math.random() * 4);
+    let x: number, y: number, facing: number, cx: number, cy: number;
     if (edge === 0) {
       cx = Math.floor(Math.random() * cols);
       cy = 0;
       x = cx * panelSize + panelSize / 2;
       y = -panelSize / 2;
-      facing = Math.PI / 2; // facing south (+y)
+      facing = Math.PI / 2;
     } else if (edge === 1) {
       cx = cols - 1;
       cy = Math.floor(Math.random() * rows);
       x = cols * panelSize + panelSize / 2;
       y = cy * panelSize + panelSize / 2;
-      facing = Math.PI; // facing west (-x)
+      facing = Math.PI;
     } else if (edge === 2) {
       cx = Math.floor(Math.random() * cols);
       cy = rows - 1;
       x = cx * panelSize + panelSize / 2;
       y = rows * panelSize + panelSize / 2;
-      facing = -Math.PI / 2; // facing north (-y)
+      facing = -Math.PI / 2;
     } else {
       cx = 0;
       cy = Math.floor(Math.random() * rows);
       x = -panelSize / 2;
       y = cy * panelSize + panelSize / 2;
-      facing = 0; // facing east (+x)
+      facing = 0;
     }
     const id = this.nextCrawlerId++ & 0xffff;
     this.crawlers.set(id, {
@@ -605,77 +595,61 @@ export class Room {
     this.carbons.set(id, { id, x, y, ttlS: CARBON_TTL_S });
   }
 
-  // v13 cursor-aim uncharged shock. The shock fires on the single cardinal
-  // tile the cursor is pointing at — no longer the 4-cardinal AoE. The
-  // affected tile must be in-bounds AND conductive (L1 HP above threshold);
-  // any crawlers whose centre falls on that tile are killed and drop carbon.
+  // C1.2 hold-charge shock. Rising-edge tap is retired. The bit is held
+  // ("LMB / F is down") while charging; on falling edge the beam fires.
   //
-  // Returns either the input state unchanged (no-op: off-grid or
-  // non-conductive) or a new state with shockCooldownS bumped to
-  // SHOCK_COOLDOWN_S. Cooldown gating + rising-edge detection are caller
-  // responsibilities (see physicsStep).
+  // Beam length scales with shockHeldS: 0s → 1 tile, full charge → MAX tiles.
+  // The beam is ray-marched at the cursor angle (true 360°, not cardinal-
+  // snapped). Each conductive tile the ray crosses is electrified for
+  // SHOCK_LINGER_TICKS server ticks; bugs on those tiles die at the moment
+  // of fire, and any bug that wanders onto a still-charged tile during the
+  // linger window dies in the per-tick sweep (see physicsStep).
   //
-  // The Task 12 "charged" hold→release variant is applyChargedShock; this is
-  // the rising-edge tap path only.
-  private applyShock(_playerId: PlayerId, playerState: PlayerState, input: PlayerInput): PlayerState {
-    const { cols, rows, panelSize } = this.grid;
-    const cardinal = snapToCardinal(input.facingRad);
-    const px = Math.floor(playerState.x / panelSize);
-    const py = Math.floor(playerState.y / panelSize);
-    const dx = cardinal === 1 ? 1 : cardinal === 3 ? -1 : 0;
-    const dy = cardinal === 0 ? -1 : cardinal === 2 ? 1 : 0;
-    const tx = px + dx;
-    const ty = py + dy;
-    // Off-grid aim: no-op, no cooldown charged. The shock just doesn't
-    // happen — same as pointing at a wall.
-    if (tx < 0 || tx >= cols || ty < 0 || ty >= rows) return playerState;
-    const idx = indexOf(cols, tx, ty);
-    // Conduction gate: L1 panel HP must clear CONDUCTION_THRESHOLD. Damaged-
-    // below-threshold panels don't carry the shock through (matches the
-    // legacy DAMAGED-blocks-shock semantic).
-    if (!conductive(this.tiles, idx)) return playerState;
-    this.killCrawlersOnTile(tx, ty);
-    return { ...playerState, shockCooldownS: SHOCK_COOLDOWN_S };
-  }
-
-  // Charged shock — fired on the falling edge of input.shock once shockHeldS
-  // has reached SHOCK_CHARGE_TIME_S (see physicsStep). Pulse propagates along
-  // the cursor's cardinal direction across up to 2 tiles. Both ends of the
-  // line are conduction-gated tile-by-tile: tile 1 must be in-bounds AND
-  // conductive (otherwise the whole pulse fizzles — neither tile is hit and
-  // no cooldown is charged); tile 2 only receives the pulse if tile 2 itself
-  // is conductive (tile 1 having conducted is implicit by the time we get
-  // there). Returns a new PlayerState with shockCooldownS bumped to
-  // SHOCK_CHARGE_COOLDOWN_S, or the input state unchanged on a fizzle.
-  private applyChargedShock(
+  // Non-conductive tiles in the path break the beam — propagation stops at
+  // the first dead tile, matching the legacy "DAMAGED blocks shock" rule.
+  // Returns a new PlayerState with shockCooldownS bumped, or the input state
+  // unchanged if the beam length resolves to zero (e.g. negative tile count).
+  private applyShockBeam(
     _playerId: PlayerId,
     playerState: PlayerState,
     input: PlayerInput,
   ): PlayerState {
     const { cols, rows, panelSize } = this.grid;
-    const cardinal = snapToCardinal(input.facingRad);
-    const px = Math.floor(playerState.x / panelSize);
-    const py = Math.floor(playerState.y / panelSize);
-    const dx = cardinal === 1 ? 1 : cardinal === 3 ? -1 : 0;
-    const dy = cardinal === 0 ? -1 : cardinal === 2 ? 1 : 0;
-    // Tile 1.
-    const t1x = px + dx;
-    const t1y = py + dy;
-    if (t1x < 0 || t1x >= cols || t1y < 0 || t1y >= rows) return playerState;
-    const idx1 = indexOf(cols, t1x, t1y);
-    if (!conductive(this.tiles, idx1)) return playerState;
-    this.killCrawlersOnTile(t1x, t1y);
-    // Tile 2 — only if tile 1 conducted (which it did, per the gate above)
-    // AND tile 2 is itself in-bounds + conductive.
-    const t2x = px + dx * 2;
-    const t2y = py + dy * 2;
-    if (t2x >= 0 && t2x < cols && t2y >= 0 && t2y < rows) {
-      const idx2 = indexOf(cols, t2x, t2y);
-      if (conductive(this.tiles, idx2)) {
-        this.killCrawlersOnTile(t2x, t2y);
-      }
+    // 0s held = 1 tile (snappy tap); SHOCK_CHARGE_FULL_S+ held = MAX.
+    const ratio = Math.min(1, playerState.shockHeldS / SHOCK_CHARGE_FULL_S);
+    const beamTiles = Math.max(1, Math.ceil(ratio * SHOCK_BEAM_MAX_TILES));
+    const px = playerState.x;
+    const py = playerState.y;
+    const dirX = Math.cos(input.facingRad);
+    const dirY = Math.sin(input.facingRad);
+    let lastTx = Math.floor(px / panelSize);
+    let lastTy = Math.floor(py / panelSize);
+    let hit = 0;
+    // Ray-march tile-by-tile. Step in panelSize/8 increments so we never
+    // skip across a tile boundary at this beam length.
+    const step = panelSize / 8;
+    const maxDist = beamTiles * panelSize + panelSize; // generous bound
+    for (let t = step; t <= maxDist && hit < beamTiles; t += step) {
+      const sx = px + dirX * t;
+      const sy = py + dirY * t;
+      const tx = Math.floor(sx / panelSize);
+      const ty = Math.floor(sy / panelSize);
+      if (tx === lastTx && ty === lastTy) continue;
+      lastTx = tx;
+      lastTy = ty;
+      if (tx < 0 || tx >= cols || ty < 0 || ty >= rows) break;
+      const idx = indexOf(cols, tx, ty);
+      // Conduction gate: dead/damaged panels break the beam.
+      if (!conductive(this.tiles, idx)) break;
+      this.tiles.l1Charge[idx] = SHOCK_LINGER_TICKS;
+      this.killCrawlersOnTile(tx, ty);
+      hit++;
     }
-    return { ...playerState, shockCooldownS: SHOCK_CHARGE_COOLDOWN_S };
+    // If no tile was hit (e.g. point-blank into a wall) we still consume
+    // cooldown so the player can't infinitely retry — a fired weapon is a
+    // fired weapon. Pick the larger of tap/charged cooldown by hold time.
+    const cooldown = ratio >= 0.5 ? SHOCK_CHARGE_COOLDOWN_S : SHOCK_COOLDOWN_S;
+    return { ...playerState, shockCooldownS: cooldown };
   }
 
   // Kill every crawler whose centre lies on tile (tx,ty) and drop carbon at
@@ -700,40 +674,28 @@ export class Room {
       const pilot = this.pilots.get(id);
       const input = pilot ? pilot.consumeInputForTick(this.tick) : null;
       const next = stepPlayer(state, input, SERVER_TICK_DT_S, this.grid);
-      // Shock — v13 has two paths sharing one input bit:
-      //   - Uncharged tap fires on the RISING EDGE of input.shock. Cooldown
-      //     gate still applies so rapid taps can't outrun SHOCK_COOLDOWN_S.
-      //   - Charged release fires on the FALLING EDGE if shockHeldS has
-      //     accumulated to SHOCK_CHARGE_TIME_S — fires a 2-tile cardinal line
-      //     (see applyChargedShock). Short-hold releases do nothing extra
-      //     (the rising-edge tap already fired).
-      // While the bit is held we accumulate dt into shockHeldS, saturating
-      // at SHOCK_CHARGE_TIME_S so the wire-quantized timer never overshoots.
+      // Shock — C1.2 hold-charge model. The bit is held while charging; on
+      // falling edge the beam fires. Beam length scales with shockHeldS
+      // (see applyShockBeam). Rising-edge tap is retired.
+      // While held we accumulate dt into shockHeldS, saturating at
+      // SHOCK_CHARGE_FULL_S so the wire-quantized timer never overshoots.
       let cur = next;
       const prevShockHeld = this.prevShockBits.get(id) ?? false;
       const shockHeldNow = !!(input && input.shock);
       this.prevShockBits.set(id, shockHeldNow);
-      const risingEdge = shockHeldNow && !prevShockHeld;
       const fallingEdge = !shockHeldNow && prevShockHeld;
       if (shockHeldNow) {
         cur = {
           ...cur,
-          shockHeldS: Math.min(SHOCK_CHARGE_TIME_S, cur.shockHeldS + SERVER_TICK_DT_S),
+          shockHeldS: Math.min(SHOCK_CHARGE_FULL_S, cur.shockHeldS + SERVER_TICK_DT_S),
         };
       }
-      if (input && risingEdge && cur.shockCooldownS === 0) {
-        cur = this.applyShock(id, cur, input);
-      } else if (fallingEdge) {
-        // Falling edge — only fire charged if we hit full charge. Either way,
-        // reset the held timer (the tap path doesn't read it).
-        if (input && cur.shockHeldS >= SHOCK_CHARGE_TIME_S && cur.shockCooldownS === 0) {
-          cur = this.applyChargedShock(id, cur, input);
+      if (fallingEdge) {
+        if (input && cur.shockCooldownS === 0) {
+          cur = this.applyShockBeam(id, cur, input);
         }
         cur = { ...cur, shockHeldS: 0 };
       } else if (cur.shockCooldownS > 0) {
-        // Drain cooldown each tick. Held-edge taps above can both fire AND
-        // bump cooldown in the same tick; this `else` keeps the drain from
-        // immediately undoing the bump.
         cur = { ...cur, shockCooldownS: Math.max(0, cur.shockCooldownS - SERVER_TICK_DT_S) };
       }
       // Repair (raise L1 panel HP back to max). TODO: this is the B1-style
@@ -795,8 +757,9 @@ export class Room {
       this.spawnCrawler();
     }
 
-    // Step all crawlers against the room's tile state.
-    const ctx: CrawlerStepContext = { tiles: this.tiles };
+    // Step all crawlers against the room's tile state. C1.2 passes the
+    // current player roster so the AI can chase the nearest pilot.
+    const ctx: CrawlerStepContext = { tiles: this.tiles, players: this.states.values() };
     for (const [id, c] of this.crawlers) {
       const next = stepCrawler(c, SERVER_TICK_DT_S, this.grid, ctx);
       if (next.hp <= 0) {
@@ -806,11 +769,14 @@ export class Room {
       }
     }
 
+    // Lingering electricity sweep: kill bugs standing on charged tiles, then
+    // tick down each tile's charge counter. Done AFTER stepCrawler so bugs
+    // that walked into a charged tile this tick still get fried.
+    this.applyShockLinger();
+
     // Weight-driven integrity damage: each ATTACKING crawler contributes
-    // CRAWLER_WEIGHT to its target tile; per tile, total load = self + the
-    // four cardinal neighbours. Damage = damagePerSecond(load, armor) × dt,
-    // applied to the topmost layer. Runs after crawlers have stepped so
-    // weight reflects the current frame's AI states.
+    // CRAWLER_WEIGHT to its target tile. Runs after the linger sweep so dead
+    // bugs are already removed.
     this.applyWeightIntegrity(SERVER_TICK_DT_S);
 
     // Carbon expiry + pickup. Combat kills (Task 10) call spawnCarbon directly.
@@ -843,6 +809,32 @@ export class Room {
     const cur = this.currentPhaseDef();
     if (cur.durationS !== null && this.phaseElapsedS >= cur.durationS) {
       this.advancePhase();
+    }
+  }
+
+  // Per-tick lingering-electricity sweep. Any bug standing on a charged tile
+  // (l1Charge > 0) is killed and drops carbon. After the kill pass, every
+  // tile's charge counter decrements by one tick. This is the mechanic that
+  // makes long-charge beams ("more tiles, lingering effect") meaningful:
+  // bugs that wander into a recently-electrified tile take the residual.
+  private applyShockLinger(): void {
+    const { cols, panelSize } = this.grid;
+    // Bug kills first.
+    for (const [cid, c] of this.crawlers) {
+      const tcx = Math.floor(c.x / panelSize);
+      const tcy = Math.floor(c.y / panelSize);
+      if (tcx < 0 || tcx >= cols || tcy < 0) continue;
+      const idx = indexOf(cols, tcx, tcy);
+      if (idx >= this.tiles.l1Charge.length) continue;
+      if (this.tiles.l1Charge[idx]! > 0) {
+        this.spawnCarbon(c.x, c.y);
+        this.crawlers.delete(cid);
+      }
+    }
+    // Then decrement charge counters.
+    const charges = this.tiles.l1Charge;
+    for (let i = 0; i < charges.length; i++) {
+      if (charges[i]! > 0) charges[i] = charges[i]! - 1;
     }
   }
 

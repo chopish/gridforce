@@ -6,11 +6,10 @@ import {
   NETSIM_PROFILES,
   PANEL_SIZE,
   SERVER_TICK_DT_MS,
-  SHOCK_CHARGE_TIME_S,
+  SHOCK_BEAM_MAX_TILES,
+  SHOCK_CHARGE_FULL_S,
   type PlayerId,
 } from '@gridforce/shared';
-
-import { snapToCardinal } from './render/ShockFxRenderer.js';
 
 import { createInvite, redeemInvite, LobbyApiError } from './api.js';
 import { InputCapture } from './input/InputCapture.js';
@@ -239,11 +238,11 @@ async function bootstrap(): Promise<void> {
     // Track the stage by id rather than index — a run swap in the lobby
     // keeps currentStageIndex at 0, so an index-only check would miss it.
     let lastRenderedStageId = '';
-    // Local shock VFX edge tracking. Tap fires on rising edge, charged fires
-    // on falling edge after at least SHOCK_CHARGE_TIME_S of hold. Mirrors the
-    // server's edge logic but is purely cosmetic — if the server rejects the
-    // shock (e.g. non-conductive target), the beam still flashes briefly,
-    // which is preferable to no feedback at all.
+    // Local shock VFX edge tracking. C1.2: shock fires ONLY on the falling
+    // edge (release); rising edge does nothing. Beam length scales with how
+    // long the bit was held (mirrors server applyShockBeam). Cosmetic only —
+    // if the server rejects the shock (non-conductive target), the local
+    // beam still flashes briefly.
     let prevLocalShock = false;
     let shockDownAtMs = 0;
     // "resyncing…" banner is shown while rtt EWMA is unpopulated (=0). This
@@ -303,26 +302,24 @@ async function bootstrap(): Promise<void> {
         const inp = world.step({ ...sample, clientTimeMs: now });
         socket.sendInput(inp);
 
-        // Shock VFX edges (local player only). We trigger off the per-tick
-        // sample so the cardinal direction reflects what we actually shipped
-        // to the server (same facingRad).
+        // Shock VFX (local player only) — fires on the falling edge of the
+        // bit, mirroring the server's applyShockBeam. Beam length scales
+        // with how long the bit was held (1..SHOCK_BEAM_MAX_TILES). Angle
+        // is the actual cursor facingRad (no cardinal snap).
         if (world.phase !== 'lobby' && localForFacing) {
           if (sample.shock && !prevLocalShock) {
-            renderer.shockFx.fireTap(
-              localForFacing.x,
-              localForFacing.y,
-              snapToCardinal(sample.facingRad),
-            );
             shockDownAtMs = now;
           } else if (!sample.shock && prevLocalShock) {
-            const heldMs = now - shockDownAtMs;
-            if (heldMs >= SHOCK_CHARGE_TIME_S * 1000) {
-              renderer.shockFx.fireCharged(
-                localForFacing.x,
-                localForFacing.y,
-                snapToCardinal(sample.facingRad),
-              );
-            }
+            const heldS = (now - shockDownAtMs) / 1000;
+            const ratio = Math.min(1, heldS / SHOCK_CHARGE_FULL_S);
+            const tiles = Math.max(1, Math.ceil(ratio * SHOCK_BEAM_MAX_TILES));
+            renderer.shockFx.fire(
+              localForFacing.x,
+              localForFacing.y,
+              sample.facingRad,
+              tiles,
+              ratio >= 0.5,
+            );
           }
           prevLocalShock = sample.shock;
         } else {
@@ -357,10 +354,11 @@ async function bootstrap(): Promise<void> {
       renderer.npcRenderer.endFrame();
 
       // Crawlers (electrical-defense B1): drawn above npcs z-order is handled
-      // by Renderer.init — here we just push positions each frame.
-      renderer.crawlerRenderer.beginFrame();
+      // by Renderer.init — here we just push positions each frame. Passing
+      // `now` lets the renderer animate the ATTACKING pulse phase smoothly.
+      renderer.crawlerRenderer.beginFrame(now);
       for (const c of world.crawlers.values()) {
-        renderer.crawlerRenderer.draw(c.id, c.x, c.y, c.facing);
+        renderer.crawlerRenderer.draw(c.id, c.x, c.y, c.facing, c.ai);
       }
       renderer.crawlerRenderer.endFrame();
 

@@ -475,7 +475,8 @@ test('Snapshot v13 round-trips multi-layer tile state', () => {
   l1Hp[5] = 50; l1Hp[6] = 0;
   const l2Kind = new Uint8Array(n);
   const l2Hp = new Uint8Array(n);
-  const tiles = { l0Hp, l1Hp, l2Kind, l2Hp };
+  const l1Charge = new Uint8Array(n);
+  const tiles = { l0Hp, l1Hp, l2Kind, l2Hp, l1Charge };
   const payload = makeBaselineSnapshot({ tiles });
   const enc = SnapshotMsg.encode(payload);
   const dec = decodeMessage(enc);
@@ -542,7 +543,8 @@ test('Welcome v13 round-trips multi-layer tile state', () => {
   l1Hp[5] = 50; l1Hp[6] = 0;
   const l2Kind = new Uint8Array(n);
   const l2Hp = new Uint8Array(n);
-  const tiles = { l0Hp, l1Hp, l2Kind, l2Hp };
+  const l1Charge = new Uint8Array(n);
+  const tiles = { l0Hp, l1Hp, l2Kind, l2Hp, l1Charge };
   const payload = makeBaselineWelcome({ tiles, grid: { cols, rows, panelSize: 64 } });
   const enc = WelcomeMsg.encode(payload);
   const dec = decodeMessage(enc);
