@@ -337,6 +337,10 @@ export class Room {
     this.currentPhaseIndex = 0;
     this.phaseElapsedS = 0;
     this.tiles = allocateTiles(this.grid.cols, this.grid.rows);
+    // Clear residual fractional damage from any prior run; otherwise tile 0
+    // could carry up to ~1 hp of leftover sub-integer damage into tick 1 of
+    // the new run. Allocation is reused when grid size matches.
+    this.damageAccum.fill(0);
     this.crawlers.clear();
     this.nextCrawlerId = 0;
     this.crawlerSpawnAccum = 0;

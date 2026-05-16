@@ -39,7 +39,7 @@ export function encode(inputs: PlayerInput[]): Uint8Array {
       `Input count out of range: got ${inputs.length}, expected 1..${INPUT_MSG_MAX_COUNT}`,
     );
   }
-  const w = new BinaryWriter(8 + inputs.length * 21);
+  const w = new BinaryWriter(8 + inputs.length * 24);
   writeHeader(w, MessageType.Input, SCHEMA_VERSION);
   w.u8(inputs.length);
   for (const p of inputs) {
