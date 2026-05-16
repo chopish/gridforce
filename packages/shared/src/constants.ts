@@ -40,7 +40,15 @@
 //       groups EntityType.Crawler=3 and EntityType.Carbon=4. Welcome
 //       carries the full panel-state byte array. v13 (B2) will add
 //       hp/downed/reviveProgress + cityHp + currentWave + counters.
-export const SCHEMA_VERSION = 12;
+//  v13: Layered tiles + priority-AI foundation. PlayerInput drops `dash`
+//       and `sprint`, adds `jumpHeld` + `jumpCursorDx/Dy` (i8 ±2) +
+//       `facingRadQ` (u8 cursor-derived facing). Shock becomes held-state.
+//       PlayerState adds `facingCursorRad` (cursor-derived, distinct from
+//       velocity-derived facing) and `shockHeldS`. Snapshot/Welcome
+//       replace the single `panelStates` RLE block with four per-layer
+//       byte buffers (l0Hp, l1Hp, l2Kind, l2Hp), RLE-encoded in snapshot
+//       and raw in welcome.
+export const SCHEMA_VERSION = 13;
 
 // Tick rates
 export const SERVER_TICK_HZ = 30;
@@ -57,13 +65,11 @@ export const CLIENT_PREDICT_HZ = SERVER_TICK_HZ;
 export const CLIENT_PREDICT_DT_MS = SERVER_TICK_DT_MS;
 export const CLIENT_PREDICT_DT_S = SERVER_TICK_DT_S;
 
-// Player movement
+// Player movement. Sprint was retired in v13; default walk speed is bumped
+// to roughly the previous sprint speed so the larger arena still feels
+// traversable. Tactical bursts of speed now come from panel-jump.
 export const PLAYER_RADIUS = 12;
-export const PLAYER_MOVE_SPEED = 220;
-
-// Sprint: hold shift to walk this much faster. Applies only to walk
-// speed; panel-jump is instantaneous so the multiplier never compounds.
-export const PLAYER_SPRINT_MULTIPLIER = 1.6;
+export const PLAYER_MOVE_SPEED = 308; // was 220; 220 * 1.4 ≈ 308
 
 // Panel-jump: rising-edge of the `dash` input bit teleports the player
 // one panel in the input/facing direction. Cooldown is the rate-limit.
@@ -131,10 +137,6 @@ export const CLIENT_MAX_FRAME_DT_S = 0.05;
 
 // --- B1 electrical-defense tuning (placeholders, expect playtest changes) ---
 
-// Panel state machine.
-export const PANEL_ATTACK_TO_DAMAGE_S = 0.5;
-export const PANEL_ATTACK_TO_BREAK_S = 0.5;
-
 // Repair (DAMAGED -> LIVE only in B1; rebuild lands in B2).
 export const REPAIR_DURATION_S = 1.5;
 export const REPAIR_CARBON_COST = 1;
@@ -152,3 +154,41 @@ export const CRAWLER_MOVE_SPEED = 80;        // px/s
 export const CRAWLER_RADIUS = 14;            // px
 export const CRAWLER_SPAWN_INTERVAL_S = 1.0; // continuous trickle in B1
 export const MAX_ALIVE_CRAWLERS = 8;         // B1 cap; B2 wave manager raises this
+
+// --- C1 layered-tiles & priority-AI tuning (placeholders, expect playtest changes) ---
+
+// Layer HP / armor.
+export const L0_DOME_MAX_HP = 200;
+export const L1_PANEL_MAX_HP = 100;
+export const L2_ADDON_DEFAULT_MAX_HP = 60; // unused until C1's addon catalog ships
+export const TILE_LAYER_ARMOR_MAX = 100;
+
+// Weight integrity.
+export const WEIGHT_THRESHOLD = 4;
+export const BASE_DOT_RATE = 2; // hp/s per unit weight (linear regime)
+
+// Conduction (panel HP fraction at/above which L1 conducts shock).
+export const CONDUCTION_THRESHOLD = 0.5;
+
+// Crawler weight contribution (canonical mite-equivalent in C1).
+export const CRAWLER_WEIGHT = 1;
+
+// Charged shock.
+export const SHOCK_CHARGE_TIME_S = 0.6;
+export const SHOCK_CHARGE_COOLDOWN_S = 0.5;
+
+// Camera (defaults; settings UI is a future spec).
+export const CAMERA_ZOOM_MIN = 0.5;
+export const CAMERA_ZOOM_MAX = 2.0;
+export const CAMERA_ZOOM_STEP = 1.1; // per scroll notch
+export const CAMERA_FOLLOW_SMOOTH_S = 0.18;
+export const CAMERA_EDGE_PAN_DEFAULT = false;
+export const CAMERA_EDGE_PAN_BAND_PX = 40;
+export const CAMERA_EDGE_PAN_SPEED_PX_S = 600;
+
+// Minimap.
+export const MINIMAP_SIZE_PX = 180;
+export const MINIMAP_DANGER_WEIGHT_THRESHOLD = 3;
+
+// Panel-jump targeting.
+export const PANEL_JUMP_TARGET_RANGE = 2; // per-axis tile cap
