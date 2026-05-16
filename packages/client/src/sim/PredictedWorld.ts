@@ -28,6 +28,7 @@ import {
   newPlayerState,
   stepPlayer,
   tryPanelJump,
+  type BufferedJump,
 } from '@gridforce/shared';
 
 import { NpcInterpolator } from './NpcInterpolator.js';
@@ -128,6 +129,7 @@ export class PredictedWorld {
     this.targetLead = INPUT_LEAD_TICKS;
     this.pending = [];
     this.localPrevJumpHeld = false;
+    this.localBufferedJump = null;
     this.correctionX = 0;
     this.correctionY = 0;
     this.diagnostics.predictedTick = this.predictedTick;
@@ -157,6 +159,11 @@ export class PredictedWorld {
   // server's Room.prevJumpHeld map (single-player here since we only predict
   // ourselves). Reset on Welcome and on rebase from snapshot below.
   private localPrevJumpHeld = false;
+
+  // One-slot input buffer for the local player's panel-jump (C1.4). Mirrors
+  // Room.bufferedJumps server-side. Releases that land during cooldown stash
+  // here and fire when cooldown drains.
+  private localBufferedJump: BufferedJump | null = null;
 
   // Visual-only position offset that blends to zero over PREDICTION_BLEND_MS.
   // The simulated position is updated immediately; only the rendered position
@@ -197,6 +204,7 @@ export class PredictedWorld {
     this.crawlers.clear();
     this.carbons.clear();
     this.localPrevJumpHeld = false;
+    this.localBufferedJump = null;
     // Lead the server tick from the start: by the time our first input
     // reaches the server, the server has already advanced past startTick by
     // ~RTT/2 ticks. Tagging from (startTick + lead) ensures the input lands
@@ -263,9 +271,19 @@ export class PredictedWorld {
     };
     const stepped = stepPlayer(localState, input, SERVER_TICK_DT_S, this.grid);
     // Predict the panel-jump locally so the visual is instant and chains
-    // (Shift→aim→release→Shift→aim→release) reference the new tile, not the
-    // stale pre-jump position the server hasn't ack'd yet.
-    const nextLocal = tryPanelJump(stepped, input, this.localPrevJumpHeld, this.tiles, this.grid);
+    // reference the new tile, not the stale pre-jump position. The buffer
+    // (C1.4) carries one release through cooldown so the next aim isn't
+    // dropped just because the player chained tighter than the cooldown.
+    const jumpResult = tryPanelJump(
+      stepped,
+      input,
+      this.localPrevJumpHeld,
+      this.localBufferedJump,
+      this.tiles,
+      this.grid,
+    );
+    const nextLocal = jumpResult.state;
+    this.localBufferedJump = jumpResult.buffered;
     this.localPrevJumpHeld = input.jumpHeld;
 
     // Detect a panel-jump frame: position moved more than walk-step worth.
@@ -420,15 +438,23 @@ export class PredictedWorld {
     let rebased: PlayerState = { ...localSnap };
     let replayedJump = false;
     let prevHeld = false;
+    // Replay-local buffer mirrors the client's buffer through pending inputs.
+    // We start at null because a release older than the snapshot is already
+    // resolved server-side; only releases inside `pending` can still be
+    // unresolved when reconciliation happens.
+    let replayBuf: BufferedJump | null = null;
     for (const inp of this.pending) {
       const replayBefore = rebased;
       rebased = stepPlayer(rebased, inp, SERVER_TICK_DT_S, this.grid);
-      rebased = tryPanelJump(rebased, inp, prevHeld, this.tiles, this.grid);
+      const rj = tryPanelJump(rebased, inp, prevHeld, replayBuf, this.tiles, this.grid);
+      rebased = rj.state;
+      replayBuf = rj.buffered;
       prevHeld = inp.jumpHeld;
       const replayStepDist = Math.hypot(rebased.x - replayBefore.x, rebased.y - replayBefore.y);
       if (replayStepDist > this.grid.panelSize * 0.5) replayedJump = true;
     }
     this.localPrevJumpHeld = prevHeld;
+    this.localBufferedJump = replayBuf;
     this.diagnostics.lastReplayInputs = this.pending.length;
 
     const dx = beforeX - rebased.x;

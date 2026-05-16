@@ -33,6 +33,7 @@ import {
   isPassage,
   topmostLayer,
   tryPanelJump,
+  type BufferedJump,
   type TileBuffers,
   PlayerLeftMsg,
   SERVER_SNAPSHOT_INTERVAL_MS,
@@ -64,6 +65,7 @@ import {
 } from '@gridforce/shared';
 
 import type { Connection } from './Connection.js';
+import { CrawlerAiManager } from './CrawlerAi.js';
 import { Npc } from './Npc.js';
 import type { Pilot } from './Pilot.js';
 import { WanderBot } from './bots/WanderBot.js';
@@ -167,7 +169,10 @@ export class Room {
   private nextNpcId = 0;
 
   // B1 electrical-defense crawlers. Spawned automatically while playing.
+  // The priority-AI manager owns the per-bug task-selection state — bugs
+  // are entered when spawned and removed when reaped.
   readonly crawlers = new Map<number, CrawlerState>();
+  private readonly crawlerAi = new CrawlerAiManager();
   private nextCrawlerId = 0;
   private crawlerSpawnAccum = 0;
 
@@ -188,6 +193,13 @@ export class Room {
   // the release frame. Cleared in startGame() and on player leave. Kept
   // server-only — never encoded onto wire PlayerState.
   private prevJumpHeld = new Map<PlayerId, boolean>();
+
+  // One-slot input buffer per player. When the player releases Shift during
+  // cooldown, the (dx, dy) is parked here and fired automatically on the next
+  // tick whose cooldown has drained. Same model the client predicts in
+  // PredictedWorld so chained jumps stay smooth even at the edge of cooldown.
+  // Server-only; never wire-encoded.
+  private bufferedJumps = new Map<PlayerId, BufferedJump>();
 
   tick = 0;
   private nextPlayerId: PlayerId = 0;
@@ -280,6 +292,7 @@ export class Room {
     this.states.delete(playerId);
     this.prevShockBits.delete(playerId);
     this.prevJumpHeld.delete(playerId);
+    this.bufferedJumps.delete(playerId);
     if (this.hostId === playerId) this.hostId = this.pickNewHost();
     this.broadcastAll(PlayerLeftMsg.encode({ playerId }));
     if (!this.isEmpty) this.lastNonEmptyAtMs = performance.now();
@@ -317,6 +330,7 @@ export class Room {
     // the new run. Allocation is reused when grid size matches.
     this.damageAccum.fill(0);
     this.crawlers.clear();
+    this.crawlerAi.clear();
     this.nextCrawlerId = 0;
     this.crawlerSpawnAccum = 0;
     this.carbons.clear();
@@ -327,6 +341,7 @@ export class Room {
     // panel-jump falling-edge tracker.
     this.prevShockBits.clear();
     this.prevJumpHeld.clear();
+    this.bufferedJumps.clear();
     // Re-centre all players on the active stage's grid. Pre-game they sat
     // at spawn positions sized to whatever grid was active at join time,
     // which can be wrong if the host swapped runs mid-lobby.
@@ -665,6 +680,7 @@ export class Room {
       if (c.x >= tileMinX && c.x < tileMaxX && c.y >= tileMinY && c.y < tileMaxY) {
         this.spawnCarbon(c.x, c.y);
         this.crawlers.delete(cid);
+        this.crawlerAi.remove(cid);
       }
     }
   }
@@ -730,17 +746,20 @@ export class Room {
         // Input not held OR no carbon — reset.
         cur = { ...cur, repairProgressS: 0 };
       }
-      // Panel-jump (Task 13). Held-Shift = aiming; release = teleport. The
-      // shared `tryPanelJump` helper detects the falling edge of jumpHeld,
-      // validates the target tile, and either returns the teleported state
-      // or `cur` unchanged. Same code path runs client-side (prediction +
-      // replay) so chains feel snappy and reconciliation doesn't snap back.
-      // prevJumpHeld is server-only and is NOT encoded onto PlayerState.
+      // Panel-jump (Task 13, updated in C1.4 with input buffering). The
+      // shared `tryPanelJump` helper handles falling-edge detection AND a
+      // one-slot buffer: a release during cooldown stashes the (dx, dy) and
+      // fires it the moment cooldown drains. Same code path runs client-side
+      // so chains stay smooth.
       const prevHeld = this.prevJumpHeld.get(id) ?? false;
       const heldNow = !!(input && input.jumpHeld);
       this.prevJumpHeld.set(id, heldNow);
       if (input) {
-        cur = tryPanelJump(cur, input, prevHeld, this.tiles, this.grid);
+        const prevBuf = this.bufferedJumps.get(id) ?? null;
+        const result = tryPanelJump(cur, input, prevHeld, prevBuf, this.tiles, this.grid);
+        cur = result.state;
+        if (result.buffered) this.bufferedJumps.set(id, result.buffered);
+        else this.bufferedJumps.delete(id);
       }
       this.states.set(id, cur);
     }
@@ -757,13 +776,19 @@ export class Room {
       this.spawnCrawler();
     }
 
-    // Step all crawlers against the room's tile state. C1.2 passes the
-    // current player roster so the AI can chase the nearest pilot.
-    const ctx: CrawlerStepContext = { tiles: this.tiles, players: this.states.values() };
+    // Step all crawlers. The priority-AI decides what each bug is doing
+    // (chase / attack tile) — stepCrawler is just the executor. We snapshot
+    // players to an array because `this.states.values()` returns a single-
+    // use iterator; passing it through multiple AI calls would silently
+    // empty after the first crawler.
+    const playerArr = Array.from(this.states.values());
+    const ctx: CrawlerStepContext = { tiles: this.tiles };
     for (const [id, c] of this.crawlers) {
-      const next = stepCrawler(c, SERVER_TICK_DT_S, this.grid, ctx);
+      const task = this.crawlerAi.decide(c, SERVER_TICK_DT_S, playerArr, this.tiles, this.grid);
+      const next = stepCrawler(c, task, SERVER_TICK_DT_S, this.grid, ctx);
       if (next.hp <= 0) {
         this.crawlers.delete(id);
+        this.crawlerAi.remove(id);
       } else {
         this.crawlers.set(id, next);
       }
@@ -829,6 +854,7 @@ export class Room {
       if (this.tiles.l1Charge[idx]! > 0) {
         this.spawnCarbon(c.x, c.y);
         this.crawlers.delete(cid);
+        this.crawlerAi.remove(cid);
       }
     }
     // Then decrement charge counters.
@@ -858,18 +884,16 @@ export class Room {
     }
     const weightAt = new Uint16Array(n);
     for (const c of this.crawlers.values()) {
-      // C1.3: both APPROACHING (walking) and ATTACKING (stopped) bugs damage
-      // the tile under them. The AI state is now purely a VFX hint (it
-      // toggles the client-side attack pulse).
+      // C1.4: only ATTACKING bugs contribute weight. The priority-AI
+      // distinguishes "chasing the player" from "biting a tile" — chasing
+      // walks fast and does NOT damage tiles in transit (per user feedback).
+      if (c.ai !== CrawlerAIState.ATTACKING) continue;
       if (
         c.targetCx < 0 || c.targetCx >= cols ||
         c.targetCy < 0 || c.targetCy >= rows
       ) {
         continue;
       }
-      // Skip bugs that are still outside the playfield — `targetCx/Cy` is
-      // clamped to grid bounds in the AI, but the bug's actual position may
-      // still be off-grid (just spawned). Use the float position to gate.
       const px = Math.floor(c.x / this.grid.panelSize);
       const py = Math.floor(c.y / this.grid.panelSize);
       if (px < 0 || px >= cols || py < 0 || py >= rows) continue;

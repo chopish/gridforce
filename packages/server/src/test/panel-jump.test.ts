@@ -169,7 +169,12 @@ test('jump onto an L-1 passage is rejected', () => {
   assert.equal(pl.panelJumpCooldownS, 0);
 });
 
-test('panel-jump cooldown blocks a second jump within PANEL_JUMP_COOLDOWN_S', () => {
+test('panel-jump cooldown buffers a second release and fires it on drain', () => {
+  // C1.4: a release during cooldown is BUFFERED rather than dropped. After
+  // the cooldown drains, the buffered jump executes automatically — the
+  // visible effect is that fast Shift-aim-release-Shift-aim-release chains
+  // land both jumps even when the second release lands ~half a cooldown
+  // sooner than the previous one finished.
   const room = makeRoom();
   setPlayerAt(room, 5, 5);
   // First jump: 1 east.
@@ -179,17 +184,25 @@ test('panel-jump cooldown blocks a second jump within PANEL_JUMP_COOLDOWN_S', ()
   tick(room);
   const after1 = playerState(room);
   assert.ok(after1.panelJumpCooldownS > 0);
-  // Immediate second jump attempt.
+  // Immediate second release while cooldown is still active.
   inputPlayerHolding(room, { jumpHeld: true, jumpCursorDx: 1, jumpCursorDy: 0 });
   tick(room);
   inputPlayer(room, { jumpHeld: false, jumpCursorDx: 1, jumpCursorDy: 0 });
   tick(room);
-  const pl = playerState(room);
   const panelSize = room.grid.panelSize;
-  // Still at (6,5), not (7,5).
+  const midState = playerState(room);
+  // The second release is buffered; bug is still at (6,5) until cooldown drains.
   assert.ok(
-    Math.abs(pl.x - (6 * panelSize + panelSize / 2)) < 1,
-    `expected x ≈ ${6 * panelSize + panelSize / 2}, got ${pl.x}`,
+    Math.abs(midState.x - (6 * panelSize + panelSize / 2)) < 1,
+    `expected x ≈ ${6 * panelSize + panelSize / 2}, got ${midState.x}`,
+  );
+  // Idle ticks until cooldown drains and the buffered jump fires.
+  inputPlayer(room, { jumpHeld: false, jumpCursorDx: 0, jumpCursorDy: 0 });
+  for (let i = 0; i < 6; i++) tick(room);
+  const finalState = playerState(room);
+  assert.ok(
+    Math.abs(finalState.x - (7 * panelSize + panelSize / 2)) < 1,
+    `buffered jump should have fired; expected x ≈ ${7 * panelSize + panelSize / 2}, got ${finalState.x}`,
   );
 });
 

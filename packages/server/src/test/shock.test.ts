@@ -121,10 +121,12 @@ test('shock: held bit alone does NOT fire (rising edge retired)', () => {
   const r = makeRoomInPlaying();
   setPlayerAt(r, 5, 5);
   plantCrawler(r, 1, 6, 5);
-  // Hold for many ticks without ever releasing.
+  // Hold for many ticks without ever releasing. Assert by id rather than
+  // tile — C1.4's chase AI may walk the bug toward the player during the
+  // hold; we only care that nobody died.
   setInputQueue(r, [{ shock: true, facingRad: 0 }]);
   for (let i = 0; i < 20; i++) tick(r);
-  assertCrawlerAlive(r, 6, 5, 'no shock should fire while bit is held');
+  assert.ok(r.crawlers.has(1), 'no shock should fire while bit is held; bug must still exist');
 });
 
 test('shock: tap (release after one held tick) fires a 1-tile beam east', () => {
@@ -193,14 +195,15 @@ test('shock: beam breaks at a non-conductive tile', () => {
   // Tile 6,5 is damaged-below-threshold; tile 7,5 has a bug.
   r.tiles.l1Hp[indexOf(r.grid.cols, 6, 5)] = NON_CONDUCTIVE_HP;
   plantCrawler(r, 1, 7, 5);
-  // Hold long enough to produce a 2-tile beam (would reach 7,5 if not
-  // blocked), but short enough that the chase-AI hasn't dragged the bug
-  // out of tile (7,5) before the release fires.
+  // Hold long enough to produce a 2-tile beam (would reach the bug if not
+  // blocked at the non-conductive intermediate tile).
   const held = Array.from({ length: 15 }, () => ({ shock: true, facingRad: 0 }));
   held.push({ shock: false, facingRad: 0 });
   setInputQueue(r, held);
   for (let i = 0; i < held.length; i++) tick(r);
-  assertCrawlerAlive(r, 7, 5, 'non-conductive tile should break the beam');
+  // Assert by id — chase AI may walk the bug westward during the hold,
+  // but the beam should never have reached it across the dead tile.
+  assert.ok(r.crawlers.has(1), 'non-conductive tile should break the beam');
 });
 
 test('shock: electrified tiles linger and kill bugs that walk into them', () => {
