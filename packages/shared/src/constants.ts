@@ -202,6 +202,16 @@ export const CRAWLER_WEIGHT = 1;
 export const SHOCK_CHARGE_TIME_S = 0.6;
 export const SHOCK_CHARGE_COOLDOWN_S = 0.5;
 
+// Shock damage values (C1.7). The beam itself is a hitbox that damages any
+// bug whose tile it crosses (even non-conductive impact tiles — that's the
+// "still kill enemies on destroyed/damaged tiles" rule). Tile shock is the
+// smaller continuous damage from standing on a charged panel — accrues each
+// tick the bug is on it. Mites are HP=1 today so any hit kills, but the
+// numbers are wire-stable so tougher future enemies interact correctly
+// (beam: 3, linger tick: 1; full conductive-tile hit deals BEAM+TILE = 4).
+export const SHOCK_BEAM_DAMAGE = 3;
+export const SHOCK_TILE_DAMAGE = 1;
+
 // Camera (defaults; settings UI is a future spec).
 export const CAMERA_ZOOM_MIN = 0.5;
 export const CAMERA_ZOOM_MAX = 2.0;

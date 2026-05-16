@@ -8,11 +8,13 @@ import {
   CRAWLER_SPAWN_INTERVAL_S,
   CRAWLER_WEIGHT,
   MAX_ALIVE_CRAWLERS,
+  SHOCK_BEAM_DAMAGE,
   SHOCK_BEAM_MAX_TILES,
   SHOCK_CHARGE_COOLDOWN_S,
   SHOCK_CHARGE_FULL_S,
   SHOCK_COOLDOWN_S,
   SHOCK_LINGER_TICKS,
+  SHOCK_TILE_DAMAGE,
   REPAIR_DURATION_S,
   REPAIR_CARBON_COST,
   CrawlerAIState,
@@ -654,10 +656,17 @@ export class Room {
       lastTy = ty;
       if (tx < 0 || tx >= cols || ty < 0 || ty >= rows) break;
       const idx = indexOf(cols, tx, ty);
-      // Conduction gate: dead/damaged panels break the beam.
-      if (!conductive(this.tiles, idx)) break;
+      // Non-conductive (dead or damaged below threshold) — the beam still
+      // HITS bugs on this tile (the line of force lands here) but it stops
+      // here: no charge, no further propagation.
+      if (!conductive(this.tiles, idx)) {
+        this.damageCrawlersOnTile(tx, ty, SHOCK_BEAM_DAMAGE);
+        break;
+      }
+      // Conductive panel: charge it AND damage bugs on it. Beam + tile
+      // shock both apply to anything caught in the line on a live panel.
       this.tiles.l1Charge[idx] = SHOCK_LINGER_TICKS;
-      this.killCrawlersOnTile(tx, ty);
+      this.damageCrawlersOnTile(tx, ty, SHOCK_BEAM_DAMAGE + SHOCK_TILE_DAMAGE);
       hit++;
     }
     // If no tile was hit (e.g. point-blank into a wall) we still consume
@@ -667,10 +676,12 @@ export class Room {
     return { ...playerState, shockCooldownS: cooldown };
   }
 
-  // Kill every crawler whose centre lies on tile (tx,ty) and drop carbon at
-  // each kill location. Shared between the uncharged tap and the charged
-  // release.
-  private killCrawlersOnTile(tx: number, ty: number): void {
+  // Damage every crawler whose centre lies on tile (tx,ty). Bugs that drop
+  // to 0 HP are reaped (spawn carbon + clear AI state). C1.7 generalised
+  // the old kill-all-on-tile to a damage value so beam vs. linger can
+  // produce different effects for tougher future enemies.
+  private damageCrawlersOnTile(tx: number, ty: number, amount: number): void {
+    if (amount <= 0) return;
     const { panelSize } = this.grid;
     const tileMinX = tx * panelSize;
     const tileMinY = ty * panelSize;
@@ -678,9 +689,14 @@ export class Room {
     const tileMaxY = tileMinY + panelSize;
     for (const [cid, c] of this.crawlers) {
       if (c.x >= tileMinX && c.x < tileMaxX && c.y >= tileMinY && c.y < tileMaxY) {
-        this.spawnCarbon(c.x, c.y);
-        this.crawlers.delete(cid);
-        this.crawlerAi.remove(cid);
+        const newHp = Math.max(0, c.hp - amount);
+        if (newHp === 0) {
+          this.spawnCarbon(c.x, c.y);
+          this.crawlers.delete(cid);
+          this.crawlerAi.remove(cid);
+        } else {
+          this.crawlers.set(cid, { ...c, hp: newHp });
+        }
       }
     }
   }
@@ -841,13 +857,12 @@ export class Room {
   }
 
   // Per-tick lingering-electricity sweep. Any bug standing on a charged tile
-  // (l1Charge > 0) is killed and drops carbon. After the kill pass, every
-  // tile's charge counter decrements by one tick. This is the mechanic that
-  // makes long-charge beams ("more tiles, lingering effect") meaningful:
-  // bugs that wander into a recently-electrified tile take the residual.
+  // (l1Charge > 0) takes SHOCK_TILE_DAMAGE; bugs that drop to 0 HP are reaped
+  // and drop carbon. After the damage pass, every tile's charge counter
+  // decrements by one tick. This is what makes long-charge beams meaningful:
+  // bugs that wander onto a recently-electrified tile keep getting shocked.
   private applyShockLinger(): void {
     const { cols, panelSize } = this.grid;
-    // Bug kills first.
     for (const [cid, c] of this.crawlers) {
       const tcx = Math.floor(c.x / panelSize);
       const tcy = Math.floor(c.y / panelSize);
@@ -855,9 +870,14 @@ export class Room {
       const idx = indexOf(cols, tcx, tcy);
       if (idx >= this.tiles.l1Charge.length) continue;
       if (this.tiles.l1Charge[idx]! > 0) {
-        this.spawnCarbon(c.x, c.y);
-        this.crawlers.delete(cid);
-        this.crawlerAi.remove(cid);
+        const newHp = Math.max(0, c.hp - SHOCK_TILE_DAMAGE);
+        if (newHp === 0) {
+          this.spawnCarbon(c.x, c.y);
+          this.crawlers.delete(cid);
+          this.crawlerAi.remove(cid);
+        } else {
+          this.crawlers.set(cid, { ...c, hp: newHp });
+        }
       }
     }
     // Then decrement charge counters.

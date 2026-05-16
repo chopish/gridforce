@@ -189,21 +189,38 @@ test('shock: a tap kills only the nearest tile, not further ones', () => {
   assertCrawlerAlive(r, 7, 5, 'tap should only reach 1 tile');
 });
 
-test('shock: beam breaks at a non-conductive tile', () => {
+test('shock: beam stops propagating past a non-conductive tile', () => {
+  // C1.7: the beam DOES kill bugs on the impact tile (a damaged-below-
+  // conduction panel still takes the line-of-force hit), but it stops
+  // there — no charge propagation, no kill on tiles past the dead one.
   const r = makeRoomInPlaying();
   setPlayerAt(r, 5, 5);
-  // Tile 6,5 is damaged-below-threshold; tile 7,5 has a bug.
   r.tiles.l1Hp[indexOf(r.grid.cols, 6, 5)] = NON_CONDUCTIVE_HP;
-  plantCrawler(r, 1, 7, 5);
-  // Hold long enough to produce a 2-tile beam (would reach the bug if not
-  // blocked at the non-conductive intermediate tile).
+  // Bug planted at (8,5) so it sits past the impact tile even after the
+  // chase AI's westward drift during the held-shock window.
+  plantCrawler(r, 1, 8, 5);
   const held = Array.from({ length: 15 }, () => ({ shock: true, facingRad: 0 }));
   held.push({ shock: false, facingRad: 0 });
   setInputQueue(r, held);
   for (let i = 0; i < held.length; i++) tick(r);
-  // Assert by id — chase AI may walk the bug westward during the hold,
-  // but the beam should never have reached it across the dead tile.
-  assert.ok(r.crawlers.has(1), 'non-conductive tile should break the beam');
+  assert.ok(r.crawlers.has(1), 'bugs past the broken tile must survive');
+});
+
+test('shock: beam still kills a bug ON a non-conductive impact tile', () => {
+  // The flip side of the rule above: the beam is itself a hitbox. A bug
+  // standing on the damaged panel that breaks the beam STILL takes the
+  // beam-direct damage (SHOCK_BEAM_DAMAGE) — you can pick off enemies on
+  // ruined sectors with a direct shot.
+  const r = makeRoomInPlaying();
+  setPlayerAt(r, 5, 5);
+  r.tiles.l1Hp[indexOf(r.grid.cols, 6, 5)] = NON_CONDUCTIVE_HP;
+  plantCrawler(r, 1, 6, 5);
+  setInputQueue(r, [
+    { shock: true, facingRad: 0 },
+    { shock: false, facingRad: 0 },
+  ]);
+  tick(r); tick(r);
+  assert.ok(!r.crawlers.has(1), 'bug on the impact tile should still die');
 });
 
 test('shock: electrified tiles linger and kill bugs that walk into them', () => {
