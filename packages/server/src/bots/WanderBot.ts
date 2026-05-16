@@ -30,10 +30,12 @@ export class WanderBot extends Bot {
       clientTimeMs: tick * SERVER_TICK_DT_MS,
       mx: this.mx,
       my: this.my,
-      dash: false,
-      sprint: false,
       shock: false,
       repair: false,
+      jumpHeld: false,
+      jumpCursorDx: 0,
+      jumpCursorDy: 0,
+      facingRad: 0,
     };
   }
 }

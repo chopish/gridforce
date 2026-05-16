@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { SCHEMA_VERSION } from '../../constants.js';
-import { newPlayerState } from '../../sim.js';
 import { PanelState, allLive } from '../../panels.js';
+import type { PlayerState } from '../../types.js';
 import {
   AddBotMsg,
   ErrorMsg,
@@ -22,6 +22,24 @@ import {
   decodeMessage,
 } from '../index.js';
 import { BinaryReader, BinaryWriter } from '../wire.js';
+
+// Local helper to avoid importing sim.js (which has unresolved imports until
+// Tasks 13/14 land). Equivalent to sim.ts#newPlayerState.
+function newPlayerState(id: number, x: number, y: number, name = ''): PlayerState {
+  return {
+    id,
+    x,
+    y,
+    facing: 0,
+    panelJumpCooldownS: 0,
+    stateSeq: 0,
+    name,
+    ready: false,
+    carbon: 0,
+    shockCooldownS: 0,
+    repairProgressS: 0,
+  };
+}
 
 function roundtrip<T>(
   encoded: Uint8Array,
@@ -118,7 +136,11 @@ test('Welcome round-trip', () => {
 });
 
 test('Input round-trip with single input', () => {
-  const input = { tick: 12345, clientTimeMs: 1700000000.25, mx: -0.5, my: 0.7, dash: true, sprint: false, shock: false, repair: false };
+  const input = {
+    tick: 12345, clientTimeMs: 1700000000.25, mx: -0.5, my: 0.7,
+    shock: false, repair: false,
+    jumpHeld: false, jumpCursorDx: 0, jumpCursorDy: 0, facingRad: 0,
+  };
   const enc = InputMsg.encode([input]);
   const dec = decodeMessage(enc);
   assert.equal(dec.type, MessageType.Input);
@@ -129,15 +151,15 @@ test('Input round-trip with single input', () => {
   assert.equal(p.clientTimeMs, input.clientTimeMs);
   assert.ok(Math.abs(p.mx - input.mx) < 1e-6);
   assert.ok(Math.abs(p.my - input.my) < 1e-6);
-  assert.equal(p.dash, input.dash);
-  assert.equal(p.sprint, input.sprint);
+  assert.equal(p.shock, input.shock);
+  assert.equal(p.repair, input.repair);
 });
 
 test('Input round-trip with redundancy window (3 ticks)', () => {
   const inputs = [
-    { tick: 100, clientTimeMs: 1.0, mx: 1, my: 0, dash: false, sprint: false, shock: false, repair: false },
-    { tick: 101, clientTimeMs: 2.0, mx: 0.5, my: 0.5, dash: true, sprint: false, shock: false, repair: false },
-    { tick: 102, clientTimeMs: 3.0, mx: 0, my: -1, dash: false, sprint: false, shock: false, repair: false },
+    { tick: 100, clientTimeMs: 1.0, mx: 1, my: 0, shock: false, repair: false, jumpHeld: false, jumpCursorDx: 0, jumpCursorDy: 0, facingRad: 0 },
+    { tick: 101, clientTimeMs: 2.0, mx: 0.5, my: 0.5, shock: false, repair: false, jumpHeld: false, jumpCursorDx: 0, jumpCursorDy: 0, facingRad: 0 },
+    { tick: 102, clientTimeMs: 3.0, mx: 0, my: -1, shock: false, repair: false, jumpHeld: false, jumpCursorDx: 0, jumpCursorDy: 0, facingRad: 0 },
   ];
   const dec = decodeMessage(InputMsg.encode(inputs));
   assert.equal(dec.type, MessageType.Input);
@@ -145,33 +167,14 @@ test('Input round-trip with redundancy window (3 ticks)', () => {
   assert.equal(list.length, 3);
   for (let i = 0; i < 3; i++) {
     assert.equal(list[i]!.tick, inputs[i]!.tick);
-    assert.equal(list[i]!.dash, inputs[i]!.dash);
   }
-});
-
-test('Input round-trip preserves sprint bit', () => {
-  const inputs = [
-    { tick: 200, clientTimeMs: 1, mx: 1, my: 0, dash: false, sprint: true,  shock: false, repair: false },
-    { tick: 201, clientTimeMs: 2, mx: 0, my: 1, dash: true,  sprint: false, shock: false, repair: false },
-    { tick: 202, clientTimeMs: 3, mx: 0, my: 0, dash: false, sprint: true,  shock: false, repair: false },
-  ];
-  const dec = decodeMessage(InputMsg.encode(inputs));
-  assert.equal(dec.type, MessageType.Input);
-  const list = dec.payload;
-  assert.equal(list.length, 3);
-  assert.equal(list[0]!.sprint, true);
-  assert.equal(list[1]!.sprint, false);
-  assert.equal(list[2]!.sprint, true);
-  // Dash bit must still round-trip independently.
-  assert.equal(list[0]!.dash, false);
-  assert.equal(list[1]!.dash, true);
 });
 
 test('Input round-trip preserves shock + repair bits', () => {
   const inputs = [
-    { tick: 300, clientTimeMs: 1, mx: 0, my: 0, dash: false, sprint: false, shock: true,  repair: false },
-    { tick: 301, clientTimeMs: 2, mx: 0, my: 0, dash: false, sprint: false, shock: false, repair: true  },
-    { tick: 302, clientTimeMs: 3, mx: 0, my: 0, dash: false, sprint: false, shock: true,  repair: true  },
+    { tick: 300, clientTimeMs: 1, mx: 0, my: 0, shock: true,  repair: false, jumpHeld: false, jumpCursorDx: 0, jumpCursorDy: 0, facingRad: 0 },
+    { tick: 301, clientTimeMs: 2, mx: 0, my: 0, shock: false, repair: true,  jumpHeld: false, jumpCursorDx: 0, jumpCursorDy: 0, facingRad: 0 },
+    { tick: 302, clientTimeMs: 3, mx: 0, my: 0, shock: true,  repair: true,  jumpHeld: false, jumpCursorDx: 0, jumpCursorDy: 0, facingRad: 0 },
   ];
   const dec = decodeMessage(InputMsg.encode(inputs));
   assert.equal(dec.type, MessageType.Input);
@@ -185,6 +188,49 @@ test('Input round-trip preserves shock + repair bits', () => {
   assert.equal(list[2]!.repair, true);
 });
 
+test('Input v13 round-trip preserves jumpHeld + cursor offsets + facing + shock-held', () => {
+  const inputs = [
+    {
+      tick: 500, clientTimeMs: 1, mx: 0.1, my: -0.2,
+      shock: true, repair: false,
+      jumpHeld: true, jumpCursorDx: 1, jumpCursorDy: -2,
+      facingRad: Math.PI / 2,
+    },
+    {
+      tick: 501, clientTimeMs: 2, mx: 0, my: 0,
+      shock: false, repair: true,
+      jumpHeld: false, jumpCursorDx: 0, jumpCursorDy: 0,
+      facingRad: 0,
+    },
+  ];
+  const dec = decodeMessage(InputMsg.encode(inputs));
+  assert.equal(dec.type, MessageType.Input);
+  const list = dec.payload;
+  assert.equal(list.length, 2);
+  assert.equal(list[0]!.shock, true);
+  assert.equal(list[0]!.repair, false);
+  assert.equal(list[0]!.jumpHeld, true);
+  assert.equal(list[0]!.jumpCursorDx, 1);
+  assert.equal(list[0]!.jumpCursorDy, -2);
+  assert.ok(Math.abs(list[0]!.facingRad - Math.PI / 2) < 0.05);
+  assert.equal(list[1]!.repair, true);
+  assert.equal(list[1]!.jumpHeld, false);
+});
+
+test('Input encoder clamps jumpCursor offsets to ±PANEL_JUMP_TARGET_RANGE', () => {
+  const inputs = [{
+    tick: 1, clientTimeMs: 0, mx: 0, my: 0,
+    shock: false, repair: false,
+    jumpHeld: true, jumpCursorDx: 99, jumpCursorDy: -99,
+    facingRad: 0,
+  }];
+  const dec = decodeMessage(InputMsg.encode(inputs));
+  assert.equal(dec.type, MessageType.Input);
+  const got = dec.payload[0]!;
+  assert.equal(got.jumpCursorDx, 2);
+  assert.equal(got.jumpCursorDy, -2);
+});
+
 test('Input encoding rejects empty + over-cap counts', () => {
   assert.throws(() => InputMsg.encode([]), /out of range/);
   const tooMany = new Array(64).fill(0).map((_, i) => ({
@@ -192,10 +238,12 @@ test('Input encoding rejects empty + over-cap counts', () => {
     clientTimeMs: 0,
     mx: 0,
     my: 0,
-    dash: false,
-    sprint: false,
     shock: false,
     repair: false,
+    jumpHeld: false,
+    jumpCursorDx: 0,
+    jumpCursorDy: 0,
+    facingRad: 0,
   }));
   assert.throws(() => InputMsg.encode(tooMany), /out of range/);
 });

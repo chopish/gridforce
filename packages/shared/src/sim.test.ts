@@ -26,7 +26,7 @@ test('idle player stays put', () => {
 test('movement integrates at expected speed', () => {
   const grid = createDefaultGrid();
   let p: PlayerState = newPlayerState(0, 200, 200);
-  const input: PlayerInput = { tick: 0, clientTimeMs: 0, mx: 1, my: 0, dash: false, sprint: false, shock: false, repair: false };
+  const input: PlayerInput = { tick: 0, clientTimeMs: 0, mx: 1, my: 0, shock: false, repair: false, jumpHeld: false, jumpCursorDx: 0, jumpCursorDy: 0, facingRad: 0 };
   const seconds = 1;
   const steps = Math.round(seconds / CLIENT_PREDICT_DT_S);
   for (let i = 0; i < steps; i++) p = stepPlayer(p, input, CLIENT_PREDICT_DT_S, grid);
@@ -39,7 +39,7 @@ test('input is normalised to unit circle', () => {
   const grid = createDefaultGrid();
   let p: PlayerState = newPlayerState(0, 200, 200);
   // (3,4) → magnitude 5; should be normalised to (0.6, 0.8).
-  const input: PlayerInput = { tick: 0, clientTimeMs: 0, mx: 3, my: 4, dash: false, sprint: false, shock: false, repair: false };
+  const input: PlayerInput = { tick: 0, clientTimeMs: 0, mx: 3, my: 4, shock: false, repair: false, jumpHeld: false, jumpCursorDx: 0, jumpCursorDy: 0, facingRad: 0 };
   const seconds = 1;
   const steps = Math.round(seconds / CLIENT_PREDICT_DT_S);
   for (let i = 0; i < steps; i++) p = stepPlayer(p, input, CLIENT_PREDICT_DT_S, grid);
@@ -51,7 +51,7 @@ test('input is normalised to unit circle', () => {
 test('clamps to world bounds', () => {
   const grid = createDefaultGrid();
   let p: PlayerState = newPlayerState(0, 50, 50);
-  const input: PlayerInput = { tick: 0, clientTimeMs: 0, mx: -1, my: -1, dash: false, sprint: false, shock: false, repair: false };
+  const input: PlayerInput = { tick: 0, clientTimeMs: 0, mx: -1, my: -1, shock: false, repair: false, jumpHeld: false, jumpCursorDx: 0, jumpCursorDy: 0, facingRad: 0 };
   for (let i = 0; i < 600; i++) p = stepPlayer(p, input, CLIENT_PREDICT_DT_S, grid);
   assert.equal(p.x, PLAYER_RADIUS);
   assert.equal(p.y, PLAYER_RADIUS);
@@ -68,10 +68,12 @@ test('replay is deterministic — same input sequence yields identical state', (
       clientTimeMs: i * CLIENT_PREDICT_DT_S * 1000,
       mx: rng() * 2 - 1,
       my: rng() * 2 - 1,
-      dash: rng() > 0.99,
-      sprint: false,
       shock: false,
       repair: false,
+      jumpHeld: rng() > 0.99,
+      jumpCursorDx: 0,
+      jumpCursorDy: 0,
+      facingRad: 0,
     });
   }
 
@@ -95,7 +97,7 @@ test('sprint scales walk speed by PLAYER_SPRINT_MULTIPLIER', () => {
   for (let i = 0; i < N; i++) {
     state = stepPlayer(
       state,
-      { tick: i, clientTimeMs: 0, mx: 1, my: 0, dash: false, sprint: true, shock: false, repair: false },
+      { tick: i, clientTimeMs: 0, mx: 1, my: 0, shock: false, repair: false, jumpHeld: false, jumpCursorDx: 0, jumpCursorDy: 0, facingRad: 0 },
       dt,
       grid,
     );
@@ -114,7 +116,7 @@ test('walk speed unchanged when sprint=false', () => {
   for (let i = 0; i < 30; i++) {
     state = stepPlayer(
       state,
-      { tick: i, clientTimeMs: 0, mx: 1, my: 0, dash: false, sprint: false, shock: false, repair: false },
+      { tick: i, clientTimeMs: 0, mx: 1, my: 0, shock: false, repair: false, jumpHeld: false, jumpCursorDx: 0, jumpCursorDy: 0, facingRad: 0 },
       dt,
       grid,
     );
@@ -130,7 +132,7 @@ test('panel-jump teleports one panelSize in the input direction', () => {
   let state = newPlayerState(0, startX, startY);
   state = stepPlayer(
     state,
-    { tick: 1, clientTimeMs: 0, mx: 1, my: 0, dash: true, sprint: false, shock: false, repair: false },
+    { tick: 1, clientTimeMs: 0, mx: 1, my: 0, shock: false, repair: false, jumpHeld: true, jumpCursorDx: 0, jumpCursorDy: 0, facingRad: 0 },
     1 / 30,
     grid,
   );
@@ -148,7 +150,7 @@ test('panel-jump from idle uses facing direction', () => {
   state = { ...state, facing: -Math.PI / 2 };
   state = stepPlayer(
     state,
-    { tick: 1, clientTimeMs: 0, mx: 0, my: 0, dash: true, sprint: false, shock: false, repair: false },
+    { tick: 1, clientTimeMs: 0, mx: 0, my: 0, shock: false, repair: false, jumpHeld: true, jumpCursorDx: 0, jumpCursorDy: 0, facingRad: 0 },
     1 / 30,
     grid,
   );
@@ -163,7 +165,7 @@ test('panel-jump snaps direction to 8 octants', () => {
   let state = newPlayerState(0, startX, startY);
   state = stepPlayer(
     state,
-    { tick: 1, clientTimeMs: 0, mx: 0.5, my: 0.866, dash: true, sprint: false, shock: false, repair: false },
+    { tick: 1, clientTimeMs: 0, mx: 0.5, my: 0.866, shock: false, repair: false, jumpHeld: true, jumpCursorDx: 0, jumpCursorDy: 0, facingRad: 0 },
     1 / 30,
     grid,
   );
@@ -178,7 +180,7 @@ test('panel-jump clamps to world edge when target would land outside', () => {
   let state = newPlayerState(0, worldW - grid.panelSize / 2, grid.rows * grid.panelSize / 2);
   state = stepPlayer(
     state,
-    { tick: 1, clientTimeMs: 0, mx: 1, my: 0, dash: true, sprint: false, shock: false, repair: false },
+    { tick: 1, clientTimeMs: 0, mx: 1, my: 0, shock: false, repair: false, jumpHeld: true, jumpCursorDx: 0, jumpCursorDy: 0, facingRad: 0 },
     1 / 30,
     grid,
   );
@@ -193,7 +195,7 @@ test('panel-jump clamps both axes when jumping into a corner', () => {
   let state = newPlayerState(0, worldW - grid.panelSize / 2, worldH - grid.panelSize / 2);
   state = stepPlayer(
     state,
-    { tick: 1, clientTimeMs: 0, mx: 1, my: 1, dash: true, sprint: false, shock: false, repair: false },
+    { tick: 1, clientTimeMs: 0, mx: 1, my: 1, shock: false, repair: false, jumpHeld: true, jumpCursorDx: 0, jumpCursorDy: 0, facingRad: 0 },
     1 / 30,
     grid,
   );
@@ -211,7 +213,7 @@ test('panel-jump updates facing so a chained idle jump uses the new direction', 
   // for this test.)
   state = stepPlayer(
     state,
-    { tick: 1, clientTimeMs: 0, mx: 0.5, my: 0.866, dash: true, sprint: false, shock: false, repair: false },
+    { tick: 1, clientTimeMs: 0, mx: 0.5, my: 0.866, shock: false, repair: false, jumpHeld: true, jumpCursorDx: 0, jumpCursorDy: 0, facingRad: 0 },
     1 / 30,
     grid,
   );
@@ -222,7 +224,7 @@ test('panel-jump updates facing so a chained idle jump uses the new direction', 
   // Second jump: no input. Should reuse the facing set by the first jump.
   state = stepPlayer(
     state,
-    { tick: 2, clientTimeMs: 0, mx: 0, my: 0, dash: true, sprint: false, shock: false, repair: false },
+    { tick: 2, clientTimeMs: 0, mx: 0, my: 0, shock: false, repair: false, jumpHeld: true, jumpCursorDx: 0, jumpCursorDy: 0, facingRad: 0 },
     1 / 30,
     grid,
   );
@@ -234,10 +236,10 @@ test('panel-jump cooldown is enforced', () => {
   const grid = createDefaultGrid();
   const startX = grid.cols * grid.panelSize / 2;
   let state = newPlayerState(0, startX, grid.rows * grid.panelSize / 2);
-  state = stepPlayer(state, { tick: 1, clientTimeMs: 0, mx: 1, my: 0, dash: true,  sprint: false, shock: false, repair: false }, 1 / 30, grid);
+  state = stepPlayer(state, { tick: 1, clientTimeMs: 0, mx: 1, my: 0, shock: false, repair: false, jumpHeld: true, jumpCursorDx: 0, jumpCursorDy: 0, facingRad: 0 }, 1 / 30, grid);
   const xAfterFirst = state.x;
   // Second dash 0.1s later. Should be ignored.
-  state = stepPlayer(state, { tick: 2, clientTimeMs: 0, mx: 1, my: 0, dash: true,  sprint: false, shock: false, repair: false }, 0.1,    grid);
+  state = stepPlayer(state, { tick: 2, clientTimeMs: 0, mx: 1, my: 0, shock: false, repair: false, jumpHeld: true, jumpCursorDx: 0, jumpCursorDy: 0, facingRad: 0 }, 0.1,    grid);
   assert.equal(state.x, xAfterFirst, 'second jump within cooldown does nothing');
 });
 
@@ -245,13 +247,13 @@ test('panel-jump cooldown elapses', () => {
   const grid = createDefaultGrid();
   const startX = grid.cols * grid.panelSize / 4;
   let state = newPlayerState(0, startX, grid.rows * grid.panelSize / 2);
-  state = stepPlayer(state, { tick: 1, clientTimeMs: 0, mx: 1, my: 0, dash: true, sprint: false, shock: false, repair: false }, 1 / 30, grid);
+  state = stepPlayer(state, { tick: 1, clientTimeMs: 0, mx: 1, my: 0, shock: false, repair: false, jumpHeld: true, jumpCursorDx: 0, jumpCursorDy: 0, facingRad: 0 }, 1 / 30, grid);
   // Tick forward 0.5s of idle ticks (longer than the 0.4s cooldown).
   for (let i = 0; i < 15; i++) {
-    state = stepPlayer(state, { tick: 2 + i, clientTimeMs: 0, mx: 0, my: 0, dash: false, sprint: false, shock: false, repair: false }, 1 / 30, grid);
+    state = stepPlayer(state, { tick: 2 + i, clientTimeMs: 0, mx: 0, my: 0, shock: false, repair: false, jumpHeld: false, jumpCursorDx: 0, jumpCursorDy: 0, facingRad: 0 }, 1 / 30, grid);
   }
   assert.equal(state.panelJumpCooldownS, 0, 'cooldown drained');
   // Now a second jump should fire.
-  state = stepPlayer(state, { tick: 100, clientTimeMs: 0, mx: 1, my: 0, dash: true, sprint: false, shock: false, repair: false }, 1 / 30, grid);
+  state = stepPlayer(state, { tick: 100, clientTimeMs: 0, mx: 1, my: 0, shock: false, repair: false, jumpHeld: true, jumpCursorDx: 0, jumpCursorDy: 0, facingRad: 0 }, 1 / 30, grid);
   assert.ok(Math.abs(state.x - (startX + 2 * grid.panelSize)) < 0.5);
 });

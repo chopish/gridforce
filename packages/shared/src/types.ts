@@ -5,10 +5,21 @@ export interface PlayerInput {
   clientTimeMs: number;
   mx: number;
   my: number;
-  dash: boolean;
-  sprint: boolean;
+  // Shock is held-state in v13 (server tracks how long the bit has been
+  // continuously set to drive the charged-shock charge meter).
   shock: boolean;
   repair: boolean;
+  // Panel-jump targeting mode: while jumpHeld, the cursor offset is the
+  // player's intended jump target relative to their current tile, capped
+  // to ±PANEL_JUMP_TARGET_RANGE per axis. Server applies the jump on the
+  // falling edge of jumpHeld (release).
+  jumpHeld: boolean;
+  jumpCursorDx: number;
+  jumpCursorDy: number;
+  // Cursor-derived facing in radians, quantized to u8 on the wire. Server
+  // re-broadcasts so remote clients can rotate the player sprite to face
+  // the aim direction.
+  facingRad: number;
 }
 
 // Wandering NPC. Phase 0 has no combat or pathing — these are bouncing

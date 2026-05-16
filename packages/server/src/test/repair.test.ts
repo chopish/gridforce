@@ -28,7 +28,7 @@ function pilotWithRepair(repair: boolean) {
     ackInputTick: 0, computeAckBitmask: () => 0,
     send: () => {}, dispose: () => {},
     consumeInputForTick: () => ({
-      tick: 0, clientTimeMs: 0, mx: 0, my: 0, dash: false, sprint: false, shock: false, repair,
+      tick: 0, clientTimeMs: 0, mx: 0, my: 0, shock: false, repair, jumpHeld: false, jumpCursorDx: 0, jumpCursorDy: 0, facingRad: 0,
     }),
   };
 }
@@ -70,7 +70,7 @@ test('releasing repair resets the progress timer', () => {
   let repairing = true;
   r.pilots.set(0, {
     isBot: false, ready: true, name: 'a', ackInputTick: 0, computeAckBitmask: () => 0, send: () => {}, dispose: () => {},
-    consumeInputForTick: () => ({ tick: 0, clientTimeMs: 0, mx: 0, my: 0, dash: false, sprint: false, shock: false, repair: repairing }),
+    consumeInputForTick: () => ({ tick: 0, clientTimeMs: 0, mx: 0, my: 0, shock: false, repair: repairing, jumpHeld: false, jumpCursorDx: 0, jumpCursorDy: 0, facingRad: 0 }),
   });
   for (let i = 0; i < 10; i++) r.physicsStep(); // ~0.33s of repair
   assert.ok(r.states.get(0)!.repairProgressS > 0);

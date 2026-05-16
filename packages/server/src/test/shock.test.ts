@@ -42,7 +42,7 @@ test('shock kills crawler on adjacent LIVE tile', () => {
     ackInputTick: 0, computeAckBitmask: () => 0,
     send: () => {},
     consumeInputForTick: () => ({
-      tick: 0, clientTimeMs: 0, mx: 0, my: 0, dash: false, sprint: false, shock: true, repair: false,
+      tick: 0, clientTimeMs: 0, mx: 0, my: 0, shock: true, repair: false, jumpHeld: false, jumpCursorDx: 0, jumpCursorDy: 0, facingRad: 0,
     }),
     dispose: () => {},
   };
@@ -65,7 +65,7 @@ test('shock cooldown enforced after first fire', () => {
   });
   r.pilots.set(0, {
     isBot: false, ready: true, name: 'a', ackInputTick: 0, computeAckBitmask: () => 0, send: () => {}, dispose: () => {},
-    consumeInputForTick: () => ({ tick: 0, clientTimeMs: 0, mx: 0, my: 0, dash: false, sprint: false, shock: true, repair: false }),
+    consumeInputForTick: () => ({ tick: 0, clientTimeMs: 0, mx: 0, my: 0, shock: true, repair: false, jumpHeld: false, jumpCursorDx: 0, jumpCursorDy: 0, facingRad: 0 }),
   });
   r.physicsStep();
   const after = r.states.get(0)!;
@@ -91,7 +91,7 @@ test('shock does not reach across DAMAGED tile', () => {
   });
   r.pilots.set(0, {
     isBot: false, ready: true, name: 'a', ackInputTick: 0, computeAckBitmask: () => 0, send: () => {}, dispose: () => {},
-    consumeInputForTick: () => ({ tick: 0, clientTimeMs: 0, mx: 0, my: 0, dash: false, sprint: false, shock: true, repair: false }),
+    consumeInputForTick: () => ({ tick: 0, clientTimeMs: 0, mx: 0, my: 0, shock: true, repair: false, jumpHeld: false, jumpCursorDx: 0, jumpCursorDy: 0, facingRad: 0 }),
   });
   r.physicsStep();
   assert.equal(r.crawlers.size, 1, 'crawler should survive — DAMAGED tile blocks conduction');

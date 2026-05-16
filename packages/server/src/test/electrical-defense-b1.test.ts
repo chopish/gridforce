@@ -49,7 +49,7 @@ test('B1 endless loop: crawlers spawn over a few seconds of gameplay', async () 
       url: h.wsUrl,
       roomCode: room.code,
       name: 'p',
-      drive: () => ({ mx: 0, my: 0, dash: false, sprint: false, shock: false, repair: false }),
+      drive: () => ({ mx: 0, my: 0, shock: false, repair: false }),
     });
     await c.connect();
     await new Promise<void>((r) => setTimeout(r, 100));
@@ -76,7 +76,7 @@ test('B1 endless loop: shock kills a planted crawler and drops carbon', async ()
       url: h.wsUrl,
       roomCode: room.code,
       name: 'p',
-      drive: () => ({ mx: 0, my: 0, dash: false, sprint: false, shock: true, repair: false }),
+      drive: () => ({ mx: 0, my: 0, shock: true, repair: false }),
     });
     await c.connect();
     await new Promise<void>((r) => setTimeout(r, 100));
