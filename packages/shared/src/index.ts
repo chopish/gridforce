@@ -14,4 +14,5 @@ export type { PanelStateValue } from './panels.js';
 export * from './tiles.js';
 export * from './integrity.js';
 export * from './panelJump.js';
+export * from './shockBeam.js';
 export * from './enemies/crawler.js';

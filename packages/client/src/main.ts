@@ -8,6 +8,8 @@ import {
   SERVER_TICK_DT_MS,
   SHOCK_BEAM_MAX_TILES,
   SHOCK_CHARGE_FULL_S,
+  SHOCK_LINGER_TICKS,
+  traceShockBeam,
   type PlayerId,
 } from '@gridforce/shared';
 
@@ -313,13 +315,35 @@ async function bootstrap(): Promise<void> {
             const heldS = (now - shockDownAtMs) / 1000;
             const ratio = Math.min(1, heldS / SHOCK_CHARGE_FULL_S);
             const tiles = Math.max(1, Math.ceil(ratio * SHOCK_BEAM_MAX_TILES));
+            // Fire the beam VFX (line flash) from the post-step local position
+            // so it lines up with where the server fires from this same tick.
+            const localPost = world.players.get(world.localPlayerId) ?? localForFacing;
             renderer.shockFx.fire(
-              localForFacing.x,
-              localForFacing.y,
+              localPost.x,
+              localPost.y,
               sample.facingRad,
               tiles,
               ratio >= 0.5,
             );
+            // Predict tile electrification client-side so the panel lights up
+            // immediately instead of waiting for the next server snapshot
+            // (~50-250ms of snapshot-batch + RTT). traceShockBeam is the same
+            // helper the server's applyShockBeam uses, so the predicted hits
+            // match the authoritative set tile-for-tile. When the snapshot
+            // lands it overwrites `world.tiles` wholesale — the server's
+            // l1Charge values converge with what we predicted (minus the
+            // ticks of decay between fire and snapshot), so the transition
+            // is seamless on the happy path.
+            const traceState = { ...localPost, shockHeldS: heldS };
+            const trace = traceShockBeam(
+              traceState,
+              { ...inp, facingRad: sample.facingRad },
+              world.tiles,
+              world.grid,
+            );
+            for (const h of trace.hits) {
+              if (h.conductive) world.tiles.l1Charge[h.idx] = SHOCK_LINGER_TICKS;
+            }
           }
           prevLocalShock = sample.shock;
         } else {

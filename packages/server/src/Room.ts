@@ -9,10 +9,7 @@ import {
   CRAWLER_WEIGHT,
   MAX_ALIVE_CRAWLERS,
   SHOCK_BEAM_DAMAGE,
-  SHOCK_BEAM_MAX_TILES,
-  SHOCK_CHARGE_COOLDOWN_S,
   SHOCK_CHARGE_FULL_S,
-  SHOCK_COOLDOWN_S,
   SHOCK_LINGER_TICKS,
   SHOCK_TILE_DAMAGE,
   REPAIR_DURATION_S,
@@ -29,11 +26,11 @@ import {
   MAX_PLAYERS_PER_ROOM,
   PlayerJoinedMsg,
   allocateTiles,
-  conductive,
   damagePerSecond,
   damageTopmost,
   isPassage,
   topmostLayer,
+  traceShockBeam,
   tryPanelJump,
   type BufferedJump,
   type TileBuffers,
@@ -631,49 +628,23 @@ export class Room {
     playerState: PlayerState,
     input: PlayerInput,
   ): PlayerState {
-    const { cols, rows, panelSize } = this.grid;
-    // 0s held = 1 tile (snappy tap); SHOCK_CHARGE_FULL_S+ held = MAX.
-    const ratio = Math.min(1, playerState.shockHeldS / SHOCK_CHARGE_FULL_S);
-    const beamTiles = Math.max(1, Math.ceil(ratio * SHOCK_BEAM_MAX_TILES));
-    const px = playerState.x;
-    const py = playerState.y;
-    const dirX = Math.cos(input.facingRad);
-    const dirY = Math.sin(input.facingRad);
-    let lastTx = Math.floor(px / panelSize);
-    let lastTy = Math.floor(py / panelSize);
-    let hit = 0;
-    // Ray-march tile-by-tile. Step in panelSize/8 increments so we never
-    // skip across a tile boundary at this beam length.
-    const step = panelSize / 8;
-    const maxDist = beamTiles * panelSize + panelSize; // generous bound
-    for (let t = step; t <= maxDist && hit < beamTiles; t += step) {
-      const sx = px + dirX * t;
-      const sy = py + dirY * t;
-      const tx = Math.floor(sx / panelSize);
-      const ty = Math.floor(sy / panelSize);
-      if (tx === lastTx && ty === lastTy) continue;
-      lastTx = tx;
-      lastTy = ty;
-      if (tx < 0 || tx >= cols || ty < 0 || ty >= rows) break;
-      const idx = indexOf(cols, tx, ty);
-      // Non-conductive (dead or damaged below threshold) — the beam still
-      // HITS bugs on this tile (the line of force lands here) but it stops
-      // here: no charge, no further propagation.
-      if (!conductive(this.tiles, idx)) {
-        this.damageCrawlersOnTile(tx, ty, SHOCK_BEAM_DAMAGE);
-        break;
+    const trace = traceShockBeam(playerState, input, this.tiles, this.grid);
+    for (const hit of trace.hits) {
+      if (hit.conductive) {
+        // Live panel: electrify for SHOCK_LINGER_TICKS, plus the beam +
+        // tile-shock combined damage to bugs caught in the line.
+        this.tiles.l1Charge[hit.idx] = SHOCK_LINGER_TICKS;
+        this.damageCrawlersOnTile(hit.tx, hit.ty, SHOCK_BEAM_DAMAGE + SHOCK_TILE_DAMAGE);
+      } else {
+        // Impact tile (dead / damaged below conduction threshold): beam still
+        // hits bugs standing on it, but propagation stops here.
+        this.damageCrawlersOnTile(hit.tx, hit.ty, SHOCK_BEAM_DAMAGE);
       }
-      // Conductive panel: charge it AND damage bugs on it. Beam + tile
-      // shock both apply to anything caught in the line on a live panel.
-      this.tiles.l1Charge[idx] = SHOCK_LINGER_TICKS;
-      this.damageCrawlersOnTile(tx, ty, SHOCK_BEAM_DAMAGE + SHOCK_TILE_DAMAGE);
-      hit++;
     }
-    // If no tile was hit (e.g. point-blank into a wall) we still consume
-    // cooldown so the player can't infinitely retry — a fired weapon is a
-    // fired weapon. Pick the larger of tap/charged cooldown by hold time.
-    const cooldown = ratio >= 0.5 ? SHOCK_CHARGE_COOLDOWN_S : SHOCK_COOLDOWN_S;
-    return { ...playerState, shockCooldownS: cooldown };
+    // Cooldown is consumed even on a wholly-missed shot — a fired weapon is
+    // a fired weapon. Tap vs charged cooldown derived from charge ratio,
+    // which traceShockBeam picks based on shockHeldS.
+    return { ...playerState, shockCooldownS: trace.cooldownS };
   }
 
   // Damage every crawler whose centre lies on tile (tx,ty). Bugs that drop

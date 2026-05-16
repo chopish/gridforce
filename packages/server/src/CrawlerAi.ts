@@ -10,31 +10,41 @@ import {
   type TileBuffers,
 } from '@gridforce/shared';
 
-// Mite baseline priority profile, refined for C1.6:
+// Mite baseline priority profile.
 //
 //   - `player` is the base score for chasing a pilot. Crowd boredom is a
 //     piecewise curve (see crowdPenalty below) that DIPS for a tight squad
 //     (2-4 peers nearby) — a coherent pack chases harder — then climbs
 //     quadratically once the group passes ~6 peers, hitting critical mass
 //     in the 12-15 range where chasing the player breaks down.
-//   - Attack score is layer-aware. Healthy panels are an unattractive target
-//     (`panelBase` is tiny); priority climbs as the panel takes damage, then
-//     jumps to a much higher band when L1 is gone and the dome is exposed.
-//     The "huge problem near a tunneled tile" scenario falls out of this:
-//     dome-exposed tiles outscore most chase opportunities, especially once
-//     a crowd is present.
+//   - Attack score is layer-aware. Panels are MILDLY appealing baseline —
+//     `panelBase` lives just below the chase score so the per-roll noise
+//     bands overlap, producing a low natural probability that a lone mite
+//     commits to the tile under it. Score climbs as the panel takes
+//     damage, then jumps into a much higher band when L1 is gone and the
+//     dome is exposed; dome-exposed tiles still dominate at any crowd
+//     size. The "small chance per roll" behaviour is therefore an
+//     emergent property of the score band overlap + stochastic noise —
+//     no hardcoded probability gate elsewhere in this file.
 //   - Attention is the per-scan boredom penalty on whichever task is
 //     currently active. Slower decay than C1.5 since rolls are less
 //     frequent (see TASK_REEVAL_INTERVAL_S below).
+//
+// Tuning intuition for the panel band: chase = 100 with ±15% noise spans
+// 85–115. `panelBase = 80` with ±15% noise spans 68–92. The narrow
+// overlap (85–92) is where attack can win — only a few percent per roll
+// at lone-mite-healthy-panel, rising as the panel takes damage. Tight
+// squads (chase ≈ 110) never overlap, so squads stay committed to the
+// chase. Critical mass (chase ≪ 70) puts attack firmly above chase.
 //
 // TODO (future): proper swarm AI — formation, lead-follow, designated
 // breachers. The crowd-dip term is a stand-in for "coherent squad
 // behaviour" until that lands.
 const MITE_PROFILE = {
   player: 100,
-  panelBase: 5,
+  panelBase: 80,
   panelDamageScale: 15,
-  domeBase: 25,
+  domeBase: 100,
   domeDamageScale: 35,
   attentionPerScan: 5,
   crowdRadiusPx: 128, // 2 tiles — tighter than C1.5's 3
@@ -234,7 +244,11 @@ export class CrawlerAiManager {
       }
     }
 
-    // Apply stochastic noise + attention to current task only.
+    // Apply stochastic noise + attention to current task only. The noise
+    // bands on chase and attack are where the "low baseline chance of a
+    // lone mite attacking the tile under it" comes from — panelBase sits
+    // close enough to `player` that the bands overlap on the tails. No
+    // separate probability gate.
     chaseScore = chaseScore * noise() - (ai.task.kind === CrawlerTaskKind.CHASE_PLAYER ? ai.attentionPenalty : 0);
     attackScore = attackScore * noise() - (ai.task.kind === CrawlerTaskKind.ATTACK_TILE ? ai.attentionPenalty : 0);
 

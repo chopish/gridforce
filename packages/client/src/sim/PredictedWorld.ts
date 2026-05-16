@@ -129,6 +129,7 @@ export class PredictedWorld {
     this.targetLead = INPUT_LEAD_TICKS;
     this.pending = [];
     this.localPrevJumpHeld = false;
+    this.lastAckedJumpHeld = false;
     this.localBufferedJump = null;
     this.correctionX = 0;
     this.correctionY = 0;
@@ -164,6 +165,15 @@ export class PredictedWorld {
   // Room.bufferedJumps server-side. Releases that land during cooldown stash
   // here and fire when cooldown drains.
   private localBufferedJump: BufferedJump | null = null;
+
+  // jumpHeld bit of the most recently SERVER-ACKED input. Seeds `prevHeld`
+  // for the reconciliation replay loop so the first surviving pending input
+  // sees the correct previous-tick hold state — without this, a release
+  // whose matching hold has already been acked would not register a falling
+  // edge during replay, the jump would silently fail to re-fire, and the
+  // player would visibly snap back to the pre-jump position for one
+  // snapshot cycle (the "shift after jump" jank).
+  private lastAckedJumpHeld = false;
 
   // Visual-only position offset that blends to zero over PREDICTION_BLEND_MS.
   // The simulated position is updated immediately; only the rendered position
@@ -204,6 +214,7 @@ export class PredictedWorld {
     this.crawlers.clear();
     this.carbons.clear();
     this.localPrevJumpHeld = false;
+    this.lastAckedJumpHeld = false;
     this.localBufferedJump = null;
     // Lead the server tick from the start: by the time our first input
     // reaches the server, the server has already advanced past startTick by
@@ -392,8 +403,13 @@ export class PredictedWorld {
       this.predictedTick = snap.tick + this.targetLead;
     }
 
-    // Drop pending inputs that have been processed server-side.
+    // Drop pending inputs that have been processed server-side. Track the
+    // jumpHeld bit of the most recent dropped input so the replay loop below
+    // can seed `prevHeld` correctly — without this, a release whose hold was
+    // already acked would lose its falling-edge during replay and the jump
+    // would silently fail to re-fire.
     while (this.pending.length > 0 && this.pending[0]!.tick <= snap.ackInputTick) {
+      this.lastAckedJumpHeld = this.pending[0]!.jumpHeld;
       this.pending.shift();
     }
 
@@ -431,13 +447,15 @@ export class PredictedWorld {
     // Rebase: take server's view of us, then replay any unacked inputs. For
     // each input, run stepPlayer then tryPanelJump so the falling-edge jump
     // applies the same way the server resolved it. prevHeld for the first
-    // replay input is unknown (we don't ship the previous-tick bit on the
-    // wire); assume `false`. The only loss is a release whose preceding hold
-    // was in the same input message — vanishingly rare given the server has
-    // typically acked the hold by the time the release arrives.
+    // pending input is seeded from `lastAckedJumpHeld` — the bit of the most
+    // recently acked input, captured above. Without this seed, a release
+    // whose hold has already been acked (very common when chaining jumps
+    // tightly) would miss its falling edge in the replay, the jump would
+    // not re-fire, and the player would snap back to the pre-jump pos for a
+    // snapshot — the "shift-after-jump" jank.
     let rebased: PlayerState = { ...localSnap };
     let replayedJump = false;
-    let prevHeld = false;
+    let prevHeld = this.lastAckedJumpHeld;
     // Replay-local buffer mirrors the client's buffer through pending inputs.
     // We start at null because a release older than the snapshot is already
     // resolved server-side; only releases inside `pending` can still be
