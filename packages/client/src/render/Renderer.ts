@@ -2,21 +2,23 @@ import { Application, Container } from 'pixi.js';
 
 import type { GridDef } from '@gridforce/shared';
 
-import { Camera } from './Camera.js';
+import { CameraController } from './CameraController.js';
 import { CarbonRenderer } from './CarbonRenderer.js';
 import { CrawlerRenderer } from './CrawlerRenderer.js';
 import { GridRenderer } from './GridRenderer.js';
 import { NpcRenderer } from './NpcRenderer.js';
 import { PlayerRenderer } from './PlayerRenderer.js';
 
-// Owns the PixiJS Application and the scene root. Three child renderers do
-// the actual drawing: GridRenderer for the static playfield, NpcRenderer
-// for hostile entities (drawn under players so a dense NPC swarm doesn't
-// hide the local player), PlayerRenderer on top.
+// Owns the PixiJS Application and the scene root. Five child renderers do
+// the actual drawing: GridRenderer for the static playfield, CarbonRenderer
+// for pickups, CrawlerRenderer for melee enemies, NpcRenderer for stress-test
+// hostile entities (drawn under players so a dense swarm doesn't hide the
+// local player), PlayerRenderer on top.
 //
-// The playfield container is translated each frame via the Camera so all
-// child renderers move together. Call tick(dtMs, localX, localY) once per
-// frame (main.ts, Task 9) to drive the camera and apply the offset.
+// The world container is transformed each frame via the CameraController so
+// all child renderers move and scale together. Call tick(dtMs, localX, localY)
+// once per frame (main.ts) to drive the camera follow + zoom and apply the
+// transform.
 export class Renderer {
   app!: Application;
   playfield: Container | null = null;
@@ -26,8 +28,9 @@ export class Renderer {
   npcRenderer!: NpcRenderer;
   playerRenderer!: PlayerRenderer;
 
-  private camera: Camera | null = null;
+  camera: CameraController | null = null;
   private resizeListener: (() => void) | null = null;
+  private wheelListener: ((e: WheelEvent) => void) | null = null;
 
   async init(parent: HTMLElement, grid: GridDef): Promise<void> {
     this.app = new Application();
@@ -58,24 +61,39 @@ export class Renderer {
     const worldW = grid.cols * grid.panelSize;
     const worldH = grid.rows * grid.panelSize;
 
-    this.camera = new Camera({
+    this.camera = new CameraController({
       viewportW: this.app.screen.width,
       viewportH: this.app.screen.height,
-      worldW,
-      worldH,
     });
-    this.camera.snapTo(worldW / 2, worldH / 2);
+    // Initial center is the middle of the grid; smoothing will catch the
+    // local player's position once main.ts starts feeding setTarget() each tick.
+    this.camera.center.x = worldW / 2;
+    this.camera.center.y = worldH / 2;
+    this.camera.setTarget({ x: worldW / 2, y: worldH / 2 });
 
-    // Apply initial offset so the world is centered before the first tick.
-    this._applyOffset();
+    // Apply initial transform so the world is centered before the first tick.
+    this._applyTransform();
 
     this.resizeListener = () => {
       const w = this.app.screen.width;
       const h = this.app.screen.height;
-      this.camera?.resize(w, h);
-      this._applyOffset();
+      this.camera?.setViewportSize(w, h);
+      this._applyTransform();
     };
     window.addEventListener('resize', this.resizeListener);
+
+    // Mouse wheel → zoom. One scroll notch ≈ ±100px of deltaY; we collapse
+    // any non-zero delta into a single notch. Browsers that report
+    // line-mode (deltaMode=1) or page-mode (deltaMode=2) still flow through
+    // the same sign. preventDefault so the page doesn't scroll under the
+    // canvas while the game has focus.
+    this.wheelListener = (e: WheelEvent) => {
+      e.preventDefault();
+      if (!this.camera) return;
+      const notches = -Math.sign(e.deltaY); // up = zoom in
+      if (notches !== 0) this.camera.zoom(notches);
+    };
+    this.app.canvas.addEventListener('wheel', this.wheelListener, { passive: false });
   }
 
   /** Replace the current grid (mid-run stage swap). */
@@ -84,34 +102,43 @@ export class Renderer {
     this.gridRenderer.rebuild(grid);
     const worldW = grid.cols * grid.panelSize;
     const worldH = grid.rows * grid.panelSize;
-    this.camera.setWorldBounds(worldW, worldH);
-    this.camera.snapTo(worldW / 2, worldH / 2);
-    this._applyOffset();
+    // Recenter to the new grid's midpoint; main.ts's setTarget on the next
+    // frame will smoothly pull the camera onto the local player.
+    this.camera.center.x = worldW / 2;
+    this.camera.center.y = worldH / 2;
+    this.camera.setTarget({ x: worldW / 2, y: worldH / 2 });
+    this._applyTransform();
   }
 
   /**
-   * Drive the camera and apply the playfield offset.
-   * Called once per frame by main.ts (Task 9).
+   * Drive the camera and apply the world transform.
+   * Called once per frame by main.ts.
    * @param dtMs  Frame delta in milliseconds.
    * @param localX  World-space X of the local player (camera follow target).
    * @param localY  World-space Y of the local player.
    */
   tick(dtMs: number, localX: number, localY: number): void {
     if (!this.camera || !this.playfield) return;
-    this.camera.update(localX, localY, dtMs / 1000);
-    this._applyOffset();
+    this.camera.setTarget({ x: localX, y: localY });
+    this.camera.update(dtMs / 1000);
+    this._applyTransform();
   }
 
-  private _applyOffset(): void {
+  private _applyTransform(): void {
     if (!this.camera || !this.playfield) return;
-    const off = this.camera.worldToScreenOffset();
-    this.playfield.position.set(off.x, off.y);
+    this.playfield.scale.set(this.camera.zoomLevel);
+    const sc = this.camera.worldToScreen({ x: 0, y: 0 });
+    this.playfield.position.set(sc.x, sc.y);
   }
 
   destroy(): void {
     if (this.resizeListener) {
       window.removeEventListener('resize', this.resizeListener);
       this.resizeListener = null;
+    }
+    if (this.wheelListener && this.app?.canvas) {
+      this.app.canvas.removeEventListener('wheel', this.wheelListener);
+      this.wheelListener = null;
     }
     this.app?.destroy(true, { children: true, texture: true });
   }

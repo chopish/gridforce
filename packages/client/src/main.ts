@@ -92,6 +92,18 @@ async function bootstrap(): Promise<void> {
           .init(appHost, m.payload.grid)
           .then(() => {
             renderer.playerRenderer.setLocalPlayer(world.localPlayerId);
+            // Wire cursor screen→world conversion through the camera. Task 17
+            // will use facingRad in the input sample once we feed the local
+            // player's predicted world pos into sample(); this callback is
+            // the link InputCapture needs to resolve cursor world coords.
+            inputs.setCursorWorldPosCallback(() => {
+              const cam = renderer.camera;
+              if (!cam) return { x: 0, y: 0 };
+              return cam.screenToWorld({
+                x: inputs.getMouseScreenX(),
+                y: inputs.getMouseScreenY(),
+              });
+            });
             hud = new DebugHud();
             stageHud = new StageHud();
             gameHud = new GameHud();
