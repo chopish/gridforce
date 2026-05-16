@@ -92,7 +92,9 @@ export const WORLD_HEIGHT = PANEL_SIZE * GRID_ROWS;
 // 150 ms blend overlaps with the next, producing constant low-amplitude
 // pulling that the HUD shows as `recon smooth=many` with `corr` ~1-2 px.
 export const PREDICTION_THRESHOLD_PX = 5;
-export const PREDICTION_HARD_SNAP_PX = 30;
+// Sized in v13 for PLAYER_MOVE_SPEED=308 (was 30 when speed was 220 in v12).
+// Per-tick prediction error scales with movement speed; 42 ≈ 30 × 308/220.
+export const PREDICTION_HARD_SNAP_PX = 42;
 export const PREDICTION_BLEND_MS = 150;
 
 // Remote interpolation
