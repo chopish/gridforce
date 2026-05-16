@@ -170,6 +170,39 @@ async function bootstrap(): Promise<void> {
     if (e.code === 'KeyK') {
       socket.sendSetNpcCount(0);
     }
+    // Home → recenter the camera onto the local player and re-enable follow
+    // after a free-pan (Task 20). The camera is only valid once Renderer.init
+    // has run (post-Welcome); before that we just no-op.
+    if (e.code === 'Home') {
+      renderer.camera?.recenter();
+    }
+  });
+
+  // Middle-mouse drag → free-pan the camera (Task 20). We track the previous
+  // cursor position while the middle button is held and feed deltas to
+  // camera.pan(). preventDefault on the mousedown so the browser's autoscroll
+  // affordance doesn't appear under the canvas.
+  let isDraggingPan = false;
+  let panLastX = 0;
+  let panLastY = 0;
+  window.addEventListener('mousedown', (e) => {
+    if (e.button !== 1) return;
+    isDraggingPan = true;
+    panLastX = e.clientX;
+    panLastY = e.clientY;
+    e.preventDefault();
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!isDraggingPan) return;
+    const dx = e.clientX - panLastX;
+    const dy = e.clientY - panLastY;
+    panLastX = e.clientX;
+    panLastY = e.clientY;
+    renderer.camera?.pan(dx, dy);
+  });
+  window.addEventListener('mouseup', (e) => {
+    if (e.button !== 1) return;
+    isDraggingPan = false;
   });
   window.addEventListener('gridforce:add-bot', () => {
     socket.sendRaw(AddBotMsg.encode({}));

@@ -61,6 +61,28 @@ export class CameraController {
     this.followEnabled = true;
   }
 
+  /**
+   * Free-pan the camera by a screen-space delta. Disables follow until
+   * `recenter()` is called. Screen delta is converted to world delta by the
+   * inverse of `zoomLevel`, so panning feels consistent across zoom levels.
+   */
+  pan(dxScreen: number, dyScreen: number): void {
+    this.followEnabled = false;
+    // Screen delta → world delta (inverse zoom).
+    this.center.x -= dxScreen / this.zoomLevel;
+    this.center.y -= dyScreen / this.zoomLevel;
+  }
+
+  /**
+   * Teleport the camera center to a world-space point and disable follow
+   * until `recenter()` is called.
+   */
+  setCenter(pos: { x: number; y: number }): void {
+    this.followEnabled = false;
+    this.center.x = pos.x;
+    this.center.y = pos.y;
+  }
+
   update(dt: number): void {
     if (!this.followEnabled) return;
     if (dt <= 0) return;

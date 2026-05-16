@@ -54,3 +54,31 @@ test('zoom affects screenToWorld correctly', () => {
   // At lower zoom, the same screen pos maps to a world point farther from center.
   assert.ok(Math.abs(worldB.x) > Math.abs(worldA.x));
 });
+
+test('pan disables follow until recenter', () => {
+  const cam = new CameraController({ viewportW: 800, viewportH: 600 });
+  cam.setTarget({ x: 0, y: 0 });
+  cam.update(10.0);
+  cam.pan(100, 0); // pan 100 px right (screen) = center moves left 100 world
+  assert.ok(cam.center.x < 0);
+  // setTarget should NOT pull camera back while panning.
+  cam.setTarget({ x: 0, y: 0 });
+  cam.update(10.0);
+  assert.ok(cam.center.x < 0);
+  // Recenter brings follow back.
+  cam.recenter();
+  cam.update(10.0);
+  assert.ok(Math.abs(cam.center.x) < 1);
+});
+
+test('setCenter teleports camera and disables follow', () => {
+  const cam = new CameraController({ viewportW: 800, viewportH: 600 });
+  cam.setTarget({ x: 0, y: 0 });
+  cam.update(10.0);
+  cam.setCenter({ x: 500, y: 300 });
+  assert.equal(cam.center.x, 500);
+  assert.equal(cam.center.y, 300);
+  cam.setTarget({ x: 0, y: 0 });
+  cam.update(10.0);
+  assert.equal(cam.center.x, 500); // follow disabled — no pull
+});
