@@ -778,13 +778,16 @@ export class Room {
 
     // Step all crawlers. The priority-AI decides what each bug is doing
     // (chase / attack tile) — stepCrawler is just the executor. We snapshot
-    // players to an array because `this.states.values()` returns a single-
-    // use iterator; passing it through multiple AI calls would silently
-    // empty after the first crawler.
+    // players + bugs into arrays because `Map.values()` is a one-shot
+    // iterator; passing it through multiple AI calls would silently empty
+    // after the first crawler. The bug snapshot also gives the AI a stable
+    // crowd-radius lookup as it iterates (each bug sees its peers at the
+    // start-of-tick positions, not interleaved partial updates).
     const playerArr = Array.from(this.states.values());
+    const bugArr = Array.from(this.crawlers.values());
     const ctx: CrawlerStepContext = { tiles: this.tiles };
     for (const [id, c] of this.crawlers) {
-      const task = this.crawlerAi.decide(c, SERVER_TICK_DT_S, playerArr, this.tiles, this.grid);
+      const task = this.crawlerAi.decide(c, SERVER_TICK_DT_S, playerArr, bugArr, this.tiles, this.grid);
       const next = stepCrawler(c, task, SERVER_TICK_DT_S, this.grid, ctx);
       if (next.hp <= 0) {
         this.crawlers.delete(id);
