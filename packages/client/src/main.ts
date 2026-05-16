@@ -4,6 +4,7 @@ import {
   CLIENT_MAX_FRAME_DT_S,
   MessageType,
   NETSIM_PROFILES,
+  PANEL_SIZE,
   SERVER_TICK_DT_MS,
   type PlayerId,
 } from '@gridforce/shared';
@@ -361,6 +362,22 @@ async function bootstrap(): Promise<void> {
         if (!sample) return null;
         return sample;
       });
+
+      // Jump-target overlay (Task 22): visible while Shift is held; highlights
+      // the destination tile = localPlayer tile + cursor (dx, dy). Local player
+      // tile floor() handles the half-open boundary correctly for both axes.
+      const jumpHeld = inputs.isJumpHeld();
+      renderer.jumpTargetOverlay.setVisible(jumpHeld);
+      if (jumpHeld) {
+        const pcx = Math.floor(me.x / PANEL_SIZE);
+        const pcy = Math.floor(me.y / PANEL_SIZE);
+        renderer.jumpTargetOverlay.setTargetTile(
+          pcx,
+          pcy,
+          inputs.getJumpCursorDx(),
+          inputs.getJumpCursorDy(),
+        );
+      }
 
       // Camera follows the local player.
       renderer.tick(dt * 1000, me.x, me.y);

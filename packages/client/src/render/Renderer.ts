@@ -2,6 +2,7 @@ import { Application, Container } from 'pixi.js';
 
 import type { GridDef } from '@gridforce/shared';
 
+import { JumpTargetOverlay } from '../ui/JumpTargetOverlay.js';
 import { CameraController } from './CameraController.js';
 import { CarbonRenderer } from './CarbonRenderer.js';
 import { CrawlerRenderer } from './CrawlerRenderer.js';
@@ -27,6 +28,7 @@ export class Renderer {
   carbonRenderer!: CarbonRenderer;
   npcRenderer!: NpcRenderer;
   playerRenderer!: PlayerRenderer;
+  jumpTargetOverlay!: JumpTargetOverlay;
 
   camera: CameraController | null = null;
   private resizeListener: (() => void) | null = null;
@@ -51,15 +53,19 @@ export class Renderer {
     this.crawlerRenderer = new CrawlerRenderer();
     this.npcRenderer = new NpcRenderer();
     this.playerRenderer = new PlayerRenderer();
-    // Z-order (back to front): grid → carbon → crawler → npc → player
+    const worldW = grid.cols * grid.panelSize;
+    const worldH = grid.rows * grid.panelSize;
+
+    this.jumpTargetOverlay = new JumpTargetOverlay(grid.panelSize, worldW, worldH);
+    // Z-order (back to front): grid → carbon → crawler → npc → player → jump overlay.
+    // Overlay sits on top so the dim fade covers everything below it while
+    // jumpHeld is true; main.ts toggles its visibility per frame.
     this.playfield.addChild(this.gridRenderer.root);
     this.playfield.addChild(this.carbonRenderer.root);
     this.playfield.addChild(this.crawlerRenderer.root);
     this.playfield.addChild(this.npcRenderer.root);
     this.playfield.addChild(this.playerRenderer.root);
-
-    const worldW = grid.cols * grid.panelSize;
-    const worldH = grid.rows * grid.panelSize;
+    this.playfield.addChild(this.jumpTargetOverlay.container);
 
     this.camera = new CameraController({
       viewportW: this.app.screen.width,
@@ -102,6 +108,9 @@ export class Renderer {
     this.gridRenderer.rebuild(grid);
     const worldW = grid.cols * grid.panelSize;
     const worldH = grid.rows * grid.panelSize;
+    // Resize the jump-target overlay's dim rect so it still covers the new
+    // world. Highlight is redrawn per frame so panelSize lands automatically.
+    this.jumpTargetOverlay?.setWorldSize(grid.panelSize, worldW, worldH);
     // Recenter to the new grid's midpoint; main.ts's setTarget on the next
     // frame will smoothly pull the camera onto the local player.
     this.camera.center.x = worldW / 2;
