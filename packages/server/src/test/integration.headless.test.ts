@@ -250,7 +250,7 @@ test('late-joining client can actually move', { timeout: 15_000 }, async () => {
       url,
       roomCode,
       name: 'warm',
-      drive: () => ({ mx: 0, my: 0, dash: false, sprint: false, shock: false, repair: false }), // idle
+      drive: () => ({ mx: 0, my: 0, shock: false, repair: false }), // idle
     });
     await warmup.connect();
     warmup.start();
@@ -262,7 +262,7 @@ test('late-joining client can actually move', { timeout: 15_000 }, async () => {
       url,
       roomCode,
       name: 'late',
-      drive: () => ({ mx: 1, my: 0, dash: false, sprint: false, shock: false, repair: false }),
+      drive: () => ({ mx: 1, my: 0, shock: false, repair: false }),
     });
     await late.connect();
     const spawnX = late.getStats().finalLocalPosition.x;

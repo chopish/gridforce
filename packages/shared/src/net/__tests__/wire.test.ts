@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { SCHEMA_VERSION } from '../../constants.js';
+import { newPlayerState } from '../../sim.js';
 import { allocateTiles, type TileBuffers } from '../../tiles.js';
 import type { PlayerState, SnapshotPayload, WelcomePayload } from '../../types.js';
 import {
@@ -23,26 +24,6 @@ import {
 } from '../index.js';
 import { PlayerEncoder } from '../entities/PlayerEncoder.js';
 import { BinaryReader, BinaryWriter } from '../wire.js';
-
-// Local helper to avoid importing sim.js (which has unresolved imports until
-// Tasks 13/14 land). Equivalent to sim.ts#newPlayerState.
-function newPlayerState(id: number, x: number, y: number, name = ''): PlayerState {
-  return {
-    id,
-    x,
-    y,
-    facing: 0,
-    facingCursorRad: 0,
-    panelJumpCooldownS: 0,
-    stateSeq: 0,
-    name,
-    ready: false,
-    carbon: 0,
-    shockCooldownS: 0,
-    repairProgressS: 0,
-    shockHeldS: 0,
-  };
-}
 
 function makeBaselineSnapshot(overrides: Partial<SnapshotPayload> = {}): SnapshotPayload {
   const cols = 18, rows = 12;

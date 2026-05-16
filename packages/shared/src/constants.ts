@@ -71,8 +71,9 @@ export const CLIENT_PREDICT_DT_S = SERVER_TICK_DT_S;
 export const PLAYER_RADIUS = 12;
 export const PLAYER_MOVE_SPEED = 308; // was 220; 220 * 1.4 ≈ 308
 
-// Panel-jump: rising-edge of the `dash` input bit teleports the player
-// one panel in the input/facing direction. Cooldown is the rate-limit.
+// Panel-jump: in v13, the falling-edge of `jumpHeld` (Shift-release) teleports
+// the player toward `jumpCursor{Dx,Dy}` (server-authoritative; see Room.ts).
+// Cooldown is the rate-limit and is decremented in shared sim.ts.
 export const PANEL_JUMP_COOLDOWN_S = 0.4;
 
 export const MAX_PLAYERS_PER_ROOM = 4;
