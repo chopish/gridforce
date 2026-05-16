@@ -1,14 +1,17 @@
 import { Application, Container } from 'pixi.js';
 
-import type { GridDef } from '@gridforce/shared';
+import { MINIMAP_SIZE_PX, type GridDef } from '@gridforce/shared';
 
 import { JumpTargetOverlay } from '../ui/JumpTargetOverlay.js';
 import { CameraController } from './CameraController.js';
 import { CarbonRenderer } from './CarbonRenderer.js';
 import { CrawlerRenderer } from './CrawlerRenderer.js';
 import { GridRenderer } from './GridRenderer.js';
+import { MinimapRenderer } from './MinimapRenderer.js';
 import { NpcRenderer } from './NpcRenderer.js';
 import { PlayerRenderer } from './PlayerRenderer.js';
+
+const MINIMAP_MARGIN_PX = 16;
 
 // Owns the PixiJS Application and the scene root. Five child renderers do
 // the actual drawing: GridRenderer for the static playfield, CarbonRenderer
@@ -29,6 +32,7 @@ export class Renderer {
   npcRenderer!: NpcRenderer;
   playerRenderer!: PlayerRenderer;
   jumpTargetOverlay!: JumpTargetOverlay;
+  minimap!: MinimapRenderer;
 
   camera: CameraController | null = null;
   private resizeListener: (() => void) | null = null;
@@ -67,9 +71,19 @@ export class Renderer {
     this.playfield.addChild(this.playerRenderer.root);
     this.playfield.addChild(this.jumpTargetOverlay.container);
 
+    // Minimap lives in screen space — added to `stage` directly so it does
+    // NOT inherit `playfield`'s camera transform (no pan, no zoom).
+    this.minimap = new MinimapRenderer(grid.cols, grid.rows);
+    this.minimap.container.x = this.app.screen.width - MINIMAP_SIZE_PX - MINIMAP_MARGIN_PX;
+    this.minimap.container.y = MINIMAP_MARGIN_PX;
+    this.app.stage.addChild(this.minimap.container);
+
     this.camera = new CameraController({
       viewportW: this.app.screen.width,
       viewportH: this.app.screen.height,
+    });
+    this.minimap.setPanRequestCallback((world) => {
+      this.camera?.setCenter(world);
     });
     // Initial center is the middle of the grid; smoothing will catch the
     // local player's position once main.ts starts feeding setTarget() each tick.
@@ -84,6 +98,11 @@ export class Renderer {
       const w = this.app.screen.width;
       const h = this.app.screen.height;
       this.camera?.setViewportSize(w, h);
+      // Re-anchor the minimap to the new top-right corner.
+      if (this.minimap) {
+        this.minimap.container.x = w - MINIMAP_SIZE_PX - MINIMAP_MARGIN_PX;
+        this.minimap.container.y = MINIMAP_MARGIN_PX;
+      }
       this._applyTransform();
     };
     window.addEventListener('resize', this.resizeListener);
@@ -111,6 +130,8 @@ export class Renderer {
     // Resize the jump-target overlay's dim rect so it still covers the new
     // world. Highlight is redrawn per frame so panelSize lands automatically.
     this.jumpTargetOverlay?.setWorldSize(grid.panelSize, worldW, worldH);
+    // Minimap re-cells to the new grid dims; next render() reflows tiles.
+    this.minimap?.setDims(grid.cols, grid.rows);
     // Recenter to the new grid's midpoint; main.ts's setTarget on the next
     // frame will smoothly pull the camera onto the local player.
     this.camera.center.x = worldW / 2;
@@ -138,6 +159,26 @@ export class Renderer {
     this.playfield.scale.set(this.camera.zoomLevel);
     const sc = this.camera.worldToScreen({ x: 0, y: 0 });
     this.playfield.position.set(sc.x, sc.y);
+  }
+
+  /**
+   * World-space rect of the camera viewport (inverse of the playfield
+   * transform). Used by the minimap to decide which crawler dots are
+   * off-screen and should blink faster.
+   */
+  getCameraViewRect(): { l: number; t: number; r: number; b: number } {
+    if (!this.camera) {
+      return { l: 0, t: 0, r: 0, b: 0 };
+    }
+    const z = this.camera.zoomLevel;
+    const halfW = this.app.screen.width / 2 / z;
+    const halfH = this.app.screen.height / 2 / z;
+    return {
+      l: this.camera.center.x - halfW,
+      t: this.camera.center.y - halfH,
+      r: this.camera.center.x + halfW,
+      b: this.camera.center.y + halfH,
+    };
   }
 
   destroy(): void {

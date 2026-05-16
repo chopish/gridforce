@@ -382,6 +382,20 @@ async function bootstrap(): Promise<void> {
       // Camera follows the local player.
       renderer.tick(dt * 1000, me.x, me.y);
 
+      // Minimap (Task 23): rendered in screen space, after the camera tick
+      // so getCameraViewRect() reflects this frame's center/zoom. Built
+      // from the client-mirrored state — no extra wire payload.
+      if (world.tiles.l1Hp.length > 0) {
+        const camRect = renderer.getCameraViewRect();
+        renderer.minimap.render(
+          world.tiles,
+          Array.from(world.players.values()),
+          Array.from(world.crawlers.values()),
+          camRect,
+          dt,
+        );
+      }
+
       // Edge-pan (Task 21): hardcoded off via CAMERA_EDGE_PAN_DEFAULT. A
       // future settings spec will let the user toggle this. Setting every
       // frame is wasteful but harmless; we'd rather have a single source of
