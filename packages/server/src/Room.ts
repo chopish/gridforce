@@ -51,6 +51,7 @@ import {
   type NpcState,
   type PhaseDef,
   type PlayerId,
+  type PlayerInput,
   type PlayerState,
   type RoomPhase,
   type RunDef,
@@ -75,6 +76,21 @@ const MAX_NPCS_PER_ROOM = Math.max(
   1,
   Math.min(0xffff, Number(process.env.GRIDFORCE_MAX_NPCS) || 8192),
 );
+
+// Snap a radian angle to its nearest cardinal direction. 0=N (up), 1=E,
+// 2=S (down), 3=W. Note the screen-y-down convention: east = 0 rad,
+// south = +π/2, west = π, north = -π/2 (or +3π/2).
+// Sectors are π/2 wide and centered on each cardinal: E=[-π/4..π/4],
+// S=[π/4..3π/4], W=[3π/4..5π/4], N=[5π/4..7π/4].
+function snapToCardinal(rad: number): 0 | 1 | 2 | 3 {
+  let f = rad % (Math.PI * 2);
+  if (f < 0) f += Math.PI * 2;
+  const s = Math.PI / 4;
+  if (f < s || f >= 7 * s) return 1; // E
+  if (f < 3 * s) return 2;           // S
+  if (f < 5 * s) return 3;           // W
+  return 0;                          // N
+}
 
 // Place new players around the centre, spread on a circle so they don't spawn on top of each other.
 function spawnPosition(grid: GridDef, slot: number): { x: number; y: number } {
@@ -168,6 +184,13 @@ export class Room {
   readonly carbons = new Map<number, CarbonState>();
   private nextCarbonId = 0;
 
+  // Per-player previous shock-bit, used for rising-edge detection on the
+  // uncharged-shock tap (Task 11). The wire bit is held-state in v13, so we
+  // only fire on shock=true & !prevShockHeld. Cleared in startGame() and on
+  // player leave. Task 12 will extend this map (or add a sibling) for the
+  // falling-edge charged-release path.
+  private prevShockBits = new Map<PlayerId, boolean>();
+
   tick = 0;
   private nextPlayerId: PlayerId = 0;
   private startWallMs = 0;
@@ -257,6 +280,7 @@ export class Room {
     pilot.dispose();
     this.pilots.delete(playerId);
     this.states.delete(playerId);
+    this.prevShockBits.delete(playerId);
     if (this.hostId === playerId) this.hostId = this.pickNewHost();
     this.broadcastAll(PlayerLeftMsg.encode({ playerId }));
     if (!this.isEmpty) this.lastNonEmptyAtMs = performance.now();
@@ -294,6 +318,10 @@ export class Room {
     this.crawlerSpawnAccum = 0;
     this.carbons.clear();
     this.nextCarbonId = 0;
+    // Drop any stale rising-edge state from the lobby — no shocks fire there
+    // anyway, but resetting keeps the contract clean and prevents a stuck
+    // "held" bit from suppressing the first in-game tap.
+    this.prevShockBits.clear();
     // Re-centre all players on the active stage's grid. Pre-game they sat
     // at spawn positions sized to whatever grid was active at join time,
     // which can be wrong if the host swapped runs mid-lobby.
@@ -559,35 +587,44 @@ export class Room {
     this.carbons.set(id, { id, x, y, ttlS: CARBON_TTL_S });
   }
 
-  // TODO: rewritten in Task 11 (cursor-aim uncharged shock). For now this
-  // preserves the B1 behavior: hit the 4 cardinal neighbors, conduction
-  // gate via the layered model. Damage application + carbon-on-tile drop
-  // semantics will change in 11/12 — today this is "kill anything on a
-  // conductive neighbor and reset cooldown".
-  private applyShock(_playerId: PlayerId, playerState: PlayerState): PlayerState {
+  // v13 cursor-aim uncharged shock. The shock fires on the single cardinal
+  // tile the cursor is pointing at — no longer the 4-cardinal AoE. The
+  // affected tile must be in-bounds AND conductive (L1 HP above threshold);
+  // any crawlers whose centre falls on that tile are killed and drop carbon.
+  //
+  // Returns either the input state unchanged (no-op: off-grid or
+  // non-conductive) or a new state with shockCooldownS bumped to
+  // SHOCK_COOLDOWN_S. Cooldown gating + rising-edge detection are caller
+  // responsibilities (see physicsStep).
+  //
+  // Task 12 will add the held → release "charged" variant; this is the
+  // tap path only.
+  private applyShock(_playerId: PlayerId, playerState: PlayerState, input: PlayerInput): PlayerState {
     const { cols, rows, panelSize } = this.grid;
-    const cx = Math.floor(playerState.x / panelSize);
-    const cy = Math.floor(playerState.y / panelSize);
-    const neighbors: Array<[number, number]> = [
-      [cx + 1, cy], [cx - 1, cy], [cx, cy + 1], [cx, cy - 1],
-    ];
-    for (const [nx, ny] of neighbors) {
-      if (nx < 0 || nx >= cols || ny < 0 || ny >= rows) continue;
-      const idx = indexOf(cols, nx, ny);
-      // Conduction gate: L1 panel HP must clear the CONDUCTION_THRESHOLD.
-      // Damaged-below-threshold panels don't carry the shock through, same
-      // as the legacy DAMAGED state did.
-      if (!conductive(this.tiles, idx)) continue;
-      // Kill any crawler inside this tile.
-      const tileMinX = nx * panelSize;
-      const tileMinY = ny * panelSize;
-      const tileMaxX = tileMinX + panelSize;
-      const tileMaxY = tileMinY + panelSize;
-      for (const [cid, c] of this.crawlers) {
-        if (c.x >= tileMinX && c.x < tileMaxX && c.y >= tileMinY && c.y < tileMaxY) {
-          this.spawnCarbon(c.x, c.y);
-          this.crawlers.delete(cid);
-        }
+    const cardinal = snapToCardinal(input.facingRad);
+    const px = Math.floor(playerState.x / panelSize);
+    const py = Math.floor(playerState.y / panelSize);
+    const dx = cardinal === 1 ? 1 : cardinal === 3 ? -1 : 0;
+    const dy = cardinal === 0 ? -1 : cardinal === 2 ? 1 : 0;
+    const tx = px + dx;
+    const ty = py + dy;
+    // Off-grid aim: no-op, no cooldown charged. The shock just doesn't
+    // happen — same as pointing at a wall.
+    if (tx < 0 || tx >= cols || ty < 0 || ty >= rows) return playerState;
+    const idx = indexOf(cols, tx, ty);
+    // Conduction gate: L1 panel HP must clear CONDUCTION_THRESHOLD. Damaged-
+    // below-threshold panels don't carry the shock through (matches the
+    // legacy DAMAGED-blocks-shock semantic).
+    if (!conductive(this.tiles, idx)) return playerState;
+    // Kill any crawler whose centre is on the targeted tile + drop carbon.
+    const tileMinX = tx * panelSize;
+    const tileMinY = ty * panelSize;
+    const tileMaxX = tileMinX + panelSize;
+    const tileMaxY = tileMinY + panelSize;
+    for (const [cid, c] of this.crawlers) {
+      if (c.x >= tileMinX && c.x < tileMaxX && c.y >= tileMinY && c.y < tileMaxY) {
+        this.spawnCarbon(c.x, c.y);
+        this.crawlers.delete(cid);
       }
     }
     return { ...playerState, shockCooldownS: SHOCK_COOLDOWN_S };
@@ -598,15 +635,21 @@ export class Room {
       const pilot = this.pilots.get(id);
       const input = pilot ? pilot.consumeInputForTick(this.tick) : null;
       const next = stepPlayer(state, input, SERVER_TICK_DT_S, this.grid);
-      // Uncharged local shock — rising-edge on input.shock with cooldown gate.
+      // Uncharged local shock — fire on the RISING EDGE of input.shock
+      // (held-state semantics on the wire, but only the tap should fire a
+      // shock pulse). Cooldown gate still applies so even rapid taps can't
+      // outrun SHOCK_COOLDOWN_S. The full hold→charge→release "charged
+      // shock" path lands in Task 12.
       let cur = next;
-      if (input && input.shock && cur.shockCooldownS === 0) {
-        cur = this.applyShock(id, cur);
-      } else {
-        // Drain cooldown if non-zero.
-        if (cur.shockCooldownS > 0) {
-          cur = { ...cur, shockCooldownS: Math.max(0, cur.shockCooldownS - SERVER_TICK_DT_S) };
-        }
+      const prevShockHeld = this.prevShockBits.get(id) ?? false;
+      const shockHeldNow = !!(input && input.shock);
+      this.prevShockBits.set(id, shockHeldNow);
+      const risingEdge = shockHeldNow && !prevShockHeld;
+      if (input && risingEdge && cur.shockCooldownS === 0) {
+        cur = this.applyShock(id, cur, input);
+      } else if (cur.shockCooldownS > 0) {
+        // Drain cooldown each tick.
+        cur = { ...cur, shockCooldownS: Math.max(0, cur.shockCooldownS - SERVER_TICK_DT_S) };
       }
       // Repair (raise L1 panel HP back to max). TODO: this is the B1-style
       // "valid target = L1 is the topmost layer and below max HP" check,
