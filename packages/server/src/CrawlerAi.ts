@@ -1,7 +1,12 @@
 import {
+  ACTIVE_ATTACKER_PENALTY,
+  CHASE_COMMIT_S,
   CrawlerTaskKind,
   L0_DOME_MAX_HP,
   L1_PANEL_MAX_HP,
+  POST_KILL_REST_S,
+  SCORE_SOFTMAX_TEMPERATURE,
+  TASK_REEVAL_INTERVAL_S,
   indexOf,
   type CrawlerState,
   type CrawlerTask,
@@ -37,36 +42,10 @@ const MITE_PROFILE = {
   crowdRadiusPx: 128, // 2 tiles — tighter than C1.5's 3
 };
 
-// Re-evaluation cadence. Each bug rolls its task this often (assuming no
-// task is currently held — see commit windows below). Higher = stickier
-// decisions, lower = floppier. 4s gives roughly 15 rolls/minute/bug; at
-// the softmax-derived ~3% attack probability for a lone mite on a healthy
-// panel, that's ~0.5 attack-switches/min/bug — sparse enough that the
-// pattern reads as "occasional breachers" not "constant flip-flopping".
-const TASK_REEVAL_INTERVAL_S = 4.0;
-// Commit lock applied after switching INTO a chase task. Attack tasks
-// commit-until-tile-destroyed instead (see decide).
-const CHASE_COMMIT_S = 4.0;
-
-// Softmax temperature. Probability of picking attack over chase is
-//   exp(attack/τ) / (exp(chase/τ) + exp(attack/τ))
-// At τ=30: a 95-point gap (lone mite, healthy panel) gives the loser ≈3%;
-// a 40-point gap (lone mite, intact dome) gives ≈22%; equal scores give
-// 50/50. Lower τ → closer to argmax; higher τ → closer to uniform.
-const SCORE_SOFTMAX_TEMPERATURE = 30;
-
-// Anti-pile-on. For each bug currently committed to an ATTACK_TILE task
-// across the level, subtract this from `attackScore` at decision time.
-// First breacher sees the full score; the 5th sees -15; the 10th sees
-// -30 — usually below any plausible chase score, so attack stops being
-// picked. Self-balances breacher count without a hard cap.
-const ACTIVE_ATTACKER_PENALTY = 3;
-
-// After a bug finishes destroying its tile, force-block ATTACK picks for
-// this long. Kills the "tile dies → bug instantly picks the adjacent
-// tile" pile-on. Bug must chase or hover for the rest window before
-// becoming eligible to commit to another tile.
-const POST_KILL_REST_S = 5.0;
+// Re-evaluation cadence + commit windows + softmax τ + anti-pile-on +
+// post-kill rest are shared C2 tuning constants — see
+// `packages/shared/src/constants.ts` for the rationale comments. They were
+// promoted out of this file in Task 4 of the C2 priority-AI plan.
 
 // Passive player-proximity aggro. Any non-chase task is interrupted (no
 // matter the commit state) the moment a player crosses this radius.

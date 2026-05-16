@@ -231,3 +231,45 @@ export const MINIMAP_DANGER_WEIGHT_THRESHOLD = 3;
 
 // Panel-jump targeting.
 export const PANEL_JUMP_TARGET_RANGE = 2; // per-axis tile cap
+
+// --- C2 priority-AI tuning ---
+//
+// These apply uniformly across enemy types — per-enemy values (windUpDurS,
+// detectionRadiusPx, taskWeights, etc.) live on EnemyProfile. C1.9 carryovers
+// (TASK_REEVAL_INTERVAL_S, CHASE_COMMIT_S, SCORE_SOFTMAX_TEMPERATURE,
+// ACTIVE_ATTACKER_PENALTY, POST_KILL_REST_S, ATTENTION_PER_SCAN) were promoted
+// here from private module constants in `CrawlerAi.ts`. New in C2:
+// ATTACK_COMMITMENT_DECAY_S + ATTACK_COMMITMENT_FLOOR.
+
+// How often (seconds) a bug re-evaluates its task. Higher = stickier
+// decisions; lower = floppier. C1.9 was 4 s; same default in C2.
+export const TASK_REEVAL_INTERVAL_S = 4.0;
+
+// Commit lock applied after switching INTO a chase task. Carryover from
+// C1.9; ATTACK_PLAYER uses the wind-up/recovery timers, ATTACK_TILE
+// commits until tile-destroyed.
+export const CHASE_COMMIT_S = 4.0;
+
+// Softmax temperature for task scoring. Lower = closer to argmax; higher
+// = closer to uniform. τ=30 keeps a 95-point gap at ~3% probability for
+// the lower-scoring task.
+export const SCORE_SOFTMAX_TEMPERATURE = 30;
+
+// Anti-pile-on penalty subtracted from ATTACK_TILE score per currently-
+// attacking bug across the level. Carryover from C1.9.
+export const ACTIVE_ATTACKER_PENALTY = 3;
+
+// Post-kill rest window after an ATTACK_TILE completes — bug cannot pick
+// another ATTACK_TILE for this many seconds. Carryover from C1.9.
+export const POST_KILL_REST_S = 5.0;
+
+// Commitment-weighted soft aggro for ATTACK_TILE. The longer a bug has
+// been chewing, the smaller its effective detectionRadius for the
+// purposes of being peeled to chase a passing pilot. Decays linearly
+// from 1.0 (fresh) toward FLOOR (fully committed) over DECAY_S seconds.
+export const ATTACK_COMMITMENT_DECAY_S = 6.0;
+export const ATTACK_COMMITMENT_FLOOR = 0.25;
+
+// Mite/per-task baseline attention penalty per re-roll the bug stays on
+// the same task. C1.9 carryover.
+export const ATTENTION_PER_SCAN = 5;
