@@ -17,3 +17,4 @@ export * from './panelJump.js';
 export * from './shockBeam.js';
 export * from './enemies/crawler.js';
 export * from './enemies/taskTypes.js';
+export * from './enemies/profiles.js';
