@@ -1,5 +1,6 @@
 import {
   AddBotMsg,
+  CAMERA_EDGE_PAN_DEFAULT,
   CLIENT_MAX_FRAME_DT_S,
   MessageType,
   NETSIM_PROFILES,
@@ -363,6 +364,18 @@ async function bootstrap(): Promise<void> {
 
       // Camera follows the local player.
       renderer.tick(dt * 1000, me.x, me.y);
+
+      // Edge-pan (Task 21): hardcoded off via CAMERA_EDGE_PAN_DEFAULT. A
+      // future settings spec will let the user toggle this. Setting every
+      // frame is wasteful but harmless; we'd rather have a single source of
+      // truth than risk a stale value after a hypothetical hot-reload.
+      if (renderer.camera) {
+        renderer.camera.setEdgePanEnabled(CAMERA_EDGE_PAN_DEFAULT);
+        renderer.camera.updateEdgePan(
+          { x: inputs.getMouseScreenX(), y: inputs.getMouseScreenY() },
+          dt,
+        );
+      }
 
       // Resync banner. Show whenever rtt is unpopulated, hide the moment
       // a valid pong repopulates it — instant on/off, no fade, no hold.

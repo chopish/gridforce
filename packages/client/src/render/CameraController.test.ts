@@ -82,3 +82,23 @@ test('setCenter teleports camera and disables follow', () => {
   cam.update(10.0);
   assert.equal(cam.center.x, 500); // follow disabled — no pull
 });
+
+test('edge-pan moves camera when enabled and cursor is at edge', () => {
+  const cam = new CameraController({ viewportW: 800, viewportH: 600 });
+  cam.setTarget({ x: 500, y: 300 });
+  cam.update(10.0);
+  const startX = cam.center.x;
+  cam.setEdgePanEnabled(true);
+  cam.updateEdgePan({ x: 5, y: 300 }, 0.1); // cursor far left
+  assert.ok(cam.center.x < startX);
+});
+
+test('edge-pan is a no-op when disabled', () => {
+  const cam = new CameraController({ viewportW: 800, viewportH: 600 });
+  cam.setTarget({ x: 500, y: 300 });
+  cam.update(10.0);
+  const startX = cam.center.x;
+  // edgePanEnabled defaults to false.
+  cam.updateEdgePan({ x: 5, y: 300 }, 0.1);
+  assert.equal(cam.center.x, startX);
+});

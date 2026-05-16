@@ -16,6 +16,8 @@
 // CAMERA_ZOOM_MAX].
 
 import {
+  CAMERA_EDGE_PAN_BAND_PX,
+  CAMERA_EDGE_PAN_SPEED_PX_S,
   CAMERA_FOLLOW_SMOOTH_S,
   CAMERA_ZOOM_MAX,
   CAMERA_ZOOM_MIN,
@@ -34,6 +36,7 @@ export class CameraController {
   private viewportW: number;
   private viewportH: number;
   private followEnabled = true;
+  private edgePanEnabled = false;
 
   constructor(opts: CameraOpts) {
     this.viewportW = opts.viewportW;
@@ -81,6 +84,39 @@ export class CameraController {
     this.followEnabled = false;
     this.center.x = pos.x;
     this.center.y = pos.y;
+  }
+
+  /**
+   * Toggle edge-pan behaviour. Hardcoded off in C1; a future settings spec
+   * will let the user enable it. When disabled, `updateEdgePan` is a no-op.
+   */
+  setEdgePanEnabled(b: boolean): void {
+    this.edgePanEnabled = b;
+  }
+
+  /**
+   * Edge-pan: if the cursor is within `CAMERA_EDGE_PAN_BAND_PX` of a viewport
+   * edge, slide the camera at `CAMERA_EDGE_PAN_SPEED_PX_S` (screen px/s,
+   * scaled to world by `zoomLevel`). Disables follow when actually panning so
+   * the player's smoothed-follow target doesn't fight the edge-drift.
+   *
+   * Pass `cursorScreen` as `null` when the cursor has left the canvas to
+   * stop edge-panning even if `edgePanEnabled` is true.
+   */
+  updateEdgePan(cursorScreen: { x: number; y: number } | null, dt: number): void {
+    if (!this.edgePanEnabled || !cursorScreen) return;
+    const band = CAMERA_EDGE_PAN_BAND_PX;
+    let panX = 0;
+    let panY = 0;
+    if (cursorScreen.x < band) panX = -1;
+    else if (cursorScreen.x > this.viewportW - band) panX = 1;
+    if (cursorScreen.y < band) panY = -1;
+    else if (cursorScreen.y > this.viewportH - band) panY = 1;
+    if (panX === 0 && panY === 0) return;
+    this.followEnabled = false;
+    const speed = CAMERA_EDGE_PAN_SPEED_PX_S * dt;
+    this.center.x += (panX * speed) / this.zoomLevel;
+    this.center.y += (panY * speed) / this.zoomLevel;
   }
 
   update(dt: number): void {
