@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 
 import { SCHEMA_VERSION } from '../../constants.js';
 import { PanelState, allLive } from '../../panels.js';
-import type { PlayerState } from '../../types.js';
+import { allocateTiles, type TileBuffers } from '../../tiles.js';
+import type { PlayerState, SnapshotPayload } from '../../types.js';
 import {
   AddBotMsg,
   ErrorMsg,
@@ -41,6 +42,19 @@ function newPlayerState(id: number, x: number, y: number, name = ''): PlayerStat
     shockCooldownS: 0,
     repairProgressS: 0,
     shockHeldS: 0,
+  };
+}
+
+function makeBaselineSnapshot(overrides: Partial<SnapshotPayload> = {}): SnapshotPayload {
+  const cols = 18, rows = 12;
+  const tiles: TileBuffers = allocateTiles(cols, rows);
+  return {
+    tick: 1, serverTimeMs: 0, ackInputTick: -1, inputAckBitmask: 0,
+    phase: 'playing', hostId: 0, difficulty: 0,
+    runId: 'test-run', currentStageIndex: 0, currentPhaseIndex: 0, phaseElapsedS: 0,
+    tiles,
+    players: [], npcs: [], crawlers: [], carbons: [],
+    ...overrides,
   };
 }
 
@@ -257,12 +271,12 @@ test('Snapshot round-trip with cooldown timer', () => {
     { ...newPlayerState(1, 70, 80), facing: Math.PI, stateSeq: 2, panelJumpCooldownS: 0.4 },
     { ...newPlayerState(2, 90, 100), facing: -Math.PI / 2, stateSeq: 3, panelJumpCooldownS: 0.65 },
   ];
-  const payload = {
+  const payload = makeBaselineSnapshot({
     tick: 9999,
     serverTimeMs: 1700000000500,
     ackInputTick: 9990,
     inputAckBitmask: 0b1010_1100,
-    phase: 'playing' as const,
+    phase: 'playing',
     hostId: 0,
     difficulty: 2,
     runId: 'test-run',
@@ -270,13 +284,7 @@ test('Snapshot round-trip with cooldown timer', () => {
     currentPhaseIndex: 0,
     phaseElapsedS: 1.25,
     players,
-    npcs: [],
-    crawlers: [],
-    carbons: [],
-    panelStates: allLive(18, 12),
-    panelCols: 18,
-    panelRows: 12,
-  };
+  });
   const dec = decodeMessage(SnapshotMsg.encode(payload));
   assert.equal(dec.type, MessageType.Snapshot);
   const s = dec.payload;
@@ -303,26 +311,12 @@ test('Snapshot round-trip with cooldown timer', () => {
 
 test('Snapshot handles zero players', () => {
   const dec = decodeMessage(
-    SnapshotMsg.encode({
+    SnapshotMsg.encode(makeBaselineSnapshot({
       tick: 0,
-      serverTimeMs: 0,
-      ackInputTick: -1,
-      inputAckBitmask: 0,
       phase: 'lobby',
       hostId: 0xff,
       difficulty: 1,
-      runId: 'test-run',
-      currentStageIndex: 0,
-      currentPhaseIndex: 0,
-      phaseElapsedS: 0,
-      players: [],
-      npcs: [],
-      crawlers: [],
-      carbons: [],
-      panelStates: allLive(18, 12),
-      panelCols: 18,
-      panelRows: 12,
-    }),
+    })),
   );
   assert.equal(dec.type, MessageType.Snapshot);
   const s = dec.payload;
@@ -340,26 +334,10 @@ test('Snapshot encodes NPC group when npcs are present', () => {
     { id: 65535, x: -10, y: -10, facing: -Math.PI / 2, flags: 0 },
   ];
   const dec = decodeMessage(
-    SnapshotMsg.encode({
-      tick: 1,
-      serverTimeMs: 0,
-      ackInputTick: -1,
-      inputAckBitmask: 0,
-      phase: 'playing',
-      hostId: 0,
+    SnapshotMsg.encode(makeBaselineSnapshot({
       difficulty: 1,
-      runId: 'test-run',
-      currentStageIndex: 0,
-      currentPhaseIndex: 0,
-      phaseElapsedS: 0,
-      players: [],
       npcs,
-      crawlers: [],
-      carbons: [],
-      panelStates: allLive(18, 12),
-      panelCols: 18,
-      panelRows: 12,
-    }),
+    })),
   );
   assert.equal(dec.type, MessageType.Snapshot);
   const s = dec.payload;
@@ -445,13 +423,10 @@ test('PlayerEncoder preserves repairProgressS up to REPAIR_DURATION_S without cl
       repairProgressS: 1.5,
     },
   ];
-  const dec = decodeMessage(SnapshotMsg.encode({
-    tick: 1, serverTimeMs: 0, ackInputTick: -1, inputAckBitmask: 0,
-    phase: 'playing', hostId: 0, difficulty: 1,
-    runId: 'test-run', currentStageIndex: 0, currentPhaseIndex: 0, phaseElapsedS: 0,
-    players, npcs: [], crawlers: [], carbons: [],
-    panelStates: allLive(18, 12), panelCols: 18, panelRows: 12,
-  }));
+  const dec = decodeMessage(SnapshotMsg.encode(makeBaselineSnapshot({
+    difficulty: 1,
+    players,
+  })));
   assert.equal(dec.type, MessageType.Snapshot);
   const got = dec.payload.players[0]!.repairProgressS;
   assert.ok(Math.abs(got - 1.5) < 0.03, `expected ~1.5s, got ${got}`);
@@ -476,26 +451,10 @@ test('PlayerEncoder round-trips carbon + shockCooldownS + repairProgressS', () =
       repairProgressS: 0,
     },
   ];
-  const dec = decodeMessage(SnapshotMsg.encode({
-    tick: 1,
-    serverTimeMs: 0,
-    ackInputTick: -1,
-    inputAckBitmask: 0,
-    phase: 'playing',
-    hostId: 0,
+  const dec = decodeMessage(SnapshotMsg.encode(makeBaselineSnapshot({
     difficulty: 1,
-    runId: 'test-run',
-    currentStageIndex: 0,
-    currentPhaseIndex: 0,
-    phaseElapsedS: 0,
     players,
-    npcs: [],
-    crawlers: [],
-    carbons: [],
-    panelStates: allLive(18, 12),
-    panelCols: 18,
-    panelRows: 12,
-  }));
+  })));
   assert.equal(dec.type, MessageType.Snapshot);
   const s = dec.payload;
   assert.equal(s.players[0]!.carbon, 5);
@@ -504,36 +463,26 @@ test('PlayerEncoder round-trips carbon + shockCooldownS + repairProgressS', () =
   assert.equal(s.players[1]!.carbon, 99);
 });
 
-test('Snapshot carries panel-state RLE block', () => {
-  const panelBuf = allLive(18, 12);
-  panelBuf[0] = PanelState.DAMAGED;
-  panelBuf[5] = PanelState.BROKEN;
-  const dec = decodeMessage(SnapshotMsg.encode({
-    tick: 1,
-    serverTimeMs: 0,
-    ackInputTick: -1,
-    inputAckBitmask: 0,
-    phase: 'playing',
-    hostId: 0,
-    difficulty: 1,
-    runId: 'test-run',
-    currentStageIndex: 0,
-    currentPhaseIndex: 0,
-    phaseElapsedS: 0,
-    players: [],
-    npcs: [],
-    crawlers: [],
-    carbons: [],
-    panelStates: panelBuf,
-    panelCols: 18,
-    panelRows: 12,
-  }));
+test('Snapshot v13 round-trips multi-layer tile state', () => {
+  // Build a 4×3 grid where row 1 col 1-3 has varied state.
+  const cols = 4, rows = 3;
+  const n = cols * rows;
+  const l0Hp = new Uint8Array(n).fill(200);
+  l0Hp[5] = 150; l0Hp[6] = 150;
+  const l1Hp = new Uint8Array(n).fill(100);
+  l1Hp[5] = 50; l1Hp[6] = 0;
+  const l2Kind = new Uint8Array(n);
+  const l2Hp = new Uint8Array(n);
+  const tiles = { l0Hp, l1Hp, l2Kind, l2Hp };
+  const payload = makeBaselineSnapshot({ tiles });
+  const enc = SnapshotMsg.encode(payload);
+  const dec = decodeMessage(enc);
   assert.equal(dec.type, MessageType.Snapshot);
-  const s = dec.payload;
-  assert.equal(s.panelStates.length, 18 * 12);
-  assert.equal(s.panelStates[0], PanelState.DAMAGED);
-  assert.equal(s.panelStates[5], PanelState.BROKEN);
-  assert.equal(s.panelStates[1], PanelState.LIVE);
+  const got = dec.payload as SnapshotPayload;
+  assert.deepEqual(Array.from(got.tiles.l0Hp), Array.from(l0Hp));
+  assert.deepEqual(Array.from(got.tiles.l1Hp), Array.from(l1Hp));
+  assert.deepEqual(Array.from(got.tiles.l2Kind), Array.from(l2Kind));
+  assert.deepEqual(Array.from(got.tiles.l2Hp), Array.from(l2Hp));
 });
 
 test('CarbonEncoder round-trips Carbon state', async () => {

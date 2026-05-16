@@ -1,3 +1,5 @@
+import type { TileBuffers } from './tiles.js';
+
 export type PlayerId = number;
 
 export interface PlayerInput {
@@ -130,11 +132,10 @@ export interface SnapshotPayload {
   // entry. Combined with PhaseDef.durationS this drives the StageHud
   // countdown without any extra messages.
   phaseElapsedS: number;
-  // B1: full panel-state buffer, RLE-encoded on the wire. Snapshot
-  // sends every tick; deltas are a future optimization.
-  panelStates: Uint8Array;
-  panelCols: number;
-  panelRows: number;
+  // C1 v13: full multi-layer tile state, RLE-encoded per layer on the wire.
+  // Replaces the v12 single-byte panelStates buffer. Snapshot sends every
+  // tick; deltas are a future optimization.
+  tiles: TileBuffers;
   players: PlayerState[];
   // Wandering NPCs (entity stress / forward-design slot for game NPCs).
   // Empty when none are spawned. Per-NPC cost on the wire is ~8 bytes,

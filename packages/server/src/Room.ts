@@ -20,6 +20,8 @@ import {
   MAX_PLAYERS_PER_ROOM,
   PanelState,
   PlayerJoinedMsg,
+  allocateTiles,
+  type TileBuffers,
   PlayerLeftMsg,
   SERVER_SNAPSHOT_INTERVAL_MS,
   SERVER_TICK_DT_MS,
@@ -689,6 +691,22 @@ export class Room {
       for (const npc of this.npcs.values()) npcStates.push(npc.state);
     }
     const serverTimeMs = Date.now();
+    // Task 6 shim: convert the legacy panelStates byte buffer into the new
+    // TileBuffers shape that the v13 Snapshot wire format expects. Task 9
+    // will replace this.panelStates with native TileBuffers storage; until
+    // then we rebuild a TileBuffers per snapshot tick.
+    const tiles: TileBuffers = allocateTiles(this.grid.cols, this.grid.rows);
+    for (let i = 0; i < this.panelStates.length; i++) {
+      const s = this.panelStates[i];
+      if (s === PanelState.DAMAGED) {
+        // Anything below the conduction threshold; we shim it to a
+        // low-but-nonzero value so the panel still exists.
+        tiles.l1Hp[i] = 40;
+      } else if (s === PanelState.BROKEN) {
+        tiles.l1Hp[i] = 0;
+      }
+      // PanelState.LIVE leaves the default L1_PANEL_MAX_HP (100).
+    }
     for (const pilot of this.pilots.values()) {
       // AOI hook (Phase 0: identity). When per-client culling ships, this
       // returns a per-pilot subset and we move encoding here-per-pilot.
@@ -705,9 +723,7 @@ export class Room {
         currentStageIndex: this.currentStageIndex,
         currentPhaseIndex: this.currentPhaseIndex,
         phaseElapsedS: this.phaseElapsedS,
-        panelStates: this.panelStates,
-        panelCols: this.grid.cols,
-        panelRows: this.grid.rows,
+        tiles,
         players: visible,
         npcs: npcStates,
         crawlers: Array.from(this.crawlers.values()),

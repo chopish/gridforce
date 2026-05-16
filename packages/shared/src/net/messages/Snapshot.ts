@@ -1,5 +1,6 @@
 import { SCHEMA_VERSION } from '../../constants.js';
 import { encodeRle, decodeRle } from '../../panels.js';
+import type { TileBuffers } from '../../tiles.js';
 import { RoomPhaseValue, type CarbonState, type CrawlerState, type NpcState, type PlayerState, type RoomPhase, type SnapshotPayload } from '../../types.js';
 import { getEntityEncoder, registerEntityEncoder } from '../entities/registry.js';
 import type { BinaryReader } from '../wire.js';
@@ -21,6 +22,11 @@ void registerEntityEncoder;
 //   u8  currentStageIndex
 //   u8  currentPhaseIndex
 //   f32 phaseElapsedS
+//   u16 tileCount            (cols*rows; client knows grid dims from Welcome)
+//   RLE l0Hp                 (length = tileCount)
+//   RLE l1Hp                 (length = tileCount)
+//   RLE l2Kind               (length = tileCount)
+//   RLE l2Hp                 (length = tileCount)
 //   u8  groupCount
 //   for each group:
 //     u8 entityType
@@ -52,9 +58,11 @@ export function encode(p: SnapshotPayload): Uint8Array {
   w.u8(p.currentStageIndex & 0xff);
   w.u8(p.currentPhaseIndex & 0xff);
   w.f32(p.phaseElapsedS);
-  w.u16(p.panelCols);
-  w.u16(p.panelRows);
-  encodeRle(w, p.panelStates);
+  w.u16(p.tiles.l0Hp.length); // cols*rows, used by decoder
+  encodeRle(w, p.tiles.l0Hp);
+  encodeRle(w, p.tiles.l1Hp);
+  encodeRle(w, p.tiles.l2Kind);
+  encodeRle(w, p.tiles.l2Hp);
 
   // Group count is dynamic — Player is always present; NPC, Crawler, and
   // Carbon groups are omitted when empty (saves the 2-byte group header each).
@@ -108,9 +116,13 @@ export function decode(r: BinaryReader): SnapshotPayload {
   const currentStageIndex = r.u8();
   const currentPhaseIndex = r.u8();
   const phaseElapsedS = r.f32();
-  const panelCols = r.u16();
-  const panelRows = r.u16();
-  const panelStates = decodeRle(r, panelCols * panelRows);
+  const tilesLen = r.u16();
+  const tiles: TileBuffers = {
+    l0Hp: decodeRle(r, tilesLen),
+    l1Hp: decodeRle(r, tilesLen),
+    l2Kind: decodeRle(r, tilesLen),
+    l2Hp: decodeRle(r, tilesLen),
+  };
 
   const groupCount = r.u8();
   const players: PlayerState[] = [];
@@ -157,9 +169,7 @@ export function decode(r: BinaryReader): SnapshotPayload {
     currentStageIndex,
     currentPhaseIndex,
     phaseElapsedS,
-    panelStates,
-    panelCols,
-    panelRows,
+    tiles,
     players,
     npcs,
     crawlers,
