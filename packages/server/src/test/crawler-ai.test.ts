@@ -208,3 +208,24 @@ test('wind-up: timer expiring fires SWING and transitions to RECOVERY', () => {
   assert.ok(ai.recoveryInS > 0,
     `bug should be in RECOVERY; recoveryInS=${ai.recoveryInS}, windUpInS=${ai.windUpInS}`);
 });
+
+test('stagger: damage during wind-up accumulates; threshold cancels swing', () => {
+  const mgr = new CrawlerAiManager();
+  mgr.registerCrawler(1, MITE_PROFILE);
+  const tiles = allocateTiles(GRID.cols, GRID.rows);
+  const bug = newBug(1, 332, 320);
+  const player = newPlayer(0, 320, 320);
+  // Enter WIND_UP.
+  mgr.decide(bug, 0.016, [player], [bug], tiles, GRID);
+  const ai0 = mgr.getInternalAi(1)!;
+  assert.ok(ai0.windUpInS > 0);
+
+  // Hit the bug for 2 hp (= staggerThresholdHp). Wind-up should cancel.
+  mgr.onDamageTaken(1, 2, 0, 0);
+  mgr.decide(bug, 0.016, [player], [bug], tiles, GRID);
+  const ai1 = mgr.getInternalAi(1)!;
+  // No swing should have fired on the cancellation path.
+  assert.equal(ai1.swingFiredThisTick, false);
+  // Bug should be in RECOVERY.
+  assert.ok(ai1.recoveryInS > 0, `bug should be in RECOVERY; recoveryInS=${ai1.recoveryInS}`);
+});

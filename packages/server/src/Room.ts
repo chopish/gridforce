@@ -656,7 +656,18 @@ export class Room {
   // to 0 HP are reaped (spawn carbon + clear AI state). C1.7 generalised
   // the old kill-all-on-tile to a damage value so beam vs. linger can
   // produce different effects for tougher future enemies.
-  private damageCrawlersOnTile(tx: number, ty: number, amount: number): void {
+  //
+  // T12: notify the priority-AI manager so the stagger accumulator fills
+  // and INVESTIGATE targets get seeded for the swarm. Source defaults to
+  // tile centre — fine for shock-linger; shock-beam callers may pass the
+  // firing player's coords for sharper investigate seeding.
+  private damageCrawlersOnTile(
+    tx: number,
+    ty: number,
+    amount: number,
+    sourceX = (tx + 0.5) * this.grid.panelSize,
+    sourceY = (ty + 0.5) * this.grid.panelSize,
+  ): void {
     if (amount <= 0) return;
     const { panelSize } = this.grid;
     const tileMinX = tx * panelSize;
@@ -666,6 +677,11 @@ export class Room {
     for (const [cid, c] of this.crawlers) {
       if (c.x >= tileMinX && c.x < tileMaxX && c.y >= tileMinY && c.y < tileMaxY) {
         const newHp = Math.max(0, c.hp - amount);
+        // Notify manager BEFORE death-check so the stagger accumulator
+        // fills even for bugs that die from this hit (consistent
+        // bookkeeping; future enemies with HP > 1 will get the swing-
+        // interrupt right at the lethal hit).
+        this.crawlerAi.onDamageTaken(cid, amount, sourceX, sourceY);
         if (newHp === 0) {
           this.spawnCarbon(c.x, c.y);
           this.crawlers.delete(cid);
