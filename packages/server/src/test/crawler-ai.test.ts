@@ -328,6 +328,60 @@ test('soft aggro: fresh ATTACK_TILE bug detects player within base detectionRadi
   assert.equal(mgr.getPhase(1), 'ENGAGED');
 });
 
+test('alert: bug entering SEEK_PLAYER broadcasts CALL_ALERT to peers in radius', () => {
+  const mgr = new CrawlerAiManager();
+  mgr.registerCrawler(1, MITE_PROFILE);
+  mgr.registerCrawler(2, MITE_PROFILE);
+  const tiles = allocateTiles(GRID.cols, GRID.rows);
+
+  // Bug A at (320, 320). Bug B at (400, 320) — 80 px away, within the
+  // 128 px alertPropagationRadiusPx. Bug B has no pilot in its own
+  // direct detection range — only the CALL_ALERT should reach it.
+  const bugA = newBug(1, 320, 320);
+  const bugB = newBug(2, 400, 320);
+
+  // Seat lastBugPos on both bugs so the broadcaster knows where peers are.
+  mgr.decide(bugA, 0.016, [], [bugA, bugB], tiles, GRID);
+  mgr.decide(bugB, 0.016, [], [bugA, bugB], tiles, GRID);
+
+  // Force bug A into SEEK_PLAYER. forceTask runs the entry bookkeeping
+  // including the swarm CALL_ALERT broadcast (T17).
+  mgr.forceTask(1, TaskKind.SEEK_PLAYER, tiles, GRID);
+
+  const target = mgr.getInvestigateTarget(2);
+  assert.ok(target, 'bug B should have received an investigate target');
+  assert.ok(Math.abs(target!.x - bugA.x) < 1,
+    `expected target.x ≈ ${bugA.x}; got ${target!.x}`);
+  assert.ok(Math.abs(target!.y - bugA.y) < 1,
+    `expected target.y ≈ ${bugA.y}; got ${target!.y}`);
+  assert.ok(mgr.getInternalAi(2)!.alertBonusInS > 0,
+    'bug B should have alertBonusInS set');
+  assert.equal(mgr.getPhase(2), 'ENGAGED',
+    'bug B should have flipped to ENGAGED');
+});
+
+test('alert: peer outside alertPropagationRadiusPx is NOT alerted', () => {
+  const mgr = new CrawlerAiManager();
+  mgr.registerCrawler(1, MITE_PROFILE);
+  mgr.registerCrawler(2, MITE_PROFILE);
+  const tiles = allocateTiles(GRID.cols, GRID.rows);
+
+  // Bug A at (320, 320). Bug B at (600, 320) — 280 px away, well outside
+  // the 128 px alertPropagationRadiusPx.
+  const bugA = newBug(1, 320, 320);
+  const bugB = newBug(2, 600, 320);
+
+  mgr.decide(bugA, 0.016, [], [bugA, bugB], tiles, GRID);
+  mgr.decide(bugB, 0.016, [], [bugA, bugB], tiles, GRID);
+
+  mgr.forceTask(1, TaskKind.SEEK_PLAYER, tiles, GRID);
+
+  assert.equal(mgr.getInvestigateTarget(2), null,
+    'bug B should NOT have received an investigate target');
+  assert.equal(mgr.getInternalAi(2)!.alertBonusInS, 0,
+    'bug B should NOT have alertBonusInS set');
+});
+
 test('soft aggro: 6s-committed ATTACK_TILE bug does NOT detect player at 100 px', () => {
   const mgr = new CrawlerAiManager();
   mgr.registerCrawler(1, MITE_PROFILE);

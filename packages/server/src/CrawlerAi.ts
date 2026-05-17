@@ -363,9 +363,49 @@ export class CrawlerAiManager {
       ai.taskTargetX = ai.investigateTargetX;
       ai.taskTargetY = ai.investigateTargetY;
     }
+    // For SEEK_PLAYER, broadcast a CALL_ALERT to peers within
+    // alertPropagationRadiusPx so the swarm reacts to the peel-off (T17).
+    // Mirrors the natural-selection broadcast in decide()'s task-switch
+    // block so tests can drive the side-effect via forceTask.
+    if (task === TaskKind.SEEK_PLAYER && ai.lastBugPos) {
+      this.broadcastCallAlert(
+        id,
+        ai.lastBugPos.x,
+        ai.lastBugPos.y,
+        ai.profile.alertPropagationRadiusPx,
+      );
+    }
     // Park reeval far in the future so decide()'s re-pick doesn't immediately
     // swap us back. Matches the "committed to a task" intent.
     ai.reevalInS = 1e9;
+  }
+
+  // T17: Swarm-AI CALL_ALERT broadcast. When a bug enters SEEK_PLAYER as a
+  // new task (the peel-off moment), peers within alertPropagationRadiusPx
+  // receive a phase flip CALM→ENGAGED, alertBonusInS set, and an
+  // INVESTIGATE target seeded at the alerter's position. Future enemy
+  // types can widen/shrink the radius or boost duration via their profile.
+  private broadcastCallAlert(
+    alerterId: number,
+    x: number,
+    y: number,
+    radiusPx: number,
+  ): void {
+    const r2 = radiusPx * radiusPx;
+    for (const [peerId, peerAi] of this.states) {
+      if (peerId === alerterId) continue;
+      if (!peerAi.lastBugPos) continue;
+      const dx = peerAi.lastBugPos.x - x;
+      const dy = peerAi.lastBugPos.y - y;
+      if (dx * dx + dy * dy > r2) continue;
+      // Receiver: phase flip + alert bonus + investigate seed.
+      peerAi.hasInvestigateTarget = true;
+      peerAi.investigateTargetX = x;
+      peerAi.investigateTargetY = y;
+      peerAi.investigateUntilS = peerAi.profile.investigateStaleS;
+      peerAi.alertBonusInS = peerAi.profile.alertBonusDurS;
+      if (peerAi.phase === 'CALM') peerAi.phase = 'ENGAGED';
+    }
   }
 
   // O(n) but n ≤ MAX_ALIVE_CRAWLERS ≈ 25; cheap. Called once per decide()
@@ -550,6 +590,15 @@ export class CrawlerAiManager {
       ai.taskCommitmentS = 0;
       if (newTask === TaskKind.SEEK_PLAYER) {
         ai.chaseCommitInS = CHASE_COMMIT_S;
+        // T17: Swarm CALL_ALERT broadcast on the peel-off moment.
+        // Peers within alertPropagationRadiusPx flip to ENGAGED + get an
+        // INVESTIGATE seed + temporary detection bonus.
+        this.broadcastCallAlert(
+          c.id,
+          c.x,
+          c.y,
+          ai.profile.alertPropagationRadiusPx,
+        );
       } else {
         ai.chaseCommitInS = 0;
       }
