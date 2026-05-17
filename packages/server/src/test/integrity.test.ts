@@ -35,6 +35,10 @@ interface RoomInternals {
   crawlers: Map<number, CrawlerState>;
   crawlerAi: CrawlerAiManagerForTest;
   physicsStep(): void;
+  // T11: exposed so we can drive just the weight aggregator without
+  // physicsStep running the AI, which would otherwise re-task the
+  // planted WIND_UP bug on the first tick.
+  applyWeightIntegrity(dt: number): void;
 }
 
 // Drop the Room into 'playing' so physicsStep runs the integrity loop.
@@ -180,6 +184,42 @@ test('integrity: diagonal neighbour is untouched', () => {
   tickFor(r, 1.0);
   const after = r.tiles.l1Hp[diagIdx]!;
   assert.equal(after, before, 'diagonal tile should be untouched');
+});
+
+// T11: WIND_UP is the bug's "no floor damage" pose. The state machine wires
+// this up (stepCrawler only emits ATTACKING for ATTACK_TILE-tasked bugs), but
+// the integrity loop itself also strictly gates on ai === ATTACKING. This
+// test plants a WIND_UP bug directly and drives only applyWeightIntegrity to
+// prove the loop's predicate — physicsStep would re-task and clobber the
+// planted state on tick 1, defeating the point.
+test('integrity: WIND_UP bug contributes zero weight to its tile across many ticks', () => {
+  const cx = 5;
+  const cy = 5;
+  const r = makeRoomForIntegrity();
+  r.crawlers.set(TEST_ID_BASE, {
+    id: TEST_ID_BASE,
+    x: cx * r.grid.panelSize + r.grid.panelSize / 2,
+    y: cy * r.grid.panelSize + r.grid.panelSize / 2,
+    facing: 0,
+    hp: 1,
+    targetCx: cx,
+    targetCy: cy,
+    ai: CrawlerAIState.WIND_UP,
+    windUpInS: 5.0,
+  });
+
+  const idx = indexOf(r.grid.cols, cx, cy);
+  const initialL1 = r.tiles.l1Hp[idx]!;
+  // Drive 30 integrity ticks worth of damage at the server tick rate. If the
+  // WIND_UP bug contributed weight like ATTACKING, this would chew 2 hp off
+  // the tile (BASE_DOT_RATE × CRAWLER_WEIGHT × 1s).
+  for (let i = 0; i < 30; i++) r.applyWeightIntegrity(1 / 30);
+  const finalL1 = r.tiles.l1Hp[idx]!;
+  assert.equal(
+    finalL1,
+    initialL1,
+    `WIND_UP bug should not damage its tile (initial=${initialL1}, final=${finalL1})`,
+  );
 });
 
 test('integrity: damage is capped at 0 (no underflow) and stops at L1 destruction', () => {

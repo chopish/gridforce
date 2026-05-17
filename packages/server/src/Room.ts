@@ -879,7 +879,11 @@ export class Room {
   // so swarms collapse a tile much faster than singletons.
   // Damage = damagePerSecond(load, armor) × dt → topmost layer. Armor is 0
   // for L0/L1 in C1; the L2 add-on armor table arrives in a later task.
-  private applyWeightIntegrity(dt: number): void {
+  // Exposed (not strictly private) so integrity tests can drive just the
+  // weight-aggregation loop without running the full physicsStep — useful
+  // when the planted bug is in a non-ATTACKING state we want to PIN (the AI
+  // would normally retarget on the first stepCrawler call).
+  applyWeightIntegrity(dt: number): void {
     const cols = this.grid.cols;
     const rows = this.grid.rows;
     const n = cols * rows;
