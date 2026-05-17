@@ -126,7 +126,14 @@ export const ROOM_CODE_LENGTH = 4;
 // Client predicts this many ticks ahead of the server's most recent reported
 // tick so that inputs arrive at the server before their target tick is
 // processed. Sized for up to ~150 ms RTT (5 ticks × 33 ms = 165 ms).
-export const INPUT_LEAD_TICKS = 5;
+// Floor for client-side input lead. With a 30 Hz tick rate, 2 ticks = 66 ms
+// is the smallest lead that gives the input one full tick of "in-flight"
+// budget after arrival jitter. The previous 5-tick floor (165 ms) was
+// sized for high-latency netsim profiles; for a typical sub-100ms RTT
+// player it baked an unnecessary ~150 ms of perceived input delay into
+// every shock / jump / repair. Adaptive lead (see main.ts) still scales
+// higher when measured RTT demands it.
+export const INPUT_LEAD_TICKS = 2;
 // How many recent inputs to pack into each Input message. 3 means each
 // frame carries the latest input plus the previous two; under 10% loss
 // the effective input miss-rate drops from 10% to ~0.1%. Bandwidth cost

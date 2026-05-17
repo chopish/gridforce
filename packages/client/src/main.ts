@@ -6,7 +6,6 @@ import {
   NETSIM_PROFILES,
   PANEL_SIZE,
   SERVER_TICK_DT_MS,
-  SHOCK_BEAM_MAX_TILES,
   SHOCK_CHARGE_COOLDOWN_S,
   SHOCK_CHARGE_FULL_S,
   SHOCK_COOLDOWN_S,
@@ -364,17 +363,7 @@ async function bootstrap(): Promise<void> {
             const heldS = (now - shockDownAtMs) / 1000;
             const ratio = Math.min(1, heldS / SHOCK_CHARGE_FULL_S);
             const isCharged = ratio >= 0.5;
-            const tiles = Math.max(1, Math.ceil(ratio * SHOCK_BEAM_MAX_TILES));
-            // Fire the beam VFX (line flash) from the post-step local position
-            // so it lines up with where the server fires from this same tick.
             const localPost = world.players.get(world.localPlayerId) ?? localForFacing;
-            renderer.shockFx.fire(
-              localPost.x,
-              localPost.y,
-              sample.facingRad,
-              tiles,
-              isCharged,
-            );
             // Predict tile electrification client-side so the panel lights up
             // immediately instead of waiting for the next server snapshot
             // (~50-250ms of snapshot-batch + RTT). traceShockBeam is the same
@@ -390,6 +379,17 @@ async function bootstrap(): Promise<void> {
               { ...inp, facingRad: sample.facingRad },
               world.tiles,
               world.grid,
+            );
+            // Drive the VFX line length from the actual trace so the beam
+            // visually stops where it stops gameplay-wise (at the last hit,
+            // or one tile worth of reach when the trace returned no hits).
+            const rangeTiles = Math.max(1, trace.hits.length);
+            renderer.shockFx.fire(
+              localPost.x,
+              localPost.y,
+              sample.facingRad,
+              rangeTiles,
+              isCharged,
             );
             for (const h of trace.hits) {
               if (h.conductive) {
@@ -424,16 +424,19 @@ async function bootstrap(): Promise<void> {
 
       // Adaptive input lead: scales with measured RTT so high-latency
       // connections don't have their inputs land in the server's past.
-      // The +6 safety margin covers per-direction jitter up to ~200 ms,
-      // enough headroom for the "bad" profile's ±60 ms one-way jitter
-      // even when EWMA lags individual high samples. Without enough
-      // jitter headroom, individual late packets cause the server to
-      // idle for that tick, producing ~7 px/tick divergence that the
-      // smooth-correction system can't fully decay between snapshots.
+      // The +2 jitter margin covers ~one tick (~33 ms) of one-way
+      // variance, which is more than enough for any non-pathological
+      // connection. Previously this was +6 (~200 ms) to absorb the "bad"
+      // netsim profile's ±60 ms jitter — that headroom turned a sub-100ms
+      // RTT player's perceived action latency into ~250 ms because every
+      // shock/jump waited 7 ticks before the server processed it.
+      // High-jitter players are still covered by the redundancy window
+      // (3 packed inputs per message) and the adaptive lead growing
+      // when oneWayTicks itself rises.
       const rtt = socket.status().rttMs;
       if (rtt > 0) {
         const oneWayTicks = Math.ceil(rtt / 2 / SERVER_TICK_DT_MS);
-        world.setTargetLead(oneWayTicks + 6);
+        world.setTargetLead(oneWayTicks + 2);
       }
 
       // Render NPCs first so a dense swarm doesn't cover the player avatars.

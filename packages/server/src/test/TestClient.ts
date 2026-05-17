@@ -4,7 +4,6 @@ import { WebSocket } from 'ws';
 
 import {
   HelloMsg,
-  INPUT_LEAD_TICKS,
   INPUT_REDUNDANCY,
   InputMsg,
   MAX_REPLAY_INPUTS,
@@ -37,6 +36,12 @@ export interface TestClientStats {
   hardSnaps: number;
   finalLocalPosition: { x: number; y: number };
 }
+
+// Test-only input lead. Decoupled from production INPUT_LEAD_TICKS so
+// loosening the production constant for responsiveness doesn't cause the
+// TestClient's setInterval-driven tick loop to race the server's
+// setTimeout-driven loop and drop inputs in CI.
+const TEST_INPUT_LEAD_TICKS = 5;
 
 export interface TestClientOptions {
   url: string;
@@ -183,7 +188,7 @@ export class TestClient {
         this.sessionKey = m.payload.sessionKey;
         // Match the browser client: predict ahead of server so inputs land
         // in the future at the server.
-        this.predictedTick = m.payload.startTick + INPUT_LEAD_TICKS;
+        this.predictedTick = m.payload.startTick + TEST_INPUT_LEAD_TICKS;
         this.serverTick = m.payload.startTick;
         const me = m.payload.players.find((p) => p.id === this.localId);
         this.localState = me ? { ...me } : newPlayerState(this.localId, 100, 100);
@@ -197,7 +202,7 @@ export class TestClient {
         // Catch up if we've fallen below the safe lead (matches PredictedWorld).
         const MIN_SAFE_LEAD = 2;
         if (this.predictedTick < m.payload.tick + MIN_SAFE_LEAD) {
-          this.predictedTick = m.payload.tick + INPUT_LEAD_TICKS;
+          this.predictedTick = m.payload.tick + TEST_INPUT_LEAD_TICKS;
           this.pending = [];
         }
         // Drop acked pending inputs.

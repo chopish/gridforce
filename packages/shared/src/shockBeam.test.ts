@@ -2,7 +2,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   L1_PANEL_MAX_HP,
-  SHOCK_BEAM_MAX_TILES,
   SHOCK_CHARGE_COOLDOWN_S,
   SHOCK_CHARGE_FULL_S,
   SHOCK_COOLDOWN_S,
@@ -51,11 +50,14 @@ test('traceShockBeam: tap (zero-charge) returns exactly one conductive hit east'
   assert.equal(trace.cooldownS, SHOCK_COOLDOWN_S);
 });
 
-test('traceShockBeam: full charge returns SHOCK_BEAM_MAX_TILES conductive hits and charged cooldown', () => {
+test('traceShockBeam: full charge hits every conductive tile to the grid edge and uses charged cooldown', () => {
   const tiles = allocateTiles(COLS, ROWS);
   const state = playerAtTile(2, 2, SHOCK_CHARGE_FULL_S);
   const trace = traceShockBeam(state, fireEast(), tiles, GRID);
-  assert.equal(trace.hits.length, SHOCK_BEAM_MAX_TILES);
+  // No per-shot tile cap on charged shots — every conductive cell from
+  // player.tx+1 through the eastern edge gets electrified.
+  const expectedHits = COLS - 1 - 2;
+  assert.equal(trace.hits.length, expectedHits);
   for (let i = 0; i < trace.hits.length; i++) {
     assert.equal(trace.hits[i]!.tx, 3 + i);
     assert.equal(trace.hits[i]!.conductive, true);
