@@ -341,6 +341,166 @@ export class CrawlerAiManager {
     return { x: ai.investigateTargetX, y: ai.investigateTargetY };
   }
 
+  // ─── T7: per-task eligibility predicates + base scoring ─────────────
+  // Pure read-only accessors. Not yet wired into decide(); T8 will call
+  // them from the new task picker. Tested directly so the next task can
+  // build the softmax sampler against a stable surface.
+  isTaskEligible(
+    crawlerId: number,
+    task: TaskKindValue,
+    players: ReadonlyArray<PlayerState>,
+    tiles: TileBuffers,
+    grid: GridDef,
+  ): boolean {
+    const ai = this.states.get(crawlerId);
+    if (!ai || !ai.lastBugPos) return false;
+    return this.isTaskEligibleFor(ai, ai.lastBugPos, task, players, tiles, grid);
+  }
+
+  scoreTask(
+    crawlerId: number,
+    task: TaskKindValue,
+    players: ReadonlyArray<PlayerState>,
+    bugs: ReadonlyArray<CrawlerState>,
+    tiles: TileBuffers,
+    grid: GridDef,
+  ): number {
+    const ai = this.states.get(crawlerId);
+    if (!ai || !ai.lastBugPos) return -Infinity;
+    return this.scoreTaskFor(ai, ai.lastBugPos, task, players, bugs, tiles, grid);
+  }
+
+  private isTaskEligibleFor(
+    ai: CrawlerAi,
+    bug: { x: number; y: number },
+    task: TaskKindValue,
+    players: ReadonlyArray<PlayerState>,
+    tiles: TileBuffers,
+    grid: GridDef,
+  ): boolean {
+    const fakeBug: CrawlerState = {
+      id: 0, x: bug.x, y: bug.y, facing: 0, hp: 1,
+      targetCx: 0, targetCy: 0, ai: 0, windUpInS: 0,
+    };
+    const near = nearestPlayer(fakeBug, players);
+    switch (task) {
+      case TaskKind.SEEK_PLAYER:
+        return ai.phase === 'ENGAGED' && !!near;
+      case TaskKind.ATTACK_PLAYER:
+        return ai.phase === 'ENGAGED' && !!near && near.dist2 <= ai.profile.meleeGapPx ** 2;
+      case TaskKind.SEEK_TILE:
+        return ai.phase === 'CALM'
+          && this.findBestSeekTile(bug, ai.profile.seekTileRadiusPx, tiles, grid) !== null;
+      case TaskKind.ATTACK_TILE: {
+        const tcx = Math.floor(bug.x / grid.panelSize);
+        const tcy = Math.floor(bug.y / grid.panelSize);
+        if (tcx < 0 || tcx >= grid.cols || tcy < 0 || tcy >= grid.rows) return false;
+        const idx = indexOf(grid.cols, tcx, tcy);
+        const attackable = tiles.l1Hp[idx]! > 0 || tiles.l0Hp[idx]! > 0;
+        return attackable && ai.attackRestInS === 0;
+      }
+      case TaskKind.SEARCH:
+        return ai.phase === 'CALM';
+      case TaskKind.INVESTIGATE:
+        return ai.phase === 'ENGAGED' && ai.hasInvestigateTarget;
+      case TaskKind.IDLE:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  private scoreTaskFor(
+    ai: CrawlerAi,
+    bug: { x: number; y: number },
+    task: TaskKindValue,
+    players: ReadonlyArray<PlayerState>,
+    bugs: ReadonlyArray<CrawlerState>,
+    tiles: TileBuffers,
+    grid: GridDef,
+  ): number {
+    const profile = ai.profile;
+    switch (task) {
+      case TaskKind.SEEK_PLAYER:
+      case TaskKind.ATTACK_PLAYER: {
+        const fakeBug: CrawlerState = {
+          id: 0, x: bug.x, y: bug.y, facing: 0, hp: 1,
+          targetCx: 0, targetCy: 0, ai: 0, windUpInS: 0,
+        };
+        const crowd = countNearbyBugs(fakeBug, bugs, profile.crowdRadiusPx);
+        return 100 - crowdPenalty(crowd);
+      }
+      case TaskKind.SEEK_TILE: {
+        const best = this.findBestSeekTile(bug, profile.seekTileRadiusPx, tiles, grid);
+        return best ? best.score : -Infinity;
+      }
+      case TaskKind.ATTACK_TILE: {
+        const tcx = Math.floor(bug.x / grid.panelSize);
+        const tcy = Math.floor(bug.y / grid.panelSize);
+        if (tcx < 0 || tcx >= grid.cols || tcy < 0 || tcy >= grid.rows) return -Infinity;
+        const idx = indexOf(grid.cols, tcx, tcy);
+        const l1 = tiles.l1Hp[idx]!;
+        const l0 = tiles.l0Hp[idx]!;
+        let score = -Infinity;
+        if (l1 > 0) {
+          score = profile.panelBase + profile.panelDamageScale * (1 - l1 / L1_PANEL_MAX_HP);
+        } else if (l0 > 0) {
+          score = profile.domeBase + profile.domeDamageScale * (1 - l0 / L0_DOME_MAX_HP);
+        }
+        if (Number.isFinite(score)) {
+          // Exclude self from the active-attacker count: scoring my own
+          // continuation of an attack shouldn't penalize me for being the
+          // attacker. Legacy `score()` benefits from the same exclusion
+          // implicitly because it runs before legacyTask is committed.
+          const selfAttacking = ai.legacyTask.kind === CrawlerTaskKind.ATTACK_TILE ? 1 : 0;
+          const others = Math.max(0, this.activeAttackerCount() - selfAttacking);
+          score -= ACTIVE_ATTACKER_PENALTY * others;
+        }
+        return score;
+      }
+      case TaskKind.SEARCH:
+        return 30;
+      case TaskKind.INVESTIGATE:
+        return ai.hasInvestigateTarget ? 60 : -Infinity;
+      case TaskKind.IDLE:
+        return 5;
+      default:
+        return -Infinity;
+    }
+  }
+
+  private findBestSeekTile(
+    bug: { x: number; y: number },
+    radiusPx: number,
+    tiles: TileBuffers,
+    grid: GridDef,
+  ): { tx: number; ty: number; score: number } | null {
+    const tilesAcross = Math.ceil(radiusPx / grid.panelSize);
+    const cx = Math.floor(bug.x / grid.panelSize);
+    const cy = Math.floor(bug.y / grid.panelSize);
+    let best: { tx: number; ty: number; score: number } | null = null;
+    for (let oy = -tilesAcross; oy <= tilesAcross; oy++) {
+      for (let ox = -tilesAcross; ox <= tilesAcross; ox++) {
+        const tx = cx + ox;
+        const ty = cy + oy;
+        if (tx < 0 || tx >= grid.cols || ty < 0 || ty >= grid.rows) continue;
+        const idx = indexOf(grid.cols, tx, ty);
+        const l1 = tiles.l1Hp[idx]!;
+        const l0 = tiles.l0Hp[idx]!;
+        let s = -Infinity;
+        if (l1 > 0 && l1 < L1_PANEL_MAX_HP) {
+          s = 1 + 15 * (1 - l1 / L1_PANEL_MAX_HP);
+        } else if (l0 > 0 && l0 < L0_DOME_MAX_HP) {
+          s = 25 + 35 * (1 - l0 / L0_DOME_MAX_HP);
+        }
+        if (Number.isFinite(s) && (best === null || s > best.score)) {
+          best = { tx, ty, score: s };
+        }
+      }
+    }
+    return best;
+  }
+
   // Preserved C1.9 decide() logic — translates `ai.task` → `ai.legacyTask`
   // and otherwise reads the same fields as before. Will be removed once
   // T7+ wires the new task-selection path. Inlined here so existing tests

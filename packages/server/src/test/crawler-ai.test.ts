@@ -74,6 +74,41 @@ test('phase: damage taken flips CALM → ENGAGED and seeds INVESTIGATE target', 
   assert.equal(target!.y, 320);
 });
 
+test('eligibility: SEEK_PLAYER eligible only in ENGAGED phase with a player', () => {
+  const mgr = new CrawlerAiManager();
+  mgr.registerCrawler(1, MITE_PROFILE);
+  const tiles = allocateTiles(GRID.cols, GRID.rows);
+  const bug = newBug(1, 320, 320);
+  mgr.decide(bug, 0.016, [], [bug], tiles, GRID);
+  assert.ok(!mgr.isTaskEligible(1, 'SEEK_PLAYER', [], tiles, GRID));
+  const player = newPlayer(0, 420, 320);
+  mgr.decide(bug, 0.016, [player], [bug], tiles, GRID);
+  assert.ok(mgr.isTaskEligible(1, 'SEEK_PLAYER', [player], tiles, GRID));
+});
+
+test('eligibility: ATTACK_PLAYER eligible only at meleeGapPx', () => {
+  const mgr = new CrawlerAiManager();
+  mgr.registerCrawler(1, MITE_PROFILE);
+  const tiles = allocateTiles(GRID.cols, GRID.rows);
+  const bug = newBug(1, 320, 320);
+  let player = newPlayer(0, 400, 320);
+  mgr.decide(bug, 0.016, [player], [bug], tiles, GRID);
+  assert.ok(!mgr.isTaskEligible(1, 'ATTACK_PLAYER', [player], tiles, GRID));
+  player = newPlayer(0, 340, 320);
+  mgr.decide(bug, 0.016, [player], [bug], tiles, GRID);
+  assert.ok(mgr.isTaskEligible(1, 'ATTACK_PLAYER', [player], tiles, GRID));
+});
+
+test('score: ATTACK_TILE on a healthy panel returns ~panelBase', () => {
+  const mgr = new CrawlerAiManager();
+  mgr.registerCrawler(1, MITE_PROFILE);
+  const tiles = allocateTiles(GRID.cols, GRID.rows);
+  const bug = newBug(1, 320, 320);
+  mgr.decide(bug, 0.016, [], [bug], tiles, GRID);
+  const score = mgr.scoreTask(1, 'ATTACK_TILE', [], [bug], tiles, GRID);
+  assert.ok(Math.abs(score - 5) < 0.001);
+});
+
 test('phase: re-detection mid-decay resets engagedIdleS', () => {
   const mgr = new CrawlerAiManager();
   mgr.registerCrawler(1, MITE_PROFILE);
