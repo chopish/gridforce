@@ -25,8 +25,10 @@ export class ShockFxRenderer {
   }
 
   // Fire a beam at the true aim angle (no cardinal snap). `rangeTiles` is the
-  // beam length in tiles (1..MAX). `charged` flips the visual weight so a
-  // longer charge reads as a thicker, hotter line.
+  // beam length in tiles (1..MAX). Charged reads as a long, thin precision
+  // sweeper (every tile in its path is electrified); tap reads as a short,
+  // wider zap that lands on a single tile. VFX widths track the hitbox model
+  // in shockBeam.ts — see traceShockBeam.
   fire(x: number, y: number, rad: number, rangeTiles: number, charged: boolean): void {
     this.flashes.push({
       x, y, rad, rangeTiles, charged,
@@ -59,12 +61,13 @@ export class ShockFxRenderer {
       const ex = f.x + Math.cos(f.rad) * reach;
       const ey = f.y + Math.sin(f.rad) * reach;
       const color = f.charged ? 0xffe55a : 0x6cd0ff;
-      const width = f.charged ? 7 : 4;
+      // Charged = thin precision line, tap = thicker zap.
+      const width = f.charged ? 3 : 6;
       g.moveTo(f.x, f.y)
         .lineTo(ex, ey)
         .stroke({ width, color, alpha });
       // Endpoint pop — small circle at the beam tip.
-      const popR = (f.charged ? 16 : 11) * (1 - t * 0.5);
+      const popR = (f.charged ? 10 : 14) * (1 - t * 0.5);
       g.circle(ex, ey, popR).fill({ color, alpha: alpha * 0.45 });
     }
   }

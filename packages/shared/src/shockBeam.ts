@@ -25,10 +25,11 @@ export interface ShockBeamTrace {
 }
 
 // Ray-march the shock beam from the player along input.facingRad, returning
-// every tile the beam crosses (in order). Stops at SHOCK_BEAM_MAX_TILES
-// conductive hits, at the first non-conductive impact tile, or at the grid
-// edge. The first non-conductive tile is INCLUDED in `hits` (the beam still
-// lands on it for damage / VFX), it just doesn't extend the propagation.
+// every tile the beam crosses (in order). A tap (ratio<0.5) electrifies only
+// the FIRST conductive tile in path. A charged beam (ratio>=0.5) electrifies
+// every conductive tile up to its length budget. Either way the beam stops at
+// the first non-conductive impact tile (still INCLUDED in `hits` for
+// damage / VFX) or at the grid edge.
 //
 // Shared by server (Room.applyShockBeam — authoritative tile electrification
 // + damage) and client (predicts tile electrification immediately so the
@@ -41,7 +42,13 @@ export function traceShockBeam(
 ): ShockBeamTrace {
   const { cols, rows, panelSize } = grid;
   const ratio = Math.min(1, state.shockHeldS / SHOCK_CHARGE_FULL_S);
-  const beamTiles = Math.max(1, Math.ceil(ratio * SHOCK_BEAM_MAX_TILES));
+  const isCharged = ratio >= 0.5;
+  // Length budget. Tap = 1 tile cell of reach (just enough to land on the
+  // adjacent tile); charged scales with hold time up to SHOCK_BEAM_MAX_TILES.
+  const beamTiles = isCharged ? Math.max(1, Math.ceil(ratio * SHOCK_BEAM_MAX_TILES)) : 1;
+  // Tap = activate only the first conductive hit. Charged = activate every
+  // conductive tile within its length budget.
+  const conductiveCap = isCharged ? beamTiles : 1;
   const px = state.x;
   const py = state.y;
   const dirX = Math.cos(input.facingRad);
@@ -52,7 +59,7 @@ export function traceShockBeam(
   let conductiveHits = 0;
   const step = panelSize / 8;
   const maxDist = beamTiles * panelSize + panelSize;
-  for (let t = step; t <= maxDist && conductiveHits < beamTiles; t += step) {
+  for (let t = step; t <= maxDist && conductiveHits < conductiveCap; t += step) {
     const sx = px + dirX * t;
     const sy = py + dirY * t;
     const tx = Math.floor(sx / panelSize);
@@ -67,6 +74,6 @@ export function traceShockBeam(
     if (!isLive) break;
     conductiveHits++;
   }
-  const cooldownS = ratio >= 0.5 ? SHOCK_CHARGE_COOLDOWN_S : SHOCK_COOLDOWN_S;
+  const cooldownS = isCharged ? SHOCK_CHARGE_COOLDOWN_S : SHOCK_COOLDOWN_S;
   return { hits, cooldownS };
 }

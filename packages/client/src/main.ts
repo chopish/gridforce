@@ -7,7 +7,9 @@ import {
   PANEL_SIZE,
   SERVER_TICK_DT_MS,
   SHOCK_BEAM_MAX_TILES,
+  SHOCK_CHARGE_COOLDOWN_S,
   SHOCK_CHARGE_FULL_S,
+  SHOCK_COOLDOWN_S,
   SHOCK_LINGER_TICKS,
   traceShockBeam,
   type PlayerId,
@@ -247,6 +249,12 @@ async function bootstrap(): Promise<void> {
     // beam still flashes briefly.
     let prevLocalShock = false;
     let shockDownAtMs = 0;
+    // Tracks the earliest moment the next predicted shot may fire. The server
+    // rejects shots while shockCooldownS > 0; without this gate, spam-clicks
+    // would predict tiles that the server doesn't electrify — the tile would
+    // briefly light client-side and then vanish on the next snapshot, which
+    // reads as a glitchy "missing tile" instead of a clean rate-limit.
+    let nextShockReadyAtMs = 0;
     // "resyncing…" banner is shown while rtt EWMA is unpopulated (=0). This
     // happens at startup before the first pong and again after visibility
     // restore (resetRttForVisibilityRestore zeros it). On bad-profile
@@ -311,9 +319,10 @@ async function bootstrap(): Promise<void> {
         if (world.phase !== 'lobby' && localForFacing) {
           if (sample.shock && !prevLocalShock) {
             shockDownAtMs = now;
-          } else if (!sample.shock && prevLocalShock) {
+          } else if (!sample.shock && prevLocalShock && now >= nextShockReadyAtMs) {
             const heldS = (now - shockDownAtMs) / 1000;
             const ratio = Math.min(1, heldS / SHOCK_CHARGE_FULL_S);
+            const isCharged = ratio >= 0.5;
             const tiles = Math.max(1, Math.ceil(ratio * SHOCK_BEAM_MAX_TILES));
             // Fire the beam VFX (line flash) from the post-step local position
             // so it lines up with where the server fires from this same tick.
@@ -323,7 +332,7 @@ async function bootstrap(): Promise<void> {
               localPost.y,
               sample.facingRad,
               tiles,
-              ratio >= 0.5,
+              isCharged,
             );
             // Predict tile electrification client-side so the panel lights up
             // immediately instead of waiting for the next server snapshot
@@ -344,6 +353,11 @@ async function bootstrap(): Promise<void> {
             for (const h of trace.hits) {
               if (h.conductive) world.tiles.l1Charge[h.idx] = SHOCK_LINGER_TICKS;
             }
+            // Mirror the server's cooldown so the next prediction can't fire
+            // until the server would have accepted it. Without this we'd
+            // predict ghost tiles that vanish on the next snapshot.
+            const cooldownS = isCharged ? SHOCK_CHARGE_COOLDOWN_S : SHOCK_COOLDOWN_S;
+            nextShockReadyAtMs = now + cooldownS * 1000;
           }
           prevLocalShock = sample.shock;
         } else {

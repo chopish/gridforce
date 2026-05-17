@@ -52,6 +52,20 @@ function noise(): number {
   return 0.85 + Math.random() * 0.3; // ±15%
 }
 
+// Keep wander / investigate targets inside the playable area. Without this the
+// SEARCH seed (origin + cos(angle)*dist) routinely lands well outside the grid
+// — a bug that picks an off-grid target walks toward it forever, since
+// stepCrawler only clamps the tile-index field (targetCx/Cy) and not the
+// actual x/y position. Clamps in panel-pixel space.
+function clampTargetToGrid(x: number, y: number, grid: GridDef): { x: number; y: number } {
+  const w = grid.cols * grid.panelSize;
+  const h = grid.rows * grid.panelSize;
+  return {
+    x: x < 0 ? 0 : x > w ? w : x,
+    y: y < 0 ? 0 : y > h ? h : y,
+  };
+}
+
 function nearestPlayer(c: CrawlerState, players: ReadonlyArray<PlayerState>): {
   player: PlayerState;
   dist2: number;
@@ -288,6 +302,11 @@ export class CrawlerAiManager {
       const dist = r * (0.5 + Math.random() * 0.5);
       ai.taskTargetX = ai.lastBugPos.x + Math.cos(angle) * dist;
       ai.taskTargetY = ai.lastBugPos.y + Math.sin(angle) * dist;
+      if (grid) {
+        const clamped = clampTargetToGrid(ai.taskTargetX, ai.taskTargetY, grid);
+        ai.taskTargetX = clamped.x;
+        ai.taskTargetY = clamped.y;
+      }
     }
     // For INVESTIGATE, copy the seeded alert target (from onDamageTaken /
     // CALL_ALERT) into the task target so the executor walks toward it.
@@ -568,8 +587,13 @@ export class CrawlerAiManager {
         const r = ai.profile.seekTileRadiusPx;
         const angle = Math.random() * Math.PI * 2;
         const dist = r * (0.5 + Math.random() * 0.5);
-        ai.taskTargetX = c.x + Math.cos(angle) * dist;
-        ai.taskTargetY = c.y + Math.sin(angle) * dist;
+        const clamped = clampTargetToGrid(
+          c.x + Math.cos(angle) * dist,
+          c.y + Math.sin(angle) * dist,
+          grid,
+        );
+        ai.taskTargetX = clamped.x;
+        ai.taskTargetY = clamped.y;
       }
       // T15: INVESTIGATE entry copies the seeded alert target into the task
       // target so the executor walks toward it (via the CHASE_PLAYER path
