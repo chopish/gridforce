@@ -22,50 +22,10 @@ import {
   type TileBuffers,
 } from '@gridforce/shared';
 
-// ─── C1.9 LEGACY MITE PROFILE ────────────────────────────────────────────
-// The C1.9 decide() path uses this local scoring profile. It is intentionally
-// SEPARATE from the shared `MITE_PROFILE` (EnemyProfile) we now import: the
-// shared one carries the new C2 fields (detectionRadiusPx, taskWeights, …)
-// while this one is the narrow tuple of scoring scalars the legacy softmax
-// still references. T7 will retire LEGACY_MITE_PROFILE and read scoring
-// fields off the EnemyProfile directly.
-//
-//   - `player` is the base score for chasing a pilot. Crowd boredom is a
-//     piecewise curve (see crowdPenalty below) that DIPS for a tight squad
-//     (2-4 peers nearby) — a coherent pack chases harder — then climbs
-//     quadratically once the group passes ~6 peers, hitting critical mass
-//     in the 12-15 range where chasing the player breaks down.
-//   - Attack scores are layer-aware. Healthy panels are intentionally
-//     unappealing on their own (panelBase tiny); priority climbs as the
-//     panel takes damage, then jumps to a much higher band when L1 is gone
-//     and the dome is exposed. The score gap between panel and dome is
-//     what conveys "dome breach is urgent" — keep it wide.
-//   - Final pick is SOFTMAX over (chaseScore, attackScore), not argmax. A
-//     lone mite on a healthy panel sees chase=100, attack=5 — softmax
-//     gives attack a low but non-zero probability per roll. As the swarm
-//     grows and chaseScore is eroded by crowdPenalty, the attack
-//     probability climbs SMOOTHLY rather than flipping all at once.
-const LEGACY_MITE_PROFILE = {
-  player: 100,
-  panelBase: 5,
-  panelDamageScale: 15,
-  domeBase: 25,
-  domeDamageScale: 35,
-  attentionPerScan: 5,
-  crowdRadiusPx: 128, // 2 tiles — tighter than C1.5's 3
-};
-
 // Re-evaluation cadence + commit windows + softmax τ + anti-pile-on +
 // post-kill rest are shared C2 tuning constants — see
 // `packages/shared/src/constants.ts` for the rationale comments. They were
 // promoted out of this file in Task 4 of the C2 priority-AI plan.
-
-// Passive player-proximity aggro. Any non-chase task is interrupted (no
-// matter the commit state) the moment a player crosses this radius.
-// Future: per-player aggro multipliers (loud attacks, taunt skills, etc.)
-// can widen this conditionally — for now it's a flat threshold.
-const PLAYER_AGGRO_RADIUS_PX = 192; // 3 tiles
-const PLAYER_AGGRO_RADIUS_SQ = PLAYER_AGGRO_RADIUS_PX * PLAYER_AGGRO_RADIUS_PX;
 
 // Crowd-boredom curve. n = #peers within crowdRadiusPx.
 //   n = 0       →  0   (lone bug: no effect)
@@ -126,22 +86,6 @@ function countNearbyBugs(
   return n;
 }
 
-// Sample a binary choice with softmax probabilities. Returns `true` for
-// attack, `false` for chase. -Infinity scores are treated as ineligible.
-function pickSoftmax(chaseScore: number, attackScore: number, tau: number): 'chase' | 'attack' {
-  const chaseEligible = Number.isFinite(chaseScore);
-  const attackEligible = Number.isFinite(attackScore);
-  if (!chaseEligible && !attackEligible) return 'chase';
-  if (!chaseEligible) return 'attack';
-  if (!attackEligible) return 'chase';
-  // Numerical stability: subtract the max before exponentiating.
-  const m = Math.max(chaseScore, attackScore);
-  const eC = Math.exp((chaseScore - m) / tau);
-  const eA = Math.exp((attackScore - m) / tau);
-  const pAttack = eA / (eC + eA);
-  return Math.random() < pAttack ? 'attack' : 'chase';
-}
-
 // ─── Per-bug AI phase ────────────────────────────────────────────────────
 // CALM is the wandering / passive default; ENGAGED is set when the bug has
 // recently seen or taken damage from a player. T6 will wire phase
@@ -159,16 +103,14 @@ interface CrawlerAi {
   phase: Phase;
   currentTask: TaskKindValue;
 
-  // Current task's bound target data (T7+). Mirrored on `legacyTask` for
-  // the C1.9 path during the transition.
+  // Current task's bound target data (T7+).
   taskTargetX: number;
   taskTargetY: number;
   taskTargetCx: number;
   taskTargetCy: number;
 
   // Timers — `reevalInS`, `chaseCommitInS`, `attackRestInS`,
-  // `attentionPenalty` carry over from C1.9 and still drive legacyDecide.
-  // The rest are scaffolded for T6+.
+  // `attentionPenalty` carry over from C1.9. The rest are scaffolded for T6+.
   reevalInS: number;
   chaseCommitInS: number;
   attackRestInS: number;
@@ -195,15 +137,6 @@ interface CrawlerAi {
 
   // Cached last-known bug position for debug/test accessors (T7+).
   lastBugPos: { x: number; y: number } | null;
-
-  // C1.9-shape task retained so legacyDecide can read/write it until T7
-  // replaces this path. Mirrors `currentTask` semantically but uses the
-  // existing CrawlerTask discriminated union the executor consumes.
-  legacyTask: CrawlerTask;
-}
-
-function defaultLegacyTask(): CrawlerTask {
-  return { kind: CrawlerTaskKind.CHASE_PLAYER, targetX: 0, targetY: 0 };
 }
 
 function makeAiState(profile: EnemyProfile): CrawlerAi {
@@ -230,7 +163,6 @@ function makeAiState(profile: EnemyProfile): CrawlerAi {
     investigateUntilS: 0,
     hasInvestigateTarget: false,
     lastBugPos: null,
-    legacyTask: defaultLegacyTask(),
   };
 }
 
@@ -435,11 +367,10 @@ export class CrawlerAiManager {
     }
     ai.lastBugPos = { x: c.x, y: c.y };
 
-    // Tick the new C2 timers each decide(). Only the C1.9-relevant ones
-    // (reevalInS / chaseCommitInS / attackRestInS) drive behavior today;
-    // the rest are scaffolded for later tasks. The legacyDecide path
-    // ticks reevalInS / chaseCommitInS / attackRestInS itself, so we
-    // ONLY tick the new fields here to keep behavior identical.
+    // Tick the C2 timers each decide(). Per-task commitment, alert-bonus,
+    // and stagger-window all decay here; reevalInS / chaseCommitInS /
+    // attackRestInS are ticked further below alongside the task-selection
+    // hierarchy so the read-points stay close to the writes.
     ai.taskCommitmentS += dt;
     ai.alertBonusInS = Math.max(0, ai.alertBonusInS - dt);
     ai.staggerAccumS += dt;
@@ -545,7 +476,7 @@ export class CrawlerAiManager {
     ai.chaseCommitInS = Math.max(0, ai.chaseCommitInS - dt);
     ai.attackRestInS = Math.max(0, ai.attackRestInS - dt);
 
-    // New hierarchical task selection. Replaces legacyDecide.
+    // Hierarchical task selection.
     //
     // 1. If committed (chase commit window, ATTACK_TILE on a live tile),
     //    keep the current task.
@@ -913,187 +844,6 @@ export class CrawlerAiManager {
       }
     }
     return best;
-  }
-
-  // Preserved C1.9 decide() logic — translates `ai.task` → `ai.legacyTask`
-  // and otherwise reads the same fields as before. Will be removed once
-  // T7+ wires the new task-selection path. Inlined here so existing tests
-  // pass through this refactor untouched.
-  private legacyDecide(
-    c: CrawlerState,
-    ai: CrawlerAi,
-    dt: number,
-    players: ReadonlyArray<PlayerState>,
-    bugs: ReadonlyArray<CrawlerState>,
-    tiles: TileBuffers,
-    grid: GridDef,
-  ): CrawlerTask {
-    ai.chaseCommitInS = Math.max(0, ai.chaseCommitInS - dt);
-    ai.attackRestInS = Math.max(0, ai.attackRestInS - dt);
-    ai.reevalInS -= dt;
-
-    // Passive aggro. A nearby player is a hard interrupt: regardless of
-    // current task or commit state, the bug breaks off and chases. This
-    // is the first thing the future "player aggro modifiers" will hook
-    // into — increase the radius conditionally per player to model loud
-    // actions, taunts, etc.
-    const near = nearestPlayer(c, players);
-    if (near && near.dist2 <= PLAYER_AGGRO_RADIUS_SQ) {
-      ai.legacyTask = {
-        kind: CrawlerTaskKind.CHASE_PLAYER,
-        targetX: near.player.x,
-        targetY: near.player.y,
-      };
-      ai.attentionPenalty = 0;
-      ai.chaseCommitInS = CHASE_COMMIT_S;
-      // Reset reeval too so we don't immediately re-score right after the
-      // forced aggro — let the chase stick for the commit window.
-      ai.reevalInS = TASK_REEVAL_INTERVAL_S;
-      return ai.legacyTask;
-    }
-
-    // Commit-until-completion for ATTACK tasks.
-    if (ai.legacyTask.kind === CrawlerTaskKind.ATTACK_TILE) {
-      const tcx = ai.legacyTask.targetCx;
-      const tcy = ai.legacyTask.targetCy;
-      const inBounds = tcx >= 0 && tcx < grid.cols && tcy >= 0 && tcy < grid.rows;
-      if (inBounds) {
-        const idx = indexOf(grid.cols, tcx, tcy);
-        const stillAttackable = tiles.l1Hp[idx]! > 0 || tiles.l0Hp[idx]! > 0;
-        if (stillAttackable) {
-          if (ai.reevalInS <= 0) {
-            ai.attentionPenalty += LEGACY_MITE_PROFILE.attentionPerScan;
-            ai.reevalInS = TASK_REEVAL_INTERVAL_S;
-          }
-          return ai.legacyTask;
-        }
-        // Tile dead — task complete. Trigger the post-kill rest so this
-        // bug doesn't immediately commit to the next adjacent tile.
-        ai.attackRestInS = POST_KILL_REST_S;
-      }
-    }
-
-    // Chase commitment — short lock so the bug doesn't flap to a different
-    // task every single scan.
-    if (ai.legacyTask.kind === CrawlerTaskKind.CHASE_PLAYER && ai.chaseCommitInS > 0 && ai.reevalInS > 0) {
-      if (near) {
-        ai.legacyTask = {
-          kind: CrawlerTaskKind.CHASE_PLAYER,
-          targetX: near.player.x,
-          targetY: near.player.y,
-        };
-      }
-      return ai.legacyTask;
-    }
-
-    // Within the reeval window but not commit-locked → keep current task,
-    // refreshing the chase target each tick if applicable.
-    if (ai.reevalInS > 0) {
-      if (ai.legacyTask.kind === CrawlerTaskKind.CHASE_PLAYER && near) {
-        ai.legacyTask = {
-          kind: CrawlerTaskKind.CHASE_PLAYER,
-          targetX: near.player.x,
-          targetY: near.player.y,
-        };
-      }
-      return ai.legacyTask;
-    }
-
-    const newTask = this.score(c, ai, players, bugs, tiles, grid);
-    const sameKind = newTask.kind === ai.legacyTask.kind;
-    const sameTarget = sameKind && newTask.kind === CrawlerTaskKind.ATTACK_TILE
-      && ai.legacyTask.kind === CrawlerTaskKind.ATTACK_TILE
-      && newTask.targetCx === ai.legacyTask.targetCx
-      && newTask.targetCy === ai.legacyTask.targetCy;
-    if (!sameKind || (newTask.kind === CrawlerTaskKind.ATTACK_TILE && !sameTarget)) {
-      ai.legacyTask = newTask;
-      ai.attentionPenalty = 0;
-      ai.chaseCommitInS = newTask.kind === CrawlerTaskKind.CHASE_PLAYER ? CHASE_COMMIT_S : 0;
-    } else {
-      ai.legacyTask = newTask;
-      ai.attentionPenalty += LEGACY_MITE_PROFILE.attentionPerScan;
-    }
-    ai.reevalInS = TASK_REEVAL_INTERVAL_S;
-    return ai.legacyTask;
-  }
-
-  private score(
-    c: CrawlerState,
-    ai: CrawlerAi,
-    players: ReadonlyArray<PlayerState>,
-    bugs: ReadonlyArray<CrawlerState>,
-    tiles: TileBuffers,
-    grid: GridDef,
-  ): CrawlerTask {
-    const near = nearestPlayer(c, players);
-    const tcx = Math.floor(c.x / grid.panelSize);
-    const tcy = Math.floor(c.y / grid.panelSize);
-    const inBounds = tcx >= 0 && tcx < grid.cols && tcy >= 0 && tcy < grid.rows;
-
-    // Chase — base score modulated by the squad/swarm crowd curve. Tight
-    // packs reinforce chase; large crowds erode it (critical mass).
-    let chaseScore = -Infinity;
-    if (near) {
-      const crowd = countNearbyBugs(c, bugs, LEGACY_MITE_PROFILE.crowdRadiusPx);
-      chaseScore = LEGACY_MITE_PROFILE.player - crowdPenalty(crowd);
-    }
-
-    // Attack — score is layer-aware. Dome (L0 exposed) is always wider-
-    // scored than panel, conveying the "dome breach is urgent" signal.
-    let attackScore = -Infinity;
-    if (inBounds) {
-      const idx = indexOf(grid.cols, tcx, tcy);
-      const l1 = tiles.l1Hp[idx]!;
-      const l0 = tiles.l0Hp[idx]!;
-      if (l1 > 0) {
-        attackScore = LEGACY_MITE_PROFILE.panelBase + LEGACY_MITE_PROFILE.panelDamageScale * (1 - l1 / L1_PANEL_MAX_HP);
-      } else if (l0 > 0) {
-        attackScore = LEGACY_MITE_PROFILE.domeBase + LEGACY_MITE_PROFILE.domeDamageScale * (1 - l0 / L0_DOME_MAX_HP);
-      }
-    }
-
-    // Post-kill rest: bug literally cannot pick attack right now.
-    if (ai.attackRestInS > 0) {
-      attackScore = -Infinity;
-    }
-
-    // Global anti-pile-on: each existing attacker on the level pulls the
-    // attack score down. By the time ~5-8 bugs are attacking, joining
-    // them costs more than the panel/dome score itself, so new bugs stay
-    // on chase.
-    if (Number.isFinite(attackScore)) {
-      attackScore -= ACTIVE_ATTACKER_PENALTY * this.activeAttackerCount();
-    }
-
-    // Stochastic noise + per-task attention penalty. Noise stays for
-    // micro-variation; the heavy lifting on stochasticity now lives in
-    // the softmax sampler below.
-    if (Number.isFinite(chaseScore)) {
-      chaseScore =
-        chaseScore * noise() -
-        (ai.legacyTask.kind === CrawlerTaskKind.CHASE_PLAYER ? ai.attentionPenalty : 0);
-    }
-    if (Number.isFinite(attackScore)) {
-      attackScore =
-        attackScore * noise() -
-        (ai.legacyTask.kind === CrawlerTaskKind.ATTACK_TILE ? ai.attentionPenalty : 0);
-    }
-
-    const pick = pickSoftmax(chaseScore, attackScore, SCORE_SOFTMAX_TEMPERATURE);
-    if (pick === 'chase' && near) {
-      return {
-        kind: CrawlerTaskKind.CHASE_PLAYER,
-        targetX: near.player.x,
-        targetY: near.player.y,
-      };
-    }
-    if (pick === 'attack' && inBounds) {
-      return { kind: CrawlerTaskKind.ATTACK_TILE, targetCx: tcx, targetCy: tcy };
-    }
-    // Degenerate case: neither task is viable. Hold current task; the
-    // next tick will re-evaluate as state changes (a player respawns, the
-    // bug walks onto a new tile, etc.).
-    return ai.legacyTask;
   }
 
   remove(id: number): void {
