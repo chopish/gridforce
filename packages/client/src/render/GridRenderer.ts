@@ -32,7 +32,11 @@ export class GridRenderer {
   }
 
   setTiles(tiles: TileBuffers): void {
-    if (tiles === this.tiles) return; // reference-equality short-circuit
+    // No reference-equality short-circuit: client-side shock prediction
+    // mutates l1Charge in place between snapshots (same buffer reference),
+    // and the previous early-return meant predicted tiles never repainted
+    // until the next applySnapshot swapped the reference — which masked the
+    // prediction work and made attacks read as 250ms-delayed.
     this.tiles = tiles;
     this.redrawAll();
   }

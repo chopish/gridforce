@@ -14,8 +14,11 @@ import {
   type PlayerState,
 } from './index.js';
 
-const COLS = 10;
-const ROWS = 10;
+// Sized to fit a full-charge beam (SHOCK_BEAM_MAX_TILES) plus a player
+// position with headroom on every side, so the full-charge test isn't
+// silently clipped by grid bounds.
+const COLS = 16;
+const ROWS = 16;
 const PANEL = 64;
 const GRID = { cols: COLS, rows: ROWS, panelSize: PANEL };
 

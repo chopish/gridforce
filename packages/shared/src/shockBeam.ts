@@ -46,9 +46,11 @@ export function traceShockBeam(
   // Length budget. Tap = 1 tile cell of reach (just enough to land on the
   // adjacent tile); charged scales with hold time up to SHOCK_BEAM_MAX_TILES.
   const beamTiles = isCharged ? Math.max(1, Math.ceil(ratio * SHOCK_BEAM_MAX_TILES)) : 1;
-  // Tap = activate only the first conductive hit. Charged = activate every
-  // conductive tile within its length budget.
-  const conductiveCap = isCharged ? beamTiles : 1;
+  // Tap caps at the first conductive hit (single-tile zap). Charged has no
+  // per-tile cap — every conductive cell the ray crosses within its length
+  // budget gets electrified, until the beam hits an impact tile or runs out
+  // of reach.
+  const conductiveCap = isCharged ? Infinity : 1;
   const px = state.x;
   const py = state.y;
   const dirX = Math.cos(input.facingRad);
@@ -58,7 +60,11 @@ export function traceShockBeam(
   const hits: ShockBeamHit[] = [];
   let conductiveHits = 0;
   const step = panelSize / 8;
-  const maxDist = beamTiles * panelSize + panelSize;
+  // Exact length budget. Previously had a `+ panelSize` slack which was
+  // harmless under the old per-shot conductive cap, but the cap is gone for
+  // charged shots so any extra slack would land one tile past the intended
+  // reach.
+  const maxDist = beamTiles * panelSize;
   for (let t = step; t <= maxDist && conductiveHits < conductiveCap; t += step) {
     const sx = px + dirX * t;
     const sy = py + dirY * t;

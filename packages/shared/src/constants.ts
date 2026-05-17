@@ -164,7 +164,7 @@ export const SHOCK_COOLDOWN_S = 0.25;
 // (the rising-edge tap is retired). Charge time scales beam length 1..MAX
 // tiles. Each tile in the beam path becomes electrified for SHOCK_LINGER_S
 // seconds, killing any bug that walks onto it during that window.
-export const SHOCK_BEAM_MAX_TILES = 4;
+export const SHOCK_BEAM_MAX_TILES = 8;
 export const SHOCK_CHARGE_FULL_S = 1.0;   // hold this long for max-length beam
 export const SHOCK_LINGER_S = 1.5;        // electrified-tile lifetime
 // Quantized to server-tick units (Uint8 buffer); 30 Hz × 1.5s ≈ 45 ticks.
