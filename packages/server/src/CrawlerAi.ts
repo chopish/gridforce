@@ -355,6 +355,12 @@ export class CrawlerAiManager {
       ai.taskTargetX = ai.lastBugPos.x + Math.cos(angle) * dist;
       ai.taskTargetY = ai.lastBugPos.y + Math.sin(angle) * dist;
     }
+    // For INVESTIGATE, copy the seeded alert target (from onDamageTaken /
+    // CALL_ALERT) into the task target so the executor walks toward it.
+    if (task === TaskKind.INVESTIGATE && ai.hasInvestigateTarget) {
+      ai.taskTargetX = ai.investigateTargetX;
+      ai.taskTargetY = ai.investigateTargetY;
+    }
     // Park reeval far in the future so decide()'s re-pick doesn't immediately
     // swap us back. Matches the "committed to a task" intent.
     ai.reevalInS = 1e9;
@@ -575,10 +581,29 @@ export class CrawlerAiManager {
         ai.taskTargetX = c.x + Math.cos(angle) * dist;
         ai.taskTargetY = c.y + Math.sin(angle) * dist;
       }
+      // T15: INVESTIGATE entry copies the seeded alert target into the task
+      // target so the executor walks toward it (via the CHASE_PLAYER path
+      // in taskKindToCrawlerTask).
+      if (newTask === TaskKind.INVESTIGATE && ai.hasInvestigateTarget) {
+        ai.taskTargetX = ai.investigateTargetX;
+        ai.taskTargetY = ai.investigateTargetY;
+      }
     } else {
       ai.attentionPenalty += ATTENTION_PER_SCAN;
     }
     ai.reevalInS = TASK_REEVAL_INTERVAL_S;
+
+    // T15: INVESTIGATE arrival — when the bug reaches the alert target,
+    // clear it and force a re-roll (the bug typically goes back to chase
+    // or search). Stale-timeout is handled by the phase block above.
+    if (ai.currentTask === TaskKind.INVESTIGATE && ai.hasInvestigateTarget) {
+      const dx = ai.investigateTargetX - c.x;
+      const dy = ai.investigateTargetY - c.y;
+      if (Math.hypot(dx, dy) < 16) {
+        ai.hasInvestigateTarget = false;
+        ai.reevalInS = 0;
+      }
+    }
 
     return taskKindToCrawlerTask(newTask, ai, c, players, grid);
   }

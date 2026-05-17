@@ -278,3 +278,34 @@ test('SEARCH: phase check sees pilots from detectionRadius × searchRadiusMult',
   mgr.decide(bug, 0.016, [player], [bug], tiles, GRID);
   assert.equal(mgr.getPhase(1), 'ENGAGED');
 });
+
+test('INVESTIGATE: bug with seeded target walks toward it; sets task target', () => {
+  const mgr = new CrawlerAiManager();
+  mgr.registerCrawler(1, MITE_PROFILE);
+  const tiles = allocateTiles(GRID.cols, GRID.rows);
+  const bug = newBug(1, 320, 320);
+  // Seed an investigate target via damage notification (T12 plumbing).
+  mgr.onDamageTaken(1, 1, 640, 320);
+  // First decide() to populate phase/lastBugPos.
+  mgr.decide(bug, 0.016, [], [bug], tiles, GRID);
+  // Force INVESTIGATE so its target is loaded into ai.taskTargetX/Y.
+  mgr.forceTask(1, TaskKind.INVESTIGATE, tiles, GRID);
+  const ai = mgr.getInternalAi(1)!;
+  assert.ok(Math.abs(ai.taskTargetX - 640) < 1,
+    `expected taskTargetX≈640; got ${ai.taskTargetX}`);
+  assert.ok(Math.abs(ai.taskTargetY - 320) < 1,
+    `expected taskTargetY≈320; got ${ai.taskTargetY}`);
+});
+
+test('INVESTIGATE: target consumed after stale window', () => {
+  const mgr = new CrawlerAiManager();
+  mgr.registerCrawler(1, MITE_PROFILE);
+  const tiles = allocateTiles(GRID.cols, GRID.rows);
+  const bug = newBug(1, 320, 320);
+  mgr.onDamageTaken(1, 1, 640, 320);
+  // Tick past the stale window (10 s default).
+  for (let t = 0; t < 11; t += 0.5) {
+    mgr.decide(bug, 0.5, [], [bug], tiles, GRID);
+  }
+  assert.equal(mgr.getInvestigateTarget(1), null);
+});
