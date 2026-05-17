@@ -10,6 +10,7 @@ import {
   SHOCK_CHARGE_COOLDOWN_S,
   SHOCK_CHARGE_FULL_S,
   SHOCK_COOLDOWN_S,
+  SHOCK_LINGER_S,
   SHOCK_LINGER_TICKS,
   traceShockBeam,
   type PlayerId,
@@ -60,6 +61,21 @@ async function bootstrap(): Promise<void> {
   const world = new PredictedWorld();
   const inputs = new InputCapture();
   const renderer = new Renderer();
+
+  // Tiles the client has predicted electrified but the server may not yet have
+  // confirmed. applySnapshot replaces world.tiles wholesale, so a snapshot
+  // authored BEFORE the server processed our shot wipes the predicted charge —
+  // tile appears to light then go dark for ~RTT before lighting again.
+  // After each applySnapshot we re-apply any entry whose predictedTick is
+  // still ahead of the server's tick. Entries are pruned once acknowledged or
+  // after a max age (covers the case where the server rejected the shot, e.g.
+  // due to clock skew on the cooldown gate).
+  interface PendingShock {
+    idx: number;
+    tick: number;
+    firedAtMs: number;
+  }
+  const pendingShocks: PendingShock[] = [];
   let hud: DebugHud | null = null;
   let stageHud: StageHud | null = null;
   let gameHud: GameHud | null = null;
@@ -122,6 +138,31 @@ async function bootstrap(): Promise<void> {
         break;
       case MessageType.Snapshot:
         world.applySnapshot(m.payload);
+        // Re-apply any predicted shock the server hasn't yet processed. The
+        // applySnapshot above replaced world.tiles with the server's view, so
+        // the predicted l1Charge for tiles whose fire-tick is still in our
+        // lead window would have been wiped — without this re-apply the panel
+        // would visibly go dark for ~RTT until an acknowledging snapshot
+        // catches up. Prune acknowledged + expired entries in the same pass.
+        if (pendingShocks.length > 0) {
+          const nowMs = performance.now();
+          const MAX_AGE_MS = SHOCK_LINGER_S * 1000 + 500;
+          const charges = world.tiles.l1Charge;
+          for (let i = pendingShocks.length - 1; i >= 0; i--) {
+            const p = pendingShocks[i]!;
+            if (p.tick <= world.serverTick) {
+              pendingShocks.splice(i, 1);
+              continue;
+            }
+            if (nowMs - p.firedAtMs > MAX_AGE_MS) {
+              pendingShocks.splice(i, 1);
+              continue;
+            }
+            if (p.idx < charges.length && (charges[p.idx] ?? 0) < SHOCK_LINGER_TICKS) {
+              charges[p.idx] = SHOCK_LINGER_TICKS;
+            }
+          }
+        }
         break;
       case MessageType.PlayerJoined:
         world.ensurePlayer(m.payload.player);
@@ -351,7 +392,18 @@ async function bootstrap(): Promise<void> {
               world.grid,
             );
             for (const h of trace.hits) {
-              if (h.conductive) world.tiles.l1Charge[h.idx] = SHOCK_LINGER_TICKS;
+              if (h.conductive) {
+                world.tiles.l1Charge[h.idx] = SHOCK_LINGER_TICKS;
+                // Pin against snapshot clobber until the server acknowledges
+                // this shot. world.predictedTick is the tick our outgoing
+                // input is tagged with; snapshots with snap.tick < this tick
+                // were authored before the server processed it.
+                pendingShocks.push({
+                  idx: h.idx,
+                  tick: world.predictedTick,
+                  firedAtMs: now,
+                });
+              }
             }
             // Mirror the server's cooldown so the next prediction can't fire
             // until the server would have accepted it. Without this we'd
