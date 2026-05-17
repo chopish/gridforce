@@ -1,5 +1,7 @@
 import {
   ACTIVE_ATTACKER_PENALTY,
+  ATTACK_COMMITMENT_DECAY_S,
+  ATTACK_COMMITMENT_FLOOR,
   ATTENTION_PER_SCAN,
   CHASE_COMMIT_S,
   CrawlerTaskKind,
@@ -458,6 +460,14 @@ export class CrawlerAiManager {
     // CALL_ALERT receivers get a temporary detection bonus (T17 sets the
     // timer; harmless when alertBonusInS == 0).
     if (ai.alertBonusInS > 0) effectiveR *= ai.profile.alertBonusMult;
+    // T16: ATTACK_TILE commitment shrinks effective detection. A bug
+    // committed to chewing a tile for `ATTACK_COMMITMENT_DECAY_S` seconds
+    // drops to `ATTACK_COMMITMENT_FLOOR` of its base radius — players must
+    // shock it, not just walk past, to peel it off.
+    if (ai.currentTask === TaskKind.ATTACK_TILE) {
+      const t = Math.min(1, ai.taskCommitmentS / ATTACK_COMMITMENT_DECAY_S);
+      effectiveR *= 1 - t * (1 - ATTACK_COMMITMENT_FLOOR);
+    }
     const effectiveR2 = effectiveR * effectiveR;
     const detected = !!near && near.dist2 <= effectiveR2;
 

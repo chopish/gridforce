@@ -309,3 +309,40 @@ test('INVESTIGATE: target consumed after stale window', () => {
   }
   assert.equal(mgr.getInvestigateTarget(1), null);
 });
+
+test('soft aggro: fresh ATTACK_TILE bug detects player within base detectionRadius', () => {
+  const mgr = new CrawlerAiManager();
+  mgr.registerCrawler(1, MITE_PROFILE);
+  const tiles = allocateTiles(GRID.cols, GRID.rows);
+  tiles.l1Hp[indexOf(GRID.cols, 5, 5)] = 50;
+  const bug = newBug(1, 320, 320);
+  // Seat lastBugPos and CALM phase.
+  mgr.decide(bug, 0.016, [], [bug], tiles, GRID);
+  // Force ATTACK_TILE with fresh commitment.
+  mgr.forceTask(1, TaskKind.ATTACK_TILE, tiles, GRID);
+
+  // Player 100 px away — within base 160 px detection radius.
+  const player = newPlayer(0, 420, 320);
+  mgr.decide(bug, 0.016, [player], [bug], tiles, GRID);
+  // Phase should flip to ENGAGED (player detected).
+  assert.equal(mgr.getPhase(1), 'ENGAGED');
+});
+
+test('soft aggro: 6s-committed ATTACK_TILE bug does NOT detect player at 100 px', () => {
+  const mgr = new CrawlerAiManager();
+  mgr.registerCrawler(1, MITE_PROFILE);
+  const tiles = allocateTiles(GRID.cols, GRID.rows);
+  tiles.l1Hp[indexOf(GRID.cols, 5, 5)] = 50;
+  const bug = newBug(1, 320, 320);
+  mgr.decide(bug, 0.016, [], [bug], tiles, GRID);
+  mgr.forceTask(1, TaskKind.ATTACK_TILE, tiles, GRID);
+  // Tick 7+ s with no player so taskCommitmentS exceeds DECAY_S (6).
+  for (let t = 0; t < 7; t += 0.5) {
+    mgr.decide(bug, 0.5, [], [bug], tiles, GRID);
+  }
+  // Now bring a player to 100 px. Effective radius after full commitment
+  // is 160 × 0.25 = 40 px. 100 px > 40, so phase should stay CALM.
+  const player = newPlayer(0, 420, 320);
+  mgr.decide(bug, 0.016, [player], [bug], tiles, GRID);
+  assert.equal(mgr.getPhase(1), 'CALM');
+});
