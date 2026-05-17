@@ -126,14 +126,13 @@ export const ROOM_CODE_LENGTH = 4;
 // Client predicts this many ticks ahead of the server's most recent reported
 // tick so that inputs arrive at the server before their target tick is
 // processed. Sized for up to ~150 ms RTT (5 ticks × 33 ms = 165 ms).
-// Floor for client-side input lead. With a 30 Hz tick rate, 2 ticks = 66 ms
-// is the smallest lead that gives the input one full tick of "in-flight"
-// budget after arrival jitter. The previous 5-tick floor (165 ms) was
-// sized for high-latency netsim profiles; for a typical sub-100ms RTT
-// player it baked an unnecessary ~150 ms of perceived input delay into
-// every shock / jump / repair. Adaptive lead (see main.ts) still scales
-// higher when measured RTT demands it.
-export const INPUT_LEAD_TICKS = 2;
+// Floor for client-side input lead. 1 tick = 33 ms is the absolute minimum
+// — the input still has to reach the server before the tagged tick is
+// processed, and at a sub-30ms RTT one server-tick of slack covers that
+// trip with jitter headroom. The adaptive lead in main.ts scales this up
+// for higher-RTT players. Anything below 1 means the input lands in the
+// server's past and gets dropped on arrival.
+export const INPUT_LEAD_TICKS = 1;
 // How many recent inputs to pack into each Input message. 3 means each
 // frame carries the latest input plus the previous two; under 10% loss
 // the effective input miss-rate drops from 10% to ~0.1%. Bandwidth cost
@@ -171,7 +170,12 @@ export const SHOCK_COOLDOWN_S = 0.25;
 // (the rising-edge tap is retired). Charge time scales beam length 1..MAX
 // tiles. Each tile in the beam path becomes electrified for SHOCK_LINGER_S
 // seconds, killing any bug that walks onto it during that window.
-export const SHOCK_BEAM_MAX_TILES = 8;
+// Charged shot range cap, in tiles. Charge ratio scales actual reach from
+// SHOCK_BEAM_MIN_CHARGED_TILES (minimum charge to qualify as charged) up to
+// this value (full charge). Tap is a separate model that always reaches
+// exactly one conductive tile and ignores this constant.
+export const SHOCK_BEAM_MAX_TILES = 4;
+export const SHOCK_BEAM_MIN_CHARGED_TILES = 2;
 export const SHOCK_CHARGE_FULL_S = 1.0;   // hold this long for max-length beam
 export const SHOCK_LINGER_S = 1.5;        // electrified-tile lifetime
 // Quantized to server-tick units (Uint8 buffer); 30 Hz × 1.5s ≈ 45 ticks.
@@ -221,7 +225,15 @@ export const SHOCK_CHARGE_COOLDOWN_S = 0.5;
 // numbers are wire-stable so tougher future enemies interact correctly
 // (beam: 3, linger tick: 1; full conductive-tile hit deals BEAM+TILE = 4).
 export const SHOCK_BEAM_DAMAGE = 3;
+// Charged shots deliver more direct damage than taps — this is the per-bug
+// damage on a charged beam intersection. (Tap uses SHOCK_BEAM_DAMAGE.)
+export const SHOCK_BEAM_CHARGED_DAMAGE = 6;
 export const SHOCK_TILE_DAMAGE = 1;
+// Half-width of the shock beam's damage hitbox, in pixels. The beam is a
+// thin rectangle: any crawler whose centre lies within (CRAWLER_RADIUS +
+// SHOCK_BEAM_HALF_WIDTH) of the beam line gets hit. Tuned to roughly match
+// the VFX line thickness so visual and gameplay agree.
+export const SHOCK_BEAM_HALF_WIDTH = 6;
 
 // Camera (defaults; settings UI is a future spec).
 export const CAMERA_ZOOM_MIN = 0.5;

@@ -436,7 +436,7 @@ async function bootstrap(): Promise<void> {
       const rtt = socket.status().rttMs;
       if (rtt > 0) {
         const oneWayTicks = Math.ceil(rtt / 2 / SERVER_TICK_DT_MS);
-        world.setTargetLead(oneWayTicks + 2);
+        world.setTargetLead(oneWayTicks + 1);
       }
 
       // Render NPCs first so a dense swarm doesn't cover the player avatars.

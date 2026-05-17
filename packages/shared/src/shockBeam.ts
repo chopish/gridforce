@@ -1,4 +1,6 @@
 import {
+  SHOCK_BEAM_MAX_TILES,
+  SHOCK_BEAM_MIN_CHARGED_TILES,
   SHOCK_CHARGE_COOLDOWN_S,
   SHOCK_CHARGE_FULL_S,
   SHOCK_COOLDOWN_S,
@@ -21,6 +23,15 @@ export interface ShockBeamTrace {
   // Cooldown the firing player should adopt. Charged beams (held to >=50%)
   // pay a longer recharge than taps; matches Room's prior inline rule.
   cooldownS: number;
+  // Effective beam length in pixels, from player position to where the beam
+  // stops (last hit's far edge OR maxDist if no impact). Used by damage
+  // callers to bound the bug-intersection sweep — bugs past beamEndPx don't
+  // get hit even if they're geometrically on the ray's infinite extension.
+  beamEndPx: number;
+  // Beam direction (unit vector). Pre-computed so damage callers don't have
+  // to re-derive from facingRad.
+  dirX: number;
+  dirY: number;
 }
 
 // Ray-march the shock beam from the player along input.facingRad, returning
@@ -44,19 +55,23 @@ export function traceShockBeam(
   const isCharged = ratio >= 0.5;
   // Tap and charged are intentionally separate models:
   //   - Tap (uncharged): exactly one conductive tile of reach.
-  //   - Charged: no tile cap. Ray-marches until it hits an impact tile or
-  //     the grid edge. SHOCK_BEAM_MAX_TILES does NOT apply to charged —
-  //     the player explicitly opted in by holding for the full charge, and
-  //     a charged beam's job is to clear every tile in the line.
+  //   - Charged: range scales with hold time from MIN to MAX tiles.
+  //     Within that range every conductive cell the ray crosses gets
+  //     electrified (no per-tile cap), bounded only by impact tile,
+  //     grid edge, or the length budget.
   const conductiveCap = isCharged ? Infinity : 1;
-  // Length budget. Tap reaches one full tile east of wherever the player
-  // is standing — `panelSize * 1.5` is enough to cross the player's own
-  // tile from the far edge AND reach into the adjacent tile (the conductive
-  // cap of 1 stops it as soon as the first live cell is hit, so the extra
-  // slack costs nothing in gameplay but avoids dropping the shot when the
-  // player happens to be near the trailing edge of their tile). Charged is
-  // bounded by the grid extent — impact-tile / grid-edge breaks it sooner.
-  const maxDist = isCharged ? (cols + rows) * panelSize : panelSize * 1.5;
+  // Charged ratio is in [0.5, 1.0]; remap to [0, 1] so a barely-charged
+  // shot still reaches the MIN range and a full-charge reaches MAX.
+  const chargedT = Math.max(0, (ratio - 0.5) * 2);
+  const chargedTiles =
+    SHOCK_BEAM_MIN_CHARGED_TILES +
+    Math.round(chargedT * (SHOCK_BEAM_MAX_TILES - SHOCK_BEAM_MIN_CHARGED_TILES));
+  // Length budget. Tap = `panelSize * 1.5` (enough slack to land the
+  // adjacent tile even when the player is at the trailing edge of their
+  // own tile; the cap of 1 stops propagation as soon as the first live
+  // cell is hit). Charged = `chargedTiles * panelSize` of straight-line
+  // reach.
+  const maxDist = isCharged ? chargedTiles * panelSize : panelSize * 1.5;
   const px = state.x;
   const py = state.y;
   const dirX = Math.cos(input.facingRad);
@@ -82,5 +97,41 @@ export function traceShockBeam(
     conductiveHits++;
   }
   const cooldownS = isCharged ? SHOCK_CHARGE_COOLDOWN_S : SHOCK_COOLDOWN_S;
-  return { hits, cooldownS };
+  // beamEndPx = the geometric reach of the beam line, used by damage callers
+  // to bound crawler-hitbox intersection. Decoupled from `hits` so bug
+  // damage works the same whether the beam crossed live tiles, passages, or
+  // empty space — the player-perceived "shock line" extends to maxDist
+  // regardless of tile state.
+  const beamEndPx = maxDist;
+  return { hits, cooldownS, beamEndPx, dirX, dirY };
+}
+
+// Crawler hitbox vs. beam-line intersection. Returns true if a circle at
+// (cx, cy) with radius `cr` intersects the line segment starting at
+// (bx, by) in direction (dirX, dirY) for `beamEndPx` pixels, with `halfWidth`
+// of perpendicular tolerance (so the beam reads as a thin rectangle, not a
+// hairline). Used by Room.applyShockBeam to damage exactly the bugs the
+// beam actually crosses, instead of every bug whose centre happens to lie
+// on a hit tile (which was the old "flood the tile" shortcut).
+export function crawlerHitByBeam(
+  cx: number,
+  cy: number,
+  cr: number,
+  bx: number,
+  by: number,
+  dirX: number,
+  dirY: number,
+  beamEndPx: number,
+  halfWidth: number,
+): boolean {
+  const relX = cx - bx;
+  const relY = cy - by;
+  // Project onto beam axis. Negative = behind the player; greater than
+  // beamEndPx = past the beam's reach. Clamp the bug-radius tolerance into
+  // those bounds so a bug straddling the beam's start or end still counts.
+  const along = relX * dirX + relY * dirY;
+  if (along < -cr || along > beamEndPx + cr) return false;
+  // Perpendicular distance (cross-product magnitude in 2D).
+  const perp = Math.abs(relX * dirY - relY * dirX);
+  return perp <= cr + halfWidth;
 }

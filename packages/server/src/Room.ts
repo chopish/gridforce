@@ -3,12 +3,16 @@ import { performance } from 'node:perf_hooks';
 import {
   CARBON_TTL_S,
   CARBON_PICKUP_RADIUS,
+  CRAWLER_RADIUS,
   PLAYER_CARBON_MAX,
   PLAYER_RADIUS,
   CRAWLER_SPAWN_INTERVAL_S,
   CRAWLER_WEIGHT,
   MAX_ALIVE_CRAWLERS,
+  SHOCK_BEAM_CHARGED_DAMAGE,
   SHOCK_BEAM_DAMAGE,
+  SHOCK_BEAM_HALF_WIDTH,
+  SHOCK_CHARGE_COOLDOWN_S,
   SHOCK_CHARGE_FULL_S,
   SHOCK_LINGER_TICKS,
   SHOCK_TILE_DAMAGE,
@@ -30,6 +34,7 @@ import {
   damageTopmost,
   isPassage,
   topmostLayer,
+  crawlerHitByBeam,
   traceShockBeam,
   tryPanelJump,
   type BufferedJump,
@@ -634,16 +639,40 @@ export class Room {
     input: PlayerInput,
   ): PlayerState {
     const trace = traceShockBeam(playerState, input, this.tiles, this.grid);
+    // Tile electrification: live tiles along the path carry linger charge.
+    // Impact tiles are recorded (existing behavior) but not electrified.
     for (const hit of trace.hits) {
-      if (hit.conductive) {
-        // Live panel: electrify for SHOCK_LINGER_TICKS, plus the beam +
-        // tile-shock combined damage to bugs caught in the line.
-        this.tiles.l1Charge[hit.idx] = SHOCK_LINGER_TICKS;
-        this.damageCrawlersOnTile(hit.tx, hit.ty, SHOCK_BEAM_DAMAGE + SHOCK_TILE_DAMAGE);
+      if (hit.conductive) this.tiles.l1Charge[hit.idx] = SHOCK_LINGER_TICKS;
+    }
+    // Beam damage: line-vs-circle intersection per crawler. Replaces the
+    // old "damage every bug whose centre is in the hit tile" shortcut so
+    // bugs at the corner of a wide tile no longer get a free hit when the
+    // beam visually missed them — and bugs on tiles with destroyed floors
+    // (passages) DO get hit, because the line passes through them even
+    // though those tiles aren't conductive. Charged shots deal more
+    // damage per hit than taps.
+    const isCharged = trace.cooldownS === SHOCK_CHARGE_COOLDOWN_S;
+    const damage = isCharged ? SHOCK_BEAM_CHARGED_DAMAGE : SHOCK_BEAM_DAMAGE;
+    for (const [cid, c] of this.crawlers) {
+      if (
+        !crawlerHitByBeam(
+          c.x, c.y, CRAWLER_RADIUS,
+          playerState.x, playerState.y,
+          trace.dirX, trace.dirY,
+          trace.beamEndPx,
+          SHOCK_BEAM_HALF_WIDTH,
+        )
+      ) continue;
+      const newHp = Math.max(0, c.hp - damage);
+      // Notify AI manager (stagger accumulator + investigate seeding) before
+      // the death check so even lethal hits update the swarm state.
+      this.crawlerAi.onDamageTaken(cid, damage, playerState.x, playerState.y);
+      if (newHp === 0) {
+        this.spawnCarbon(c.x, c.y);
+        this.crawlers.delete(cid);
+        this.crawlerAi.remove(cid);
       } else {
-        // Impact tile (dead / damaged below conduction threshold): beam still
-        // hits bugs standing on it, but propagation stops here.
-        this.damageCrawlersOnTile(hit.tx, hit.ty, SHOCK_BEAM_DAMAGE);
+        this.crawlers.set(cid, { ...c, hp: newHp });
       }
     }
     // Cooldown is consumed even on a wholly-missed shot — a fired weapon is
