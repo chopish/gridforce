@@ -109,6 +109,37 @@ test('score: ATTACK_TILE on a healthy panel returns ~panelBase', () => {
   assert.ok(Math.abs(score - 5) < 0.001);
 });
 
+test('selection: lone mite in ENGAGED with a nearby pilot picks SEEK_PLAYER >90% of rolls', () => {
+  const mgr = new CrawlerAiManager();
+  mgr.registerCrawler(1, MITE_PROFILE);
+  const tiles = allocateTiles(GRID.cols, GRID.rows);
+  const player = newPlayer(0, 420, 320);
+  const bug = newBug(1, 320, 320);
+
+  let chases = 0;
+  for (let i = 0; i < 200; i++) {
+    mgr.forceReroll(1);
+    const task = mgr.decideTask(bug, 0.016, [player], [bug], tiles, GRID);
+    if (task === 'SEEK_PLAYER') chases++;
+  }
+  assert.ok(chases > 180, `expected >180 chases, got ${chases}`);
+});
+
+test('selection: lone mite in CALM near no damaged tiles favours SEARCH', () => {
+  const mgr = new CrawlerAiManager();
+  mgr.registerCrawler(1, MITE_PROFILE);
+  const tiles = allocateTiles(GRID.cols, GRID.rows);
+  const bug = newBug(1, 320, 320);
+
+  const counts: Record<string, number> = {};
+  for (let i = 0; i < 200; i++) {
+    mgr.forceReroll(1);
+    const task = mgr.decideTask(bug, 0.016, [], [bug], tiles, GRID);
+    counts[task] = (counts[task] ?? 0) + 1;
+  }
+  assert.ok((counts['SEARCH'] ?? 0) > (counts['IDLE'] ?? 0));
+});
+
 test('phase: re-detection mid-decay resets engagedIdleS', () => {
   const mgr = new CrawlerAiManager();
   mgr.registerCrawler(1, MITE_PROFILE);

@@ -1,5 +1,6 @@
 import {
   ACTIVE_ATTACKER_PENALTY,
+  ATTENTION_PER_SCAN,
   CHASE_COMMIT_S,
   CrawlerTaskKind,
   L0_DOME_MAX_HP,
@@ -231,6 +232,51 @@ function makeAiState(profile: EnemyProfile): CrawlerAi {
   };
 }
 
+function taskKindToCrawlerTask(
+  task: TaskKindValue,
+  ai: CrawlerAi,
+  bug: { x: number; y: number },
+  players: ReadonlyArray<PlayerState>,
+  grid: GridDef,
+): CrawlerTask {
+  switch (task) {
+    case TaskKind.SEEK_PLAYER:
+    case TaskKind.ATTACK_PLAYER: {
+      const fakeBug: CrawlerState = {
+        id: 0, x: bug.x, y: bug.y, facing: 0, hp: 1,
+        targetCx: 0, targetCy: 0, ai: 0, windUpInS: 0,
+      };
+      const near = nearestPlayer(fakeBug, players);
+      return {
+        kind: CrawlerTaskKind.CHASE_PLAYER,
+        targetX: near?.player.x ?? bug.x,
+        targetY: near?.player.y ?? bug.y,
+      };
+    }
+    case TaskKind.SEEK_TILE:
+    case TaskKind.ATTACK_TILE: {
+      const tcx = task === TaskKind.SEEK_TILE
+        ? ai.taskTargetCx
+        : Math.floor(bug.x / grid.panelSize);
+      const tcy = task === TaskKind.SEEK_TILE
+        ? ai.taskTargetCy
+        : Math.floor(bug.y / grid.panelSize);
+      return { kind: CrawlerTaskKind.ATTACK_TILE, targetCx: tcx, targetCy: tcy };
+    }
+    case TaskKind.SEARCH:
+    case TaskKind.INVESTIGATE:
+      return {
+        kind: CrawlerTaskKind.CHASE_PLAYER,
+        targetX: ai.taskTargetX || bug.x,
+        targetY: ai.taskTargetY || bug.y,
+      };
+    case TaskKind.IDLE:
+      return { kind: CrawlerTaskKind.CHASE_PLAYER, targetX: bug.x, targetY: bug.y };
+    default:
+      return { kind: CrawlerTaskKind.CHASE_PLAYER, targetX: bug.x, targetY: bug.y };
+  }
+}
+
 export class CrawlerAiManager {
   private states = new Map<number, CrawlerAi>();
 
@@ -245,7 +291,7 @@ export class CrawlerAiManager {
   private activeAttackerCount(): number {
     let n = 0;
     for (const ai of this.states.values()) {
-      if (ai.legacyTask.kind === CrawlerTaskKind.ATTACK_TILE) n++;
+      if (ai.currentTask === TaskKind.ATTACK_TILE) n++;
     }
     return n;
   }
@@ -324,9 +370,65 @@ export class CrawlerAiManager {
       if (ai.investigateUntilS <= 0) ai.hasInvestigateTarget = false;
     }
 
-    // TEMPORARY: defer to the C1.9 logic until later tasks wire in the
-    // new task selection. Behavior is identical to pre-T5.
-    return this.legacyDecide(c, ai, dt, players, bugs, tiles, grid);
+    // Tick reeval/commit timers for the new path.
+    ai.reevalInS -= dt;
+    ai.chaseCommitInS = Math.max(0, ai.chaseCommitInS - dt);
+    ai.attackRestInS = Math.max(0, ai.attackRestInS - dt);
+
+    // New hierarchical task selection. Replaces legacyDecide.
+    //
+    // 1. If committed (chase commit window, ATTACK_TILE on a live tile),
+    //    keep the current task.
+    // 2. Otherwise re-evaluate (when reevalInS <= 0).
+    // 3. Convert TaskKindValue → CrawlerTask for the executor.
+
+    // (A) Chase commit window: if SEEK_PLAYER and chaseCommitInS > 0, keep.
+    if (ai.currentTask === TaskKind.SEEK_PLAYER && ai.chaseCommitInS > 0) {
+      return taskKindToCrawlerTask(TaskKind.SEEK_PLAYER, ai, c, players, grid);
+    }
+
+    // (B) ATTACK_TILE committed until tile dies. If the tile is dead,
+    // trigger post-kill rest and fall through to re-pick.
+    if (ai.currentTask === TaskKind.ATTACK_TILE) {
+      const tcx = Math.floor(c.x / grid.panelSize);
+      const tcy = Math.floor(c.y / grid.panelSize);
+      if (tcx >= 0 && tcx < grid.cols && tcy >= 0 && tcy < grid.rows) {
+        const idx = indexOf(grid.cols, tcx, tcy);
+        if (tiles.l1Hp[idx]! > 0 || tiles.l0Hp[idx]! > 0) {
+          ai.taskTargetCx = tcx;
+          ai.taskTargetCy = tcy;
+          return taskKindToCrawlerTask(TaskKind.ATTACK_TILE, ai, c, players, grid);
+        }
+        // Tile dead — kick post-kill rest, fall through to re-pick.
+        ai.attackRestInS = POST_KILL_REST_S;
+      }
+    }
+
+    // (C) Within the reeval window, keep current task; refresh chase
+    // target if applicable.
+    if (ai.reevalInS > 0) {
+      return taskKindToCrawlerTask(ai.currentTask, ai, c, players, grid);
+    }
+
+    // (D) Re-evaluate. Pick a new task via softmax.
+    const newTask = this.decideTask(c, dt, players, bugs, tiles, grid);
+
+    // Task-switch bookkeeping.
+    if (newTask !== ai.currentTask) {
+      ai.currentTask = newTask;
+      ai.attentionPenalty = 0;
+      ai.taskCommitmentS = 0;
+      if (newTask === TaskKind.SEEK_PLAYER) {
+        ai.chaseCommitInS = CHASE_COMMIT_S;
+      } else {
+        ai.chaseCommitInS = 0;
+      }
+    } else {
+      ai.attentionPenalty += ATTENTION_PER_SCAN;
+    }
+    ai.reevalInS = TASK_REEVAL_INTERVAL_S;
+
+    return taskKindToCrawlerTask(newTask, ai, c, players, grid);
   }
 
   // Test/debug accessor.
@@ -368,6 +470,68 @@ export class CrawlerAiManager {
     const ai = this.states.get(crawlerId);
     if (!ai || !ai.lastBugPos) return -Infinity;
     return this.scoreTaskFor(ai, ai.lastBugPos, task, players, bugs, tiles, grid);
+  }
+
+  // Test hook to force an immediate re-roll on the next decide() call.
+  forceReroll(crawlerId: number): void {
+    const ai = this.states.get(crawlerId);
+    if (ai) ai.reevalInS = 0;
+  }
+
+  // Public for tests; called internally by decide() too. Returns the
+  // chosen TaskKind for this bug's next task pick. Does NOT mutate
+  // ai.currentTask — that's done by decide()'s task-switch bookkeeping
+  // only when the pick actually changes.
+  //
+  // When called directly (e.g. from tests bypassing decide()), this also
+  // performs a lightweight phase check from player proximity so eligibility
+  // predicates that gate on ENGAGED behave correctly without a prior
+  // decide() pass. decide() itself runs the full phase machinery upstream
+  // before calling this, so the check is idempotent in that path.
+  decideTask(
+    c: CrawlerState,
+    _dt: number,
+    players: ReadonlyArray<PlayerState>,
+    bugs: ReadonlyArray<CrawlerState>,
+    tiles: TileBuffers,
+    grid: GridDef,
+  ): TaskKindValue {
+    const ai = this.states.get(c.id)!;
+    ai.lastBugPos = { x: c.x, y: c.y };
+
+    // Lightweight phase check from detection (mirrors decide()'s entry
+    // logic, sans timer ticking). Lets tests call decideTask standalone.
+    const near = nearestPlayer(c, players);
+    let effectiveR = ai.profile.detectionRadiusPx;
+    if (ai.currentTask === TaskKind.SEARCH) effectiveR *= ai.profile.searchRadiusMult;
+    if (ai.alertBonusInS > 0) effectiveR *= ai.profile.alertBonusMult;
+    const detected = !!near && near.dist2 <= effectiveR * effectiveR;
+    if (detected || ai.hasInvestigateTarget) {
+      ai.phase = 'ENGAGED';
+    }
+
+    const eligible: { task: TaskKindValue; score: number }[] = [];
+    for (const t of ai.profile.taskLibrary) {
+      if (!this.isTaskEligibleFor(ai, ai.lastBugPos, t, players, tiles, grid)) continue;
+      const raw = this.scoreTaskFor(ai, ai.lastBugPos, t, players, bugs, tiles, grid);
+      if (!Number.isFinite(raw)) continue;
+      const weighted = raw * ai.profile.taskWeights[t] * noise();
+      eligible.push({ task: t, score: weighted });
+    }
+
+    if (eligible.length === 0) return TaskKind.IDLE;
+
+    // Softmax sample.
+    const m = Math.max(...eligible.map((e) => e.score));
+    const exps = eligible.map((e) => Math.exp((e.score - m) / SCORE_SOFTMAX_TEMPERATURE));
+    const total = exps.reduce((a, b) => a + b, 0);
+    const r = Math.random() * total;
+    let acc = 0;
+    for (let i = 0; i < eligible.length; i++) {
+      acc += exps[i]!;
+      if (r <= acc) return eligible[i]!.task;
+    }
+    return eligible[eligible.length - 1]!.task;
   }
 
   private isTaskEligibleFor(
@@ -450,9 +614,10 @@ export class CrawlerAiManager {
         if (Number.isFinite(score)) {
           // Exclude self from the active-attacker count: scoring my own
           // continuation of an attack shouldn't penalize me for being the
-          // attacker. Legacy `score()` benefits from the same exclusion
-          // implicitly because it runs before legacyTask is committed.
-          const selfAttacking = ai.legacyTask.kind === CrawlerTaskKind.ATTACK_TILE ? 1 : 0;
+          // attacker. Both selfAttacking and activeAttackerCount() now read
+          // ai.currentTask (the new TaskKind field) so the bookkeeping
+          // stays consistent post-T8.
+          const selfAttacking = ai.currentTask === TaskKind.ATTACK_TILE ? 1 : 0;
           const others = Math.max(0, this.activeAttackerCount() - selfAttacking);
           score -= ACTIVE_ATTACKER_PENALTY * others;
         }
