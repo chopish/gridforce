@@ -254,13 +254,14 @@ function taskKindToCrawlerTask(
       };
     }
     case TaskKind.SEEK_TILE:
+      return {
+        kind: CrawlerTaskKind.SEEK_TILE,
+        targetCx: ai.taskTargetCx,
+        targetCy: ai.taskTargetCy,
+      };
     case TaskKind.ATTACK_TILE: {
-      const tcx = task === TaskKind.SEEK_TILE
-        ? ai.taskTargetCx
-        : Math.floor(bug.x / grid.panelSize);
-      const tcy = task === TaskKind.SEEK_TILE
-        ? ai.taskTargetCy
-        : Math.floor(bug.y / grid.panelSize);
+      const tcx = Math.floor(bug.x / grid.panelSize);
+      const tcy = Math.floor(bug.y / grid.panelSize);
       return { kind: CrawlerTaskKind.ATTACK_TILE, targetCx: tcx, targetCy: tcy };
     }
     case TaskKind.SEARCH:
@@ -299,6 +300,48 @@ export class CrawlerAiManager {
     ai.currentTask = task;
     // Park reeval far in the future so decide()'s re-pick doesn't immediately
     // swap us back to SEEK_PLAYER. Matches the "committed to a task" intent.
+    ai.reevalInS = 1e9;
+  }
+
+  // Test hook: pin the bug's currentTask AND run the task-switch
+  // bookkeeping (target seeding, reset of commitment timers, etc.) that
+  // decide() would normally run on entry to the new task. Used by tests
+  // that want to inspect the per-task entry side-effects without standing
+  // up the full softmax sampling path.
+  //
+  // For SEEK_TILE: seeds taskTargetCx/Cy from the best damaged tile in
+  // range via findBestSeekTile. Requires `tiles` and `grid` for that case.
+  // Auto-registers an unknown crawler with MITE_PROFILE (matching
+  // __forceTaskForTest), but seeding is skipped if lastBugPos is unknown
+  // (caller must run decide() once first to populate it).
+  forceTask(
+    id: number,
+    task: TaskKindValue,
+    tiles?: TileBuffers,
+    grid?: GridDef,
+  ): void {
+    let ai = this.states.get(id);
+    if (!ai) {
+      ai = makeAiState(MITE_PROFILE);
+      this.states.set(id, ai);
+    }
+    ai.currentTask = task;
+    ai.taskCommitmentS = 0;
+    ai.attentionPenalty = 0;
+    // For SEEK_TILE, seed the target from the best damaged tile in range.
+    if (task === TaskKind.SEEK_TILE && ai.lastBugPos && tiles && grid) {
+      const best = this.findBestSeekTile(
+        ai.lastBugPos, ai.profile.seekTileRadiusPx, tiles, grid,
+      );
+      if (best) {
+        ai.taskTargetCx = best.tx;
+        ai.taskTargetCy = best.ty;
+        ai.taskTargetX = (best.tx + 0.5) * grid.panelSize;
+        ai.taskTargetY = (best.ty + 0.5) * grid.panelSize;
+      }
+    }
+    // Park reeval far in the future so decide()'s re-pick doesn't immediately
+    // swap us back. Matches the "committed to a task" intent.
     ai.reevalInS = 1e9;
   }
 
@@ -490,6 +533,21 @@ export class CrawlerAiManager {
         };
         const near = nearestPlayer(fakeBug, players);
         ai.attackTargetPlayerId = near?.player.id ?? null;
+      }
+      // T13: SEEK_TILE entry seeds taskTargetCx/Cy from the best damaged
+      // tile in range. Executor (stepCrawler) reads these to walk the bug
+      // toward the tile; on arrival it transitions to ATTACKING so the
+      // Room weight-integrity loop picks up the new attacker.
+      if (newTask === TaskKind.SEEK_TILE) {
+        const best = this.findBestSeekTile(
+          { x: c.x, y: c.y }, ai.profile.seekTileRadiusPx, tiles, grid,
+        );
+        if (best) {
+          ai.taskTargetCx = best.tx;
+          ai.taskTargetCy = best.ty;
+          ai.taskTargetX = (best.tx + 0.5) * grid.panelSize;
+          ai.taskTargetY = (best.ty + 0.5) * grid.panelSize;
+        }
       }
     } else {
       ai.attentionPenalty += ATTENTION_PER_SCAN;

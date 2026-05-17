@@ -14,12 +14,17 @@ import { MITE_PROFILE } from './profiles.js';
 export const CrawlerTaskKind = {
   CHASE_PLAYER: 0,
   ATTACK_TILE: 1,
+  // T13: walk toward a damaged tile in range. On arrival, the executor
+  // promotes the bug to ATTACKING so the Room's weight-integrity loop
+  // picks up the new attacker.
+  SEEK_TILE: 2,
 } as const;
 export type CrawlerTaskKindValue = (typeof CrawlerTaskKind)[keyof typeof CrawlerTaskKind];
 
 export type CrawlerTask =
   | { kind: typeof CrawlerTaskKind.CHASE_PLAYER; targetX: number; targetY: number }
-  | { kind: typeof CrawlerTaskKind.ATTACK_TILE; targetCx: number; targetCy: number };
+  | { kind: typeof CrawlerTaskKind.ATTACK_TILE; targetCx: number; targetCy: number }
+  | { kind: typeof CrawlerTaskKind.SEEK_TILE; targetCx: number; targetCy: number };
 
 export interface CrawlerStepContext {
   tiles: TileBuffers;
@@ -45,6 +50,39 @@ export function stepCrawler(
     return {
       ...c,
       ai: CrawlerAIState.ATTACKING,
+      targetCx: clampToGrid(task.targetCx, 0, grid.cols - 1),
+      targetCy: clampToGrid(task.targetCy, 0, grid.rows - 1),
+    };
+  }
+
+  // SEEK_TILE — walk toward the chosen damaged tile. When the bug arrives
+  // within a quarter-panel of the tile centre, promote to ATTACKING so the
+  // Room's integrity loop sees a new attacker on this cell. The seed/pick
+  // of which tile to chase lives in CrawlerAi (findBestSeekTile); the
+  // executor only knows "walk to (targetCx, targetCy), then attack".
+  if (task.kind === CrawlerTaskKind.SEEK_TILE) {
+    const tx = (task.targetCx + 0.5) * grid.panelSize;
+    const ty = (task.targetCy + 0.5) * grid.panelSize;
+    const ddx = tx - c.x;
+    const ddy = ty - c.y;
+    const ddist = Math.hypot(ddx, ddy);
+    if (ddist < grid.panelSize * 0.25) {
+      // Arrived — flip to ATTACKING so weight-integrity hits this tile.
+      return {
+        ...c,
+        ai: CrawlerAIState.ATTACKING,
+        targetCx: clampToGrid(task.targetCx, 0, grid.cols - 1),
+        targetCy: clampToGrid(task.targetCy, 0, grid.rows - 1),
+      };
+    }
+    const seekStep = CRAWLER_MOVE_SPEED * dt;
+    const seekMove = Math.min(seekStep, ddist);
+    return {
+      ...c,
+      ai: CrawlerAIState.APPROACHING,
+      x: c.x + (ddx / ddist) * seekMove,
+      y: c.y + (ddy / ddist) * seekMove,
+      facing: Math.atan2(ddy, ddx),
       targetCx: clampToGrid(task.targetCx, 0, grid.cols - 1),
       targetCy: clampToGrid(task.targetCy, 0, grid.rows - 1),
     };

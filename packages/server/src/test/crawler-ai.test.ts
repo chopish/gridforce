@@ -2,7 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   MITE_PROFILE,
+  TaskKind,
   allocateTiles,
+  indexOf,
   type CrawlerState,
   type PlayerState,
 } from '@gridforce/shared';
@@ -207,6 +209,23 @@ test('wind-up: timer expiring fires SWING and transitions to RECOVERY', () => {
   const ai = mgr.getInternalAi(1)!;
   assert.ok(ai.recoveryInS > 0,
     `bug should be in RECOVERY; recoveryInS=${ai.recoveryInS}, windUpInS=${ai.windUpInS}`);
+});
+
+test('SEEK_TILE: picks the most damaged tile within seekTileRadiusPx and walks toward it', () => {
+  const mgr = new CrawlerAiManager();
+  mgr.registerCrawler(1, MITE_PROFILE);
+  const tiles = allocateTiles(GRID.cols, GRID.rows);
+  // Damage tile (7, 5) significantly; leave others healthy.
+  tiles.l1Hp[indexOf(GRID.cols, 7, 5)] = 10;
+  const bug = newBug(1, 320, 320); // tile (5, 5)
+  // Populate lastBugPos so forceTask can seed from a known position.
+  mgr.decide(bug, 0.016, [], [bug], tiles, GRID);
+  // Force SEEK_TILE with bookkeeping — seeds taskTargetCx/Cy from the
+  // best damaged tile in radius via findBestSeekTile.
+  mgr.forceTask(1, TaskKind.SEEK_TILE, tiles, GRID);
+  const ai = mgr.getInternalAi(1)!;
+  assert.equal(ai.taskTargetCx, 7);
+  assert.equal(ai.taskTargetCy, 5);
 });
 
 test('stagger: damage during wind-up accumulates; threshold cancels swing', () => {
