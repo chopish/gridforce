@@ -248,3 +248,33 @@ test('stagger: damage during wind-up accumulates; threshold cancels swing', () =
   // Bug should be in RECOVERY.
   assert.ok(ai1.recoveryInS > 0, `bug should be in RECOVERY; recoveryInS=${ai1.recoveryInS}`);
 });
+
+test('SEARCH: bug walks toward a random wander target', () => {
+  const mgr = new CrawlerAiManager();
+  mgr.registerCrawler(1, MITE_PROFILE);
+  const tiles = allocateTiles(GRID.cols, GRID.rows);
+  const bug = newBug(1, 320, 320);
+  mgr.decide(bug, 0.016, [], [bug], tiles, GRID);
+  // Force SEARCH (rich helper from T13: runs entry bookkeeping).
+  mgr.forceTask(1, TaskKind.SEARCH, tiles, GRID);
+  const ai = mgr.getInternalAi(1)!;
+  // A wander target should be picked (non-zero).
+  assert.ok(ai.taskTargetX !== 0 || ai.taskTargetY !== 0,
+    `expected wander target seeded; got (${ai.taskTargetX},${ai.taskTargetY})`);
+});
+
+test('SEARCH: phase check sees pilots from detectionRadius × searchRadiusMult', () => {
+  const mgr = new CrawlerAiManager();
+  mgr.registerCrawler(1, MITE_PROFILE);
+  const tiles = allocateTiles(GRID.cols, GRID.rows);
+  const bug = newBug(1, 320, 320);
+  // First decide to populate lastBugPos.
+  mgr.decide(bug, 0.016, [], [bug], tiles, GRID);
+  // Force SEARCH (widens detection by searchRadiusMult).
+  mgr.forceTask(1, TaskKind.SEARCH, tiles, GRID);
+  // Pilot at 220 px — outside base 160 detection radius, inside
+  // widened 160 × 1.6 = 256 radius.
+  const player = newPlayer(0, 540, 320);
+  mgr.decide(bug, 0.016, [player], [bug], tiles, GRID);
+  assert.equal(mgr.getPhase(1), 'ENGAGED');
+});

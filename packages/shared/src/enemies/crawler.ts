@@ -18,13 +18,18 @@ export const CrawlerTaskKind = {
   // promotes the bug to ATTACKING so the Room's weight-integrity loop
   // picks up the new attacker.
   SEEK_TILE: 2,
+  // T14: wander toward a random nearby target at reduced speed. Emits
+  // CrawlerAIState.SEARCHING. Paired with the SEARCH task's widened
+  // detection radius (searchRadiusMult) — slower legs, sharper eyes.
+  SEARCH: 3,
 } as const;
 export type CrawlerTaskKindValue = (typeof CrawlerTaskKind)[keyof typeof CrawlerTaskKind];
 
 export type CrawlerTask =
   | { kind: typeof CrawlerTaskKind.CHASE_PLAYER; targetX: number; targetY: number }
   | { kind: typeof CrawlerTaskKind.ATTACK_TILE; targetCx: number; targetCy: number }
-  | { kind: typeof CrawlerTaskKind.SEEK_TILE; targetCx: number; targetCy: number };
+  | { kind: typeof CrawlerTaskKind.SEEK_TILE; targetCx: number; targetCy: number }
+  | { kind: typeof CrawlerTaskKind.SEARCH; targetX: number; targetY: number };
 
 export interface CrawlerStepContext {
   tiles: TileBuffers;
@@ -85,6 +90,28 @@ export function stepCrawler(
       facing: Math.atan2(ddy, ddx),
       targetCx: clampToGrid(task.targetCx, 0, grid.cols - 1),
       targetCy: clampToGrid(task.targetCy, 0, grid.rows - 1),
+    };
+  }
+
+  // SEARCH — wander toward a random target at reduced speed. Manager
+  // re-rolls the next destination via the standard reeval cadence; on
+  // arrival the executor just holds (with state=SEARCHING) until then.
+  if (task.kind === CrawlerTaskKind.SEARCH) {
+    const dx = task.targetX - c.x;
+    const dy = task.targetY - c.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist < 4) {
+      // Arrived — manager will reroll on next decide.
+      return { ...c, ai: CrawlerAIState.SEARCHING };
+    }
+    const step = CRAWLER_MOVE_SPEED * dt * 0.7; // slower than chase
+    const move = Math.min(step, dist);
+    return {
+      ...c,
+      ai: CrawlerAIState.SEARCHING,
+      x: c.x + (dx / dist) * move,
+      y: c.y + (dy / dist) * move,
+      facing: Math.atan2(dy, dx),
     };
   }
 

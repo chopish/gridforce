@@ -265,6 +265,11 @@ function taskKindToCrawlerTask(
       return { kind: CrawlerTaskKind.ATTACK_TILE, targetCx: tcx, targetCy: tcy };
     }
     case TaskKind.SEARCH:
+      return {
+        kind: CrawlerTaskKind.SEARCH,
+        targetX: ai.taskTargetX,
+        targetY: ai.taskTargetY,
+      };
     case TaskKind.INVESTIGATE:
       return {
         kind: CrawlerTaskKind.CHASE_PLAYER,
@@ -339,6 +344,16 @@ export class CrawlerAiManager {
         ai.taskTargetX = (best.tx + 0.5) * grid.panelSize;
         ai.taskTargetY = (best.ty + 0.5) * grid.panelSize;
       }
+    }
+    // For SEARCH, seed a random wander target within seekTileRadiusPx of
+    // the bug's last known position. The executor will walk toward it
+    // (slower than chase) and the manager will reroll on arrival.
+    if (task === TaskKind.SEARCH && ai.lastBugPos) {
+      const r = ai.profile.seekTileRadiusPx;
+      const angle = Math.random() * Math.PI * 2;
+      const dist = r * (0.5 + Math.random() * 0.5);
+      ai.taskTargetX = ai.lastBugPos.x + Math.cos(angle) * dist;
+      ai.taskTargetY = ai.lastBugPos.y + Math.sin(angle) * dist;
     }
     // Park reeval far in the future so decide()'s re-pick doesn't immediately
     // swap us back. Matches the "committed to a task" intent.
@@ -548,6 +563,17 @@ export class CrawlerAiManager {
           ai.taskTargetX = (best.tx + 0.5) * grid.panelSize;
           ai.taskTargetY = (best.ty + 0.5) * grid.panelSize;
         }
+      }
+      // T14: SEARCH entry seeds a random wander target within
+      // seekTileRadiusPx of the bug. The executor walks slower than chase
+      // (CRAWLER_MOVE_SPEED × 0.7) and emits CrawlerAIState.SEARCHING; the
+      // manager re-rolls on arrival via the standard reeval cadence.
+      if (newTask === TaskKind.SEARCH) {
+        const r = ai.profile.seekTileRadiusPx;
+        const angle = Math.random() * Math.PI * 2;
+        const dist = r * (0.5 + Math.random() * 0.5);
+        ai.taskTargetX = c.x + Math.cos(angle) * dist;
+        ai.taskTargetY = c.y + Math.sin(angle) * dist;
       }
     } else {
       ai.attentionPenalty += ATTENTION_PER_SCAN;
