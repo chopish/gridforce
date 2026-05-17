@@ -6,14 +6,26 @@ import {
   CRAWLER_WEIGHT,
   CrawlerAIState,
   L1_PANEL_MAX_HP,
+  TaskKind,
   WEIGHT_THRESHOLD,
   allocateTiles,
   indexOf,
   type CrawlerState,
+  type TaskKindValue,
   type TileBuffers,
 } from '@gridforce/shared';
 
 import { Room } from '../Room.js';
+
+// Minimal surface of CrawlerAiManager we need to force-pin tasks for tests.
+// See CrawlerAi.__forceTaskForTest — bugs default to SEEK_PLAYER and in the
+// no-player scenarios these tests exercise, that would arrive within meleeGap
+// of the bug itself (dist=0) and transition to WIND_UP, which doesn't damage
+// tiles. Forcing ATTACK_TILE keeps the bug pinned to its planted tile so the
+// weight-integrity loop has a stable target — the actual subject under test.
+interface CrawlerAiManagerForTest {
+  __forceTaskForTest(id: number, task: TaskKindValue): void;
+}
 
 // Internal handles into the Room — mirrors the pattern in repair.test.ts.
 interface RoomInternals {
@@ -21,6 +33,7 @@ interface RoomInternals {
   tiles: TileBuffers;
   grid: { cols: number; rows: number; panelSize: number };
   crawlers: Map<number, CrawlerState>;
+  crawlerAi: CrawlerAiManagerForTest;
   physicsStep(): void;
 }
 
@@ -54,6 +67,10 @@ function plantAttacker(
     ai: CrawlerAIState.ATTACKING,
     windUpInS: 0,
   });
+  // Force ATTACK_TILE so the priority-AI doesn't override the planted
+  // ATTACKING state. Without this the bug would CHASE_PLAYER (target=self),
+  // arrive within meleeGap (T9), and flip to WIND_UP — no tile damage.
+  r.crawlerAi.__forceTaskForTest(id, TaskKind.ATTACK_TILE);
 }
 
 // Run `seconds` worth of ticks at the server tick rate.

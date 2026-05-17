@@ -6,15 +6,25 @@ import {
   L1_PANEL_MAX_HP,
   PANEL_SIZE,
   SERVER_TICK_DT_S,
+  TaskKind,
   allocateTiles,
   indexOf,
   type CrawlerState,
   type PlayerInput,
   type PlayerState,
+  type TaskKindValue,
   type TileBuffers,
 } from '@gridforce/shared';
 
 import { Room } from '../Room.js';
+
+// Mirror of integrity.test.ts: tests sometimes need to pin a planted bug to
+// ATTACK_TILE so it grinds its tile in the absence of a player. Without the
+// pin, T9's "CHASE arrival within meleeGap → WIND_UP" transition fires
+// against the bug's own position and the integrity loop never runs.
+interface CrawlerAiManagerForTest {
+  __forceTaskForTest(id: number, task: TaskKindValue): void;
+}
 
 // Internal handles into the Room. Mirrors the pattern in shock.test.ts /
 // panel-jump.test.ts / integrity.test.ts: cast through `unknown` to a minimal
@@ -26,6 +36,7 @@ interface RoomInternals {
   grid: { cols: number; rows: number; panelSize: number };
   states: Map<number, PlayerState>;
   crawlers: Map<number, CrawlerState>;
+  crawlerAi: CrawlerAiManagerForTest;
   carbons: Map<number, unknown>;
   pilots: Map<number, unknown>;
   // Spawner accumulator — driven from physicsStep; we keep it negative so the
@@ -162,12 +173,15 @@ function playerState(r: RoomInternals): PlayerState {
   return r.states.get(PLAYER_ID)!;
 }
 
-test('C1 e2e: single ATTACKING bug with no player around still grinds L1 to zero', () => {
-  // With no players in the room the C1.2 AI keeps the bug idling on its
-  // current tile in ATTACKING state — so weight-integrity still grinds the
-  // panel exactly as before.
+test('C1 e2e: single ATTACK_TILE bug with no player around still grinds L1 to zero', () => {
+  // C2/T9 change: bugs no longer auto-chew the floor under themselves when
+  // SEEK_PLAYER finds nobody — they'd arrive within meleeGap of their own
+  // position and flip to WIND_UP, which doesn't damage tiles. To exercise
+  // weight-integrity end-to-end we force the bug onto ATTACK_TILE, which is
+  // what the priority-AI would pick once T13 (SEEK_TILE → ATTACK_TILE) lands.
   const room = makeRoomInPlaying();
   const id = planCrawlerAttacking(room, 5, 5);
+  room.crawlerAi.__forceTaskForTest(id, TaskKind.ATTACK_TILE);
   const idx = indexOf(room.grid.cols, 5, 5);
 
   tickFor(room, 5);
@@ -177,7 +191,8 @@ test('C1 e2e: single ATTACKING bug with no player around still grinds L1 to zero
   );
   tickFor(room, 60);
   assert.equal(room.tiles.l1Hp[idx]!, 0, 'L1 should be fully ground out');
-  // Bug must still exist and still be ATTACKING (no players to chase).
+  // Bug must still exist and still be ATTACKING (its forced ATTACK_TILE
+  // task keeps stepCrawler returning ai=ATTACKING).
   const after = room.crawlers.get(id);
   assert.ok(after, 'bug should still be alive');
   assert.equal(after.ai, CrawlerAIState.ATTACKING);

@@ -5,6 +5,7 @@ import {
   type CrawlerState,
   type GridDef,
 } from '../types.js';
+import { MITE_PROFILE } from './profiles.js';
 
 // Discrete tasks the priority-AI can assign to a crawler. The Room owns task
 // selection (server-only, in CrawlerAi.ts); stepCrawler just executes whatever
@@ -53,13 +54,24 @@ export function stepCrawler(
   const dx = task.targetX - c.x;
   const dy = task.targetY - c.y;
   const dist = Math.hypot(dx, dy);
-  if (dist < 1) {
-    // Bug is on the target — stop, mark ATTACKING so the tile under the
-    // player takes weight. (Player damage requires PlayerState.hp on the
-    // wire — that's a future change.)
-    const tcx = clampToGrid(Math.floor(c.x / grid.panelSize), 0, grid.cols - 1);
-    const tcy = clampToGrid(Math.floor(c.y / grid.panelSize), 0, grid.rows - 1);
-    return { ...c, ai: CrawlerAIState.ATTACKING, targetCx: tcx, targetCy: tcy };
+
+  // Arrival at melee gap → WIND_UP. The executor doesn't know which
+  // EnemyProfile the bug belongs to (server-side AI manager owns that),
+  // so we read MITE_PROFILE directly for v1 — mite is the only enemy.
+  // When a second profile lands, extend CrawlerStepContext with `profile`
+  // and read from there instead.
+  const meleeGap = MITE_PROFILE.meleeGapPx;
+  if (dist < meleeGap) {
+    return {
+      ...c,
+      ai: CrawlerAIState.WIND_UP,
+      facing: Math.atan2(dy, dx),
+      windUpInS: MITE_PROFILE.windUpDurS,
+      // NOTE: deliberately do NOT mutate targetCx/Cy to the pilot's tile.
+      // Weight integrity (Room.ts) only damages tiles when ai === ATTACKING.
+      // Leaving targetCx/Cy alone keeps the bug "facing the pilot" without
+      // pretending it's chewing the tile under the pilot's feet.
+    };
   }
   const step = CRAWLER_MOVE_SPEED * dt;
   const move = Math.min(step, dist);

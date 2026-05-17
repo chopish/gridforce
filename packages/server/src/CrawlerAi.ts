@@ -286,6 +286,22 @@ export class CrawlerAiManager {
     this.states.set(id, makeAiState(profile));
   }
 
+  // Test-only: force a crawler's currentTask without going through decide().
+  // Used by integrity / e2e tests that want to pin a bug to ATTACK_TILE so the
+  // weight-integrity loop has a stable target. Production paths never call
+  // this; the priority-AI picks tasks via decide(). Auto-registers if needed.
+  __forceTaskForTest(id: number, task: TaskKindValue): void {
+    let ai = this.states.get(id);
+    if (!ai) {
+      ai = makeAiState(MITE_PROFILE);
+      this.states.set(id, ai);
+    }
+    ai.currentTask = task;
+    // Park reeval far in the future so decide()'s re-pick doesn't immediately
+    // swap us back to SEEK_PLAYER. Matches the "committed to a task" intent.
+    ai.reevalInS = 1e9;
+  }
+
   // O(n) but n ≤ MAX_ALIVE_CRAWLERS ≈ 25; cheap. Called once per decide()
   // so each bug sees the current attacker count when scoring.
   private activeAttackerCount(): number {
