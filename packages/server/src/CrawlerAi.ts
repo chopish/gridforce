@@ -342,6 +342,46 @@ export class CrawlerAiManager {
       ai.staggerAccumS = 0;
     }
 
+    // ATTACK_PLAYER state machine: WIND_UP timer countdown → SWING → RECOVERY.
+    //
+    // Stagger interrupt (T12 wires the accumulator; today the check is a
+    // no-op because staggerAccumHp is always 0). When the threshold trips,
+    // skip the swing fire and jump straight to RECOVERY.
+    //
+    // While WIND_UP or RECOVERY is active, skip task re-selection — bug is
+    // locked into the swing+recovery cycle.
+    ai.swingFiredThisTick = false;
+    if (ai.windUpInS > 0) {
+      ai.windUpInS -= dt;
+      if (ai.staggerAccumHp >= ai.profile.staggerThresholdHp) {
+        // Stagger interrupt — skip swing, jump to RECOVERY.
+        ai.windUpInS = 0;
+        ai.recoveryInS = ai.profile.recoveryDurS;
+        ai.staggerAccumHp = 0;
+        ai.staggerAccumS = 0;
+      } else if (ai.windUpInS <= 0) {
+        // Timer expired → fire swing → RECOVERY.
+        ai.windUpInS = 0;
+        ai.swingFiredThisTick = true;
+        ai.recoveryInS = ai.profile.recoveryDurS;
+      }
+      // Stay locked in WIND_UP (or transitioning out); skip task re-selection.
+      return taskKindToCrawlerTask(TaskKind.ATTACK_PLAYER, ai, c, players, grid);
+    }
+    if (ai.recoveryInS > 0) {
+      ai.recoveryInS -= dt;
+      if (ai.recoveryInS <= 0) {
+        ai.recoveryInS = 0;
+        ai.reevalInS = 0; // force re-priority on the next decide().
+        // Reset currentTask so a follow-up ATTACK_PLAYER pick is treated
+        // as a fresh transition (and re-arms windUpInS). Without this the
+        // task-switch block sees newTask === currentTask and skips the
+        // wind-up entry bookkeeping.
+        ai.currentTask = TaskKind.IDLE;
+      }
+      return taskKindToCrawlerTask(TaskKind.IDLE, ai, c, players, grid);
+    }
+
     // Compute effective detection radius. The SEARCH-widen and alert-bonus
     // multipliers are wired here; their inputs (ai.currentTask, alertBonusInS)
     // are scaffolded today and exercised by T8 / T17.
@@ -439,6 +479,18 @@ export class CrawlerAiManager {
       } else {
         ai.chaseCommitInS = 0;
       }
+      // T10: ATTACK_PLAYER entry arms the wind-up timer. The bug stops
+      // moving (executor handles the position freeze via state=WIND_UP)
+      // and tracks the chosen target.
+      if (newTask === TaskKind.ATTACK_PLAYER) {
+        ai.windUpInS = ai.profile.windUpDurS;
+        const fakeBug: CrawlerState = {
+          id: 0, x: c.x, y: c.y, facing: 0, hp: 1,
+          targetCx: 0, targetCy: 0, ai: 0, windUpInS: 0,
+        };
+        const near = nearestPlayer(fakeBug, players);
+        ai.attackTargetPlayerId = near?.player.id ?? null;
+      }
     } else {
       ai.attentionPenalty += ATTENTION_PER_SCAN;
     }
@@ -450,6 +502,11 @@ export class CrawlerAiManager {
   // Test/debug accessor.
   getPhase(crawlerId: number): 'CALM' | 'ENGAGED' | null {
     return this.states.get(crawlerId)?.phase ?? null;
+  }
+
+  // Test/debug accessor — returns the internal AI state for inspection.
+  getInternalAi(crawlerId: number): Readonly<CrawlerAi> | null {
+    return this.states.get(crawlerId) ?? null;
   }
 
   // Test/debug accessor for INVESTIGATE target.
@@ -608,7 +665,15 @@ export class CrawlerAiManager {
           targetCx: 0, targetCy: 0, ai: 0, windUpInS: 0,
         };
         const crowd = countNearbyBugs(fakeBug, bugs, profile.crowdRadiusPx);
-        return 100 - crowdPenalty(crowd);
+        const base = 100 - crowdPenalty(crowd);
+        // T10: ATTACK_PLAYER strictly dominates SEEK_PLAYER when eligible.
+        // Eligibility already gates ATTACK_PLAYER on being within meleeGapPx,
+        // so by the time both tasks score we should commit the swing rather
+        // than re-roll into a sibling chase via softmax. Bonus is many τ
+        // (~17×) wide so the softmax (τ=30) collapses to a deterministic
+        // pick even under worst-case noise.
+        if (task === TaskKind.ATTACK_PLAYER) return base + 500;
+        return base;
       }
       case TaskKind.SEEK_TILE: {
         const best = this.findBestSeekTile(bug, profile.seekTileRadiusPx, tiles, grid);

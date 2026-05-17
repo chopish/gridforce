@@ -176,3 +176,35 @@ test('phase: re-detection mid-decay resets engagedIdleS', () => {
   }
   assert.equal(mgr.getPhase(1), 'CALM');
 });
+
+test('wind-up: windUpInS counts down each tick', () => {
+  const mgr = new CrawlerAiManager();
+  mgr.registerCrawler(1, MITE_PROFILE);
+  const tiles = allocateTiles(GRID.cols, GRID.rows);
+  const bug = newBug(1, 332, 320);
+  const player = newPlayer(0, 320, 320);
+  mgr.decide(bug, 0.016, [player], [bug], tiles, GRID);
+  const first = mgr.getInternalAi(1)!;
+  const wind1 = first.windUpInS;
+  assert.ok(wind1 > 0, `expected wind1 > 0; got ${wind1}`);
+
+  mgr.decide(bug, 0.1, [player], [bug], tiles, GRID);
+  const wind2 = mgr.getInternalAi(1)!.windUpInS;
+  assert.ok(wind2 < wind1, `expected wind2 < wind1; got wind2=${wind2}, wind1=${wind1}`);
+});
+
+test('wind-up: timer expiring fires SWING and transitions to RECOVERY', () => {
+  const mgr = new CrawlerAiManager();
+  mgr.registerCrawler(1, MITE_PROFILE);
+  const tiles = allocateTiles(GRID.cols, GRID.rows);
+  const bug = newBug(1, 332, 320);
+  const player = newPlayer(0, 320, 320);
+  mgr.decide(bug, 0.016, [player], [bug], tiles, GRID);
+  // Fast-forward through the wind-up (default windUpDurS=0.6).
+  for (let t = 0; t < 1.0; t += 0.05) {
+    mgr.decide(bug, 0.05, [player], [bug], tiles, GRID);
+  }
+  const ai = mgr.getInternalAi(1)!;
+  assert.ok(ai.recoveryInS > 0,
+    `bug should be in RECOVERY; recoveryInS=${ai.recoveryInS}, windUpInS=${ai.windUpInS}`);
+});

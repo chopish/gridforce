@@ -781,6 +781,12 @@ export class Room {
     for (const [id, c] of this.crawlers) {
       const task = this.crawlerAi.decide(c, SERVER_TICK_DT_S, playerArr, bugArr, this.tiles, this.grid);
       const next = stepCrawler(c, task, SERVER_TICK_DT_S, this.grid, ctx);
+      // T10: mirror the manager's authoritative windUpInS onto the wire-
+      // visible state so the snapshot encoder ships the charge-up bar value.
+      const ai = this.crawlerAi.getInternalAi(c.id);
+      if (ai) {
+        next.windUpInS = ai.windUpInS;
+      }
       if (next.hp <= 0) {
         this.crawlers.delete(id);
         this.crawlerAi.remove(id);
